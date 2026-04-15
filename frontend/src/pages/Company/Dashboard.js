@@ -11,6 +11,7 @@ import {
   ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
+import AtendimentosPage from '../CRM/AtendimentosPage';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
@@ -162,7 +163,7 @@ const CompanyDashboard = () => {
           </div>
         </header>
 
-        <div className={activePage === 'flowbuilder' ? 'h-[calc(100vh-52px)]' : 'p-6'}>
+        <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-6'}>
           <PageContent page={activePage} hasFeature={hasFeature} />
         </div>
       </main>
@@ -180,7 +181,7 @@ const PageContent = ({ page, hasFeature }) => {
   switch (page) {
     case 'dashboard': return <DashboardPage />;
     case 'kanban': return <KanbanPage />;
-    case 'atendimentos': return <TicketsPage />;
+    case 'atendimentos': return <AtendimentosPage />;
     case 'contatos': return <ContactsPage />;
     case 'respostas_rapidas': return <QuickResponsesPage />;
     case 'campanhas': return <CampaignsPage />;

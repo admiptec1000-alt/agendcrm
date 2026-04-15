@@ -21,15 +21,41 @@ async def list_tickets(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
     status: str = None,
-    assigned_to: str = None
+    assigned_to: str = None,
+    channel: str = None,
+    search: str = None,
+    tab: str = None
 ):
     query = {"company_id": user["company_id"]}
     if status:
         query["status"] = status
     if assigned_to:
         query["assigned_to"] = assigned_to
-    
-    tickets = await db.tickets.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    if channel:
+        query["channel"] = channel
+    if search:
+        query["$or"] = [
+            {"customer_name": {"$regex": search, "$options": "i"}},
+            {"customer_phone": {"$regex": search, "$options": "i"}},
+        ]
+    if tab == "atendendo":
+        query["status"] = {"$in": ["aberto", "em_cobranca", "proposta"]}
+    elif tab == "aguardando":
+        query["status"] = {"$in": ["pago", "bloqueado"]}
+
+    tickets = await db.tickets.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
+    return tickets
+
+@router.get("/tickets/counts")
+async def get_ticket_counts(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    company_id = user["company_id"]
+    atendendo = await db.tickets.count_documents({"company_id": company_id, "status": {"$in": ["aberto", "em_cobranca", "proposta"]}})
+    aguardando = await db.tickets.count_documents({"company_id": company_id, "status": {"$in": ["pago", "bloqueado"]}})
+    total = await db.tickets.count_documents({"company_id": company_id})
+    return {"atendendo": atendendo, "aguardando": aguardando, "total": total}
     return tickets
 
 @router.post("/tickets")

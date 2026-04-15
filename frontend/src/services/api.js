@@ -65,6 +65,7 @@ export const superAdminAPI = {
 // CRM API
 export const crmAPI = {
   getTickets: (params) => api.get('/crm/tickets', { params }),
+  getTicketCounts: () => api.get('/crm/tickets/counts'),
   createTicket: (data) => api.post('/crm/tickets', data),
   updateTicket: (id, data) => api.put(`/crm/tickets/${id}`, data),
   deleteTicket: (id) => api.delete(`/crm/tickets/${id}`),
