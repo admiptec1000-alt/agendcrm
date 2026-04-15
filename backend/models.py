@@ -38,6 +38,28 @@ class ServiceType(str, Enum):
     PRODUCT = "product"
     SUBSCRIPTION = "subscription"
 
+# Business Type Models
+class FeaturePermission(BaseModel):
+    feature_key: str
+    enabled: bool
+    label: str
+    category: str  # crm, scheduling, shared
+
+class BusinessTypeCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    base_type: PlanType  # crm, scheduling, both
+    features: List[Dict[str, Any]] = []  # Lista de features habilitadas
+
+class BusinessTypeUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    base_type: Optional[PlanType] = None
+    features: Optional[List[Dict[str, Any]]] = None
+    is_active: Optional[bool] = None
+
 # Auth Models
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -48,6 +70,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     company_name: Optional[str] = None
+    business_type_id: Optional[str] = None  # ID do tipo de negócio
     plan_type: PlanType = PlanType.BOTH
 
 class TokenResponse(BaseModel):
@@ -67,14 +90,20 @@ class CompanyCreate(BaseModel):
     email: EmailStr
     phone: Optional[str] = None
     plan_type: PlanType
+    business_type_id: Optional[str] = None  # ID do tipo de negócio
     theme_colors: Optional[ThemeColors] = None
+    admin_name: str
+    admin_email: EmailStr
+    admin_password: str
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    cnpj: Optional[str] = None
     status: Optional[CompanyStatus] = None
     plan_type: Optional[PlanType] = None
+    business_type_id: Optional[str] = None
     theme_colors: Optional[ThemeColors] = None
 
 class CompanyResponse(BaseModel):
@@ -84,6 +113,7 @@ class CompanyResponse(BaseModel):
     phone: Optional[str] = None
     status: CompanyStatus
     plan_type: PlanType
+    business_type_id: Optional[str] = None
     theme_colors: ThemeColors
     logo_url: Optional[str] = None
     created_at: str

@@ -96,6 +96,13 @@ async def register_company(
             detail="Email já cadastrado"
         )
     
+    # Get business type features if provided
+    features = []
+    if data.business_type_id:
+        bt = await db.business_types.find_one({"id": data.business_type_id})
+        if bt:
+            features = bt.get("features", [])
+
     # Create company
     company_id = str(uuid.uuid4())
     company = {
@@ -104,6 +111,8 @@ async def register_company(
         "email": data.email,
         "status": CompanyStatus.TRIAL,
         "plan_type": data.plan_type,
+        "business_type_id": data.business_type_id,
+        "features": features,
         "theme_colors": ThemeColors().model_dump(),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -159,9 +168,28 @@ async def get_current_user_info(
 ):
     if user.get("role") == "super_admin":
         return user
-    
+
     # Get company info for regular users
     company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0})
     user["company"] = company
-    
+
+    # If company has business_type_id, get features from type
+    if company and company.get("business_type_id"):
+        bt = await db.business_types.find_one({"id": company["business_type_id"]}, {"_id": 0})
+        if bt:
+            user["business_type"] = bt
+
     return user
+
+
+# === PUBLIC ENDPOINTS FOR LANDING PAGE ===
+@router.get("/business-types")
+async def list_public_business_types(
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Public endpoint for landing page to list available business types"""
+    types = await db.business_types.find(
+        {"is_active": True},
+        {"_id": 0, "features": 0}
+    ).to_list(1000)
+    return types

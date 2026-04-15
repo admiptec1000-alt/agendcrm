@@ -86,6 +86,89 @@ async def startup_event():
         }
         await db.super_admins.insert_one(super_admin_data)
         logger.info("Super admin created: admin@agentcrm.com / admin123")
+
+    # Seed default business types if none exist
+    bt_count = await db.business_types.count_documents({})
+    if bt_count == 0:
+        logger.info("Seeding default business types...")
+        crm_features = [
+            {"feature_key": "dashboard", "enabled": True},
+            {"feature_key": "atendimentos", "enabled": True},
+            {"feature_key": "respostas_rapidas", "enabled": True},
+            {"feature_key": "kanban", "enabled": True},
+            {"feature_key": "contatos", "enabled": True},
+            {"feature_key": "tags", "enabled": True},
+            {"feature_key": "chat_interno", "enabled": True},
+            {"feature_key": "campanhas", "enabled": True},
+            {"feature_key": "flowbuilder", "enabled": True},
+            {"feature_key": "informativos", "enabled": True},
+            {"feature_key": "api", "enabled": True},
+            {"feature_key": "usuarios", "enabled": True},
+            {"feature_key": "filas_chatbot", "enabled": True},
+            {"feature_key": "conexoes", "enabled": True},
+            {"feature_key": "agente_ia", "enabled": True},
+            {"feature_key": "configuracoes", "enabled": True},
+            {"feature_key": "relatorios", "enabled": True},
+        ]
+        sched_features = [
+            {"feature_key": "calendario", "enabled": True},
+            {"feature_key": "agendamentos", "enabled": True},
+            {"feature_key": "clientes", "enabled": True},
+            {"feature_key": "categorias", "enabled": True},
+            {"feature_key": "servicos_produtos", "enabled": True},
+            {"feature_key": "assinaturas", "enabled": True},
+            {"feature_key": "profissionais", "enabled": True},
+            {"feature_key": "financeiro", "enabled": True},
+            {"feature_key": "comissoes", "enabled": True},
+            {"feature_key": "meu_site", "enabled": True},
+            {"feature_key": "notificacoes", "enabled": True},
+            {"feature_key": "configuracoes", "enabled": True},
+            {"feature_key": "relatorios", "enabled": True},
+        ]
+        default_types = [
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Salao de Beleza",
+                "description": "Para saloes, barbearias e studios de beleza",
+                "icon": "Scissors",
+                "base_type": "scheduling",
+                "features": sched_features,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Clinica",
+                "description": "Para clinicas medicas, odontologicas e esteticas",
+                "icon": "Stethoscope",
+                "base_type": "scheduling",
+                "features": sched_features,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Atendimento ao Cliente",
+                "description": "CRM completo para gestao de atendimento e suporte",
+                "icon": "Headphones",
+                "base_type": "crm",
+                "features": crm_features,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Completo (CRM + Agendamento)",
+                "description": "Todas as funcionalidades de CRM e Agendamento",
+                "icon": "LayoutGrid",
+                "base_type": "both",
+                "features": crm_features + sched_features,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            },
+        ]
+        await db.business_types.insert_many(default_types)
+        logger.info(f"Created {len(default_types)} default business types")
     
     # Initialize storage
     try:

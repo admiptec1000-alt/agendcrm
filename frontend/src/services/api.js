@@ -52,7 +52,14 @@ export const superAdminAPI = {
   getCompanies: (params) => api.get('/super-admin/companies', { params }),
   createCompany: (data) => api.post('/super-admin/companies', data),
   updateCompany: (id, data) => api.put(`/super-admin/companies/${id}`, data),
-  deleteCompany: (id) => api.delete(`/super-admin/companies/${id}`)
+  updateCompanyFeatures: (id, features) => api.put(`/super-admin/companies/${id}/features`, features),
+  deleteCompany: (id) => api.delete(`/super-admin/companies/${id}`),
+  getBusinessTypes: () => api.get('/super-admin/business-types'),
+  getBusinessType: (id) => api.get(`/super-admin/business-types/${id}`),
+  createBusinessType: (data) => api.post('/super-admin/business-types', data),
+  updateBusinessType: (id, data) => api.put(`/super-admin/business-types/${id}`, data),
+  deleteBusinessType: (id) => api.delete(`/super-admin/business-types/${id}`),
+  getAllFeatures: () => api.get('/super-admin/features')
 };
 
 // CRM API
@@ -100,7 +107,8 @@ export const publicAPI = {
   getServices: (slug, params) => axios.get(`${API_URL}/public/booking/${slug}/services`, { params }),
   getProfessionals: (slug, params) => axios.get(`${API_URL}/public/booking/${slug}/professionals`, { params }),
   getAvailability: (slug, params) => axios.get(`${API_URL}/public/booking/${slug}/availability`, { params }),
-  createBooking: (slug, data) => axios.post(`${API_URL}/public/booking/${slug}/book`, data)
+  createBooking: (slug, data) => axios.post(`${API_URL}/public/booking/${slug}/book`, data),
+  getBusinessTypes: () => axios.get(`${API_URL}/auth/business-types`)
 };
 
 // Upload API

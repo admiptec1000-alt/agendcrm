@@ -6,6 +6,7 @@ import { Toaster } from './components/ui/sonner';
 // Pages
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import LandingPage from './pages/Public/LandingPage';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
 import CRMDashboard from './pages/CRM/Dashboard';
 import SchedulingDashboard from './pages/Scheduling/Dashboard';
@@ -39,10 +40,13 @@ const AppRoutes = () => {
 
   return (
     <Routes>
+      {/* Public */}
+      <Route path="/landing" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/booking/:slug" element={<PublicBooking />} />
 
+      {/* Protected */}
       <Route
         path="/super-admin/*"
         element={
@@ -51,7 +55,6 @@ const AppRoutes = () => {
           </PrivateRoute>
         }
       />
-
       <Route
         path="/crm/*"
         element={
@@ -60,7 +63,6 @@ const AppRoutes = () => {
           </PrivateRoute>
         }
       />
-
       <Route
         path="/scheduling/*"
         element={
@@ -70,6 +72,7 @@ const AppRoutes = () => {
         }
       />
 
+      {/* Default Route */}
       <Route
         path="/"
         element={
@@ -84,7 +87,7 @@ const AppRoutes = () => {
               <Navigate to="/crm" />
             )
           ) : (
-            <Navigate to="/login" />
+            <Navigate to="/landing" />
           )
         }
       />
