@@ -558,7 +558,9 @@ const ProfessionalsPage = () => {
   const [form, setForm] = useState({ name: '', email: '', phone: '', specialties: [] });
   useEffect(() => { schedulingAPI.getProfessionals().then(r => setItems(r.data)).catch(() => {}); }, []);
   const handleSave = async () => {
-    await schedulingAPI.createProfessional(form);
+    const payload = { name: form.name, phone: form.phone, specialties: form.specialties };
+    if (form.email) payload.email = form.email;
+    await schedulingAPI.createProfessional(payload);
     toast.success('Profissional criado!');
     setShowAdd(false);
     schedulingAPI.getProfessionals().then(r => setItems(r.data));

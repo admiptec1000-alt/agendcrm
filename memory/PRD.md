@@ -1,60 +1,58 @@
 # PRD - AgentCRM & Booking System
 
 ## Problem Statement
-Sistema multi-tenant SaaS de CRM e Agendamento com Super Admin que gerencia tipos de negócio configuráveis, empresas com funcionalidades selecionáveis, landing page pública para vendas, e integração WhatsApp.
+Sistema multi-tenant SaaS de CRM e Agendamento com Super Admin, tipos de negocio configuraveis, menu dinamico por empresa, FlowBuilder visual, e integracao WhatsApp.
 
 ## Architecture
-- **Backend:** FastAPI + MongoDB (Motor async) + JWT Auth
-- **Frontend:** React 19 + TailwindCSS + Shadcn/UI + React Router
-- **Integrações:** OpenAI GPT-5.2 (Agente IA), Emergent Object Storage, WhatsApp (Baileys - estrutura)
-- **Design:** Outfit (headings) + Manrope (body), CSS Variables para temas personalizáveis
+- Backend: FastAPI + MongoDB (Motor async) + JWT Auth
+- Frontend: React 19 + TailwindCSS + Shadcn/UI + React Router + React Flow
+- Integracoes: OpenAI GPT-5.2 (Agente IA), Emergent Object Storage, WhatsApp (Baileys)
+- Design: Outfit + Manrope, CSS Variables para temas
 
-## What's Been Implemented (2026-04-15)
+## Implemented (2026-04-15)
 
-### Phase 1 - Core MVP
+### Phase 1 - Core
 - [x] Auth JWT (Super Admin + Company Users)
-- [x] MongoDB models + CRUD completo
-- [x] Landing page de vendas com tipos de negócio
-- [x] Login/Register pages
+- [x] Landing page de vendas com tipos de negocio
+- [x] Login/Register
 
-### Phase 2 - Super Admin (Current)
-- [x] Dashboard com métricas (Empresas, Ativas, Trial, Tipos)
-- [x] Sidebar com navegação (Dashboard, Empresas, Tipos de Negócio, Config)
-- [x] CRUD de Empresas com formulário completo (Nome, CNPJ, Email, Telefone)
-- [x] Seleção de tipo de negócio ao criar empresa
-- [x] Opção "Personalizado" para setup custom de funcionalidades
-- [x] CRUD de Tipos de Negócio (nome, base_type, features)
-- [x] Configuração de features por tipo (CRM, Scheduling, Shared)
-- [x] 4 tipos padrão pré-seedados
-- [x] Criação automática de admin + booking page ao criar empresa
-- [x] Busca de empresas por nome, CNPJ, email
+### Phase 2 - Super Admin
+- [x] Dashboard com metricas
+- [x] CRUD Empresas com formulario completo + tipo de negocio
+- [x] CRUD Tipos de Negocio com features configuraveis
+- [x] Setup personalizado para clientes custom
+- [x] 4 tipos padrao seedados
 
-### Phase 3 - CRM
-- [x] Kanban de atendimento (6 colunas)
-- [x] CRUD de tickets
-- [x] Agente IA com GPT-5.2
-- [x] Respostas rápidas, Campanhas, FlowBuilder
+### Phase 3 - Company Dashboard
+- [x] Menu lateral dinamico baseado nas features do tipo de negocio
+- [x] Sidebar colapsavel
+- [x] Todas as paginas CRM: Dashboard, Atendimentos, Kanban, Respostas Rapidas, Contatos, Tags, Chat Interno, Campanhas, FlowBuilder, Informativos, Filas & Chatbot, Conexoes WhatsApp, Agente IA, API, Usuarios
+- [x] Todas as paginas Agendamento: Calendario, Agendamentos, Clientes, Categorias, Servicos e Produtos, Assinaturas, Profissionais, Financeiro, Comissoes, Meu Site, Notificacoes, Configuracoes, Relatorios
 
-### Phase 4 - Agendamento
-- [x] Dashboard com stats
-- [x] CRUD de agendamentos, serviços, profissionais, categorias
-- [x] Página pública de booking (4 steps)
+### Phase 4 - FlowBuilder
+- [x] Canvas visual com React Flow
+- [x] 5 tipos de nos: Gatilho, Mensagem, Condicao, Espera, Acao
+- [x] Toolbar para adicionar nos
+- [x] Conexoes entre nos com labels (Sim/Nao)
+- [x] Salvar fluxo no backend
 
-## Prioritized Backlog
-### P0 (Next)
-- Menu lateral dinâmico nas dashboards de empresa (baseado em features)
-- Flowbuilder visual com React Flow
-- Implementação completa de cada menu do CRM/Agendamento
+### Phase 5 - WhatsApp
+- [x] Pagina de Conexoes com placeholder QR Code
+- [x] Backend preparado para Baileys
+
+## Backlog
+### P0 (Lembrete: Onboarding Wizard)
+- [ ] Onboarding Wizard no primeiro login da empresa
+- [ ] WhatsApp real com Baileys (Node.js microservice)
+- [ ] Drag and drop no Kanban
 
 ### P1
-- Integração WhatsApp completa com Baileys
-- Sistema de notificações em tempo real
-- Upload de logos/banners nas booking pages
-- PWA para mobile
+- [ ] Chat interno em tempo real
+- [ ] Notificacoes push
+- [ ] Upload de logos/banners
+- [ ] PWA para mobile
 
 ### P2
-- Relatórios e analytics avançados
-- Sistema de pagamentos (Stripe)
-- Comissões por profissional
-- Chat interno entre usuários
-- Automação de lembretes WhatsApp
+- [ ] Pagamentos (Stripe)
+- [ ] Relatorios avancados
+- [ ] Automacao de lembretes WhatsApp
