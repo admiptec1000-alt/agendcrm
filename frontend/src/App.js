@@ -8,8 +8,7 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import LandingPage from './pages/Public/LandingPage';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
-import CRMDashboard from './pages/CRM/Dashboard';
-import SchedulingDashboard from './pages/Scheduling/Dashboard';
+import CompanyDashboard from './pages/Company/Dashboard';
 import PublicBooking from './pages/Public/BookingPage';
 import './index.css';
 
@@ -29,14 +28,14 @@ const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
   }
 
   if (requireSuperAdmin && !isSuperAdmin) {
-    return <Navigate to="/" />;
+    return <Navigate to="/app" />;
   }
 
   return children;
 };
 
 const AppRoutes = () => {
-  const { isAuthenticated, isSuperAdmin, hasCRM, hasScheduling } = useAuth();
+  const { isAuthenticated, isSuperAdmin } = useAuth();
 
   return (
     <Routes>
@@ -56,21 +55,17 @@ const AppRoutes = () => {
         }
       />
       <Route
-        path="/crm/*"
+        path="/app/*"
         element={
           <PrivateRoute>
-            <CRMDashboard />
+            <CompanyDashboard />
           </PrivateRoute>
         }
       />
-      <Route
-        path="/scheduling/*"
-        element={
-          <PrivateRoute>
-            <SchedulingDashboard />
-          </PrivateRoute>
-        }
-      />
+
+      {/* Legacy routes redirect */}
+      <Route path="/crm/*" element={<Navigate to="/app" />} />
+      <Route path="/scheduling/*" element={<Navigate to="/app" />} />
 
       {/* Default Route */}
       <Route
@@ -79,12 +74,8 @@ const AppRoutes = () => {
           isAuthenticated ? (
             isSuperAdmin ? (
               <Navigate to="/super-admin" />
-            ) : hasCRM ? (
-              <Navigate to="/crm" />
-            ) : hasScheduling ? (
-              <Navigate to="/scheduling" />
             ) : (
-              <Navigate to="/crm" />
+              <Navigate to="/app" />
             )
           ) : (
             <Navigate to="/landing" />
