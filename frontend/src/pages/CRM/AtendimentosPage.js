@@ -77,9 +77,12 @@ const AtendimentosPage = () => {
       const res = await crmAPI.createTicket(form);
       toast.success('Ticket criado!');
       setShowNewTicket(false);
-      loadData();
+      await loadData();
       setSelectedTicket(res.data);
-    } catch (e) { toast.error('Erro ao criar ticket'); }
+    } catch (e) {
+      toast.error('Erro ao criar ticket');
+      setShowNewTicket(false);
+    }
   };
 
   const formatTime = (isoDate) => {
