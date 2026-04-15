@@ -143,3 +143,39 @@ async def delete_file(
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     
     return {"message": "Arquivo deletado com sucesso"}
+
+# Upload for booking page (logo/banner) - returns URL directly
+@router.post("/booking-image")
+async def upload_booking_image(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nome do arquivo invalido")
+
+    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    file_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/booking/{user['company_id']}/{file_id}.{ext}"
+
+    content = await file.read()
+    result = put_object(path, content, file.content_type or "application/octet-stream")
+
+    file_doc = {
+        "id": file_id,
+        "company_id": user["company_id"],
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": result["size"],
+        "is_deleted": False,
+        "uploaded_by": user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.files.insert_one(file_doc)
+
+    return {
+        "id": file_id,
+        "path": result["path"],
+        "url": f"/api/upload/files/{result['path']}"
+    }

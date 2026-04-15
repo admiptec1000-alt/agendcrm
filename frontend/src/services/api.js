@@ -98,7 +98,9 @@ export const schedulingAPI = {
   getCategories: () => api.get('/scheduling/categories'),
   createCategory: (data) => api.post('/scheduling/categories', data),
   getBookingPage: () => api.get('/scheduling/booking-page'),
-  updateBookingPage: (data) => api.put('/scheduling/booking-page', data)
+  updateBookingPage: (data) => api.put('/scheduling/booking-page', data),
+  getOnboardingStatus: () => api.get('/scheduling/onboarding-status'),
+  completeOnboarding: () => api.post('/scheduling/onboarding-complete'),
 };
 
 // Public API
@@ -117,9 +119,14 @@ export const uploadAPI = {
     const formData = new FormData();
     formData.append('file', file);
     return api.post('/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
+  uploadBookingImage: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/upload/booking-image', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
     });
   },
   deleteFile: (fileId) => api.delete(`/upload/files/${fileId}`)

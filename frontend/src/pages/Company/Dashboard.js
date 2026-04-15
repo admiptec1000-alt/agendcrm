@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { crmAPI, schedulingAPI } from '../../services/api';
+import { crmAPI, schedulingAPI, uploadAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
   LogOut, LayoutDashboard, Headphones, Zap, Columns3, Users, Tag,
@@ -8,7 +8,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock
+  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 
@@ -56,11 +56,19 @@ const CompanyDashboard = () => {
   const { user, logout } = useAuth();
   const [activePage, setActivePage] = useState('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const enabledFeatures = useMemo(() => {
     const feats = user?.company?.features || [];
     return feats.filter(f => f.enabled).map(f => f.feature_key);
   }, [user]);
+
+  // Check onboarding status on mount
+  useEffect(() => {
+    schedulingAPI.getOnboardingStatus().then(r => {
+      if (!r.data.onboarding_done) setShowOnboarding(true);
+    }).catch(() => {});
+  }, []);
 
   const menuGroups = useMemo(() => {
     const groups = {};
@@ -158,6 +166,11 @@ const CompanyDashboard = () => {
           <PageContent page={activePage} hasFeature={hasFeature} />
         </div>
       </main>
+
+      {/* Onboarding Wizard */}
+      {showOnboarding && (
+        <OnboardingWizard onClose={() => { setShowOnboarding(false); schedulingAPI.completeOnboarding(); }} />
+      )}
     </div>
   );
 };
@@ -211,18 +224,51 @@ const DashboardPage = () => {
   );
 };
 
-/* ========== KANBAN ========== */
+/* ========== KANBAN WITH DRAG AND DROP ========== */
 const KanbanPage = () => {
   const [kanban, setKanban] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [draggedTicket, setDraggedTicket] = useState(null);
+  const [dragOverCol, setDragOverCol] = useState(null);
+
   useEffect(() => { crmAPI.getKanban().then(r => setKanban(r.data)).catch(() => {}); }, []);
+  const reload = () => crmAPI.getKanban().then(r => setKanban(r.data));
+
   const cols = [
-    { key: 'aberto', label: 'Aberto', bg: 'bg-blue-500' },
-    { key: 'em_cobranca', label: 'Em Cobranca', bg: 'bg-yellow-500' },
-    { key: 'pago', label: 'Pago', bg: 'bg-emerald-500' },
-    { key: 'bloqueado', label: 'Bloqueado', bg: 'bg-red-500' },
-    { key: 'proposta', label: 'Proposta', bg: 'bg-violet-500' },
+    { key: 'aberto', label: 'Aberto', bg: 'bg-blue-500', border: 'border-blue-300' },
+    { key: 'em_cobranca', label: 'Em Cobranca', bg: 'bg-yellow-500', border: 'border-yellow-300' },
+    { key: 'pago', label: 'Pago', bg: 'bg-emerald-500', border: 'border-emerald-300' },
+    { key: 'bloqueado', label: 'Bloqueado', bg: 'bg-red-500', border: 'border-red-300' },
+    { key: 'proposta', label: 'Proposta', bg: 'bg-violet-500', border: 'border-violet-300' },
   ];
+
+  const handleDragStart = (e, ticket, fromCol) => {
+    setDraggedTicket({ ...ticket, fromCol });
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e, colKey) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverCol(colKey);
+  };
+
+  const handleDragLeave = () => setDragOverCol(null);
+
+  const handleDrop = async (e, toCol) => {
+    e.preventDefault();
+    setDragOverCol(null);
+    if (!draggedTicket || draggedTicket.fromCol === toCol) { setDraggedTicket(null); return; }
+    try {
+      await crmAPI.updateTicket(draggedTicket.id, { status: toCol });
+      toast.success(`Ticket movido para ${cols.find(c => c.key === toCol)?.label}`);
+      reload();
+    } catch (err) {
+      toast.error('Erro ao mover ticket');
+    }
+    setDraggedTicket(null);
+  };
+
   return (
     <div className="animate-fade-in" data-testid="kanban-page">
       <div className="flex items-center justify-between mb-4">
@@ -231,21 +277,39 @@ const KanbanPage = () => {
       </div>
       <div className="flex gap-4 overflow-x-auto pb-4">
         {cols.map(col => (
-          <div key={col.key} className="flex-shrink-0 w-72" data-testid={`kanban-col-${col.key}`}>
-            <div className="card !p-4">
+          <div
+            key={col.key}
+            className={`flex-shrink-0 w-72 transition-all ${dragOverCol === col.key ? 'scale-[1.02]' : ''}`}
+            data-testid={`kanban-col-${col.key}`}
+            onDragOver={(e) => handleDragOver(e, col.key)}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, col.key)}
+          >
+            <div className={`card !p-4 ${dragOverCol === col.key ? `border-2 ${col.border} bg-slate-50` : ''}`}>
               <div className="flex items-center gap-2 mb-3">
                 <div className={`w-2.5 h-2.5 rounded-full ${col.bg}`} />
                 <span className="font-semibold text-sm text-slate-900">{col.label}</span>
                 <span className="ml-auto text-xs text-slate-400">{kanban?.[col.key]?.length || 0}</span>
               </div>
-              <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+              <div className="space-y-2 max-h-[60vh] overflow-y-auto min-h-[60px]">
                 {kanban?.[col.key]?.map(t => (
-                  <div key={t.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 hover:shadow transition-all text-sm" data-testid={`ticket-${t.id}`}>
-                    <p className="font-medium text-slate-900">{t.customer_name}</p>
-                    <p className="text-xs text-slate-500 mt-1">{t.customer_phone}</p>
-                    <div className="flex items-center gap-1.5 mt-2">
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200">{t.channel}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${t.priority === 'high' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{t.priority}</span>
+                  <div
+                    key={t.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, t, col.key)}
+                    className="p-3 bg-slate-50 rounded-lg border border-slate-200 hover:shadow transition-all text-sm cursor-grab active:cursor-grabbing"
+                    data-testid={`ticket-${t.id}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <GripVertical className="w-4 h-4 text-slate-300 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-slate-900">{t.customer_name}</p>
+                        <p className="text-xs text-slate-500 mt-1">{t.customer_phone}</p>
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200">{t.channel}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${t.priority === 'high' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{t.priority}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -254,7 +318,7 @@ const KanbanPage = () => {
           </div>
         ))}
       </div>
-      {showAdd && <TicketModal onClose={() => setShowAdd(false)} onSave={() => { setShowAdd(false); crmAPI.getKanban().then(r => setKanban(r.data)); }} />}
+      {showAdd && <TicketModal onClose={() => setShowAdd(false)} onSave={() => { setShowAdd(false); reload(); }} />}
     </div>
   );
 };
@@ -415,25 +479,115 @@ const AIAgentPage = () => {
   );
 };
 
-/* ========== WHATSAPP CONNECTIONS ========== */
-const WhatsAppPage = () => (
-  <div className="animate-fade-in" data-testid="whatsapp-page">
-    <div className="card text-center py-12">
-      <div className="w-20 h-20 rounded-2xl bg-emerald-100 flex items-center justify-center mx-auto mb-4">
-        <Phone className="w-10 h-10 text-emerald-600" />
-      </div>
-      <h3 className="text-xl font-bold font-heading text-slate-900 mb-2">Conexoes WhatsApp</h3>
-      <p className="text-sm text-slate-600 mb-6 max-w-md mx-auto">Conecte seu WhatsApp para receber e enviar mensagens. Escaneie o QR Code para vincular.</p>
-      <button className="btn-primary" data-testid="connect-whatsapp-btn">Conectar WhatsApp</button>
-      <div className="mt-8 p-6 bg-slate-50 rounded-xl max-w-sm mx-auto">
-        <div className="w-48 h-48 bg-white border-2 border-dashed border-slate-300 rounded-xl mx-auto flex items-center justify-center">
-          <p className="text-xs text-slate-400">QR Code aqui</p>
+/* ========== WHATSAPP CONNECTIONS - ENHANCED ========== */
+const WhatsAppPage = () => {
+  const [status, setStatus] = useState('disconnected'); // disconnected, connecting, connected
+  const [qrVisible, setQrVisible] = useState(false);
+
+  const handleConnect = () => {
+    setStatus('connecting');
+    setQrVisible(true);
+    // Simulate connection after 5s
+    setTimeout(() => {
+      setStatus('connected');
+      setQrVisible(false);
+      toast.success('WhatsApp conectado com sucesso!');
+    }, 5000);
+  };
+
+  return (
+    <div className="animate-fade-in" data-testid="whatsapp-page">
+      {/* Status Banner */}
+      <div className={`card mb-6 border-l-4 ${
+        status === 'connected' ? 'border-l-emerald-500 bg-emerald-50' :
+        status === 'connecting' ? 'border-l-amber-500 bg-amber-50' :
+        'border-l-slate-400 bg-slate-50'
+      }`}>
+        <div className="flex items-center gap-4">
+          <div className={`w-3 h-3 rounded-full ${
+            status === 'connected' ? 'bg-emerald-500 animate-pulse' :
+            status === 'connecting' ? 'bg-amber-500 animate-pulse' :
+            'bg-slate-400'
+          }`} />
+          <div>
+            <p className="font-medium text-sm text-slate-900">
+              {status === 'connected' ? 'WhatsApp Conectado' :
+               status === 'connecting' ? 'Conectando...' :
+               'WhatsApp Desconectado'}
+            </p>
+            <p className="text-xs text-slate-600">
+              {status === 'connected' ? 'Pronto para enviar e receber mensagens' :
+               status === 'connecting' ? 'Escaneie o QR Code no seu celular' :
+               'Clique em conectar para vincular seu WhatsApp'}
+            </p>
+          </div>
+          {status === 'disconnected' && (
+            <button onClick={handleConnect} className="ml-auto btn-primary text-sm" data-testid="connect-whatsapp-btn">Conectar</button>
+          )}
         </div>
-        <p className="text-xs text-slate-500 mt-3">Abra WhatsApp &gt; Dispositivos conectados &gt; Conectar dispositivo</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* QR Code Section */}
+        <div className="card text-center">
+          <h3 className="font-semibold text-slate-900 mb-4">Vincular Dispositivo</h3>
+          {qrVisible ? (
+            <div className="p-6 bg-white rounded-xl border-2 border-slate-200 max-w-[280px] mx-auto">
+              <div className="w-56 h-56 bg-gradient-to-br from-slate-100 to-slate-200 rounded-lg mx-auto flex items-center justify-center relative overflow-hidden">
+                {/* Simulated QR pattern */}
+                <div className="grid grid-cols-8 gap-0.5 p-4">
+                  {Array.from({length: 64}).map((_, i) => (
+                    <div key={i} className={`w-4 h-4 rounded-sm ${Math.random() > 0.5 ? 'bg-slate-800' : 'bg-white'}`} />
+                  ))}
+                </div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-12 h-12 bg-white rounded-lg flex items-center justify-center shadow-lg">
+                    <Phone className="w-6 h-6 text-emerald-600" />
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-3">Escaneie com seu WhatsApp</p>
+              <p className="text-[10px] text-slate-400 mt-1">Abra WhatsApp &gt; Dispositivos conectados &gt; Conectar</p>
+            </div>
+          ) : (
+            <div className="py-8">
+              <div className="w-20 h-20 rounded-2xl bg-emerald-100 flex items-center justify-center mx-auto mb-3">
+                <Phone className="w-10 h-10 text-emerald-600" />
+              </div>
+              <p className="text-sm text-slate-600">
+                {status === 'connected' ? 'Dispositivo vinculado com sucesso' : 'Clique em Conectar para gerar o QR Code'}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Info Section */}
+        <div className="card">
+          <h3 className="font-semibold text-slate-900 mb-4">Informacoes da Conexao</h3>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+              <span className="text-sm text-slate-600">Status</span>
+              <StatusBadge s={status} />
+            </div>
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+              <span className="text-sm text-slate-600">Numero</span>
+              <span className="text-sm font-medium text-slate-900">{status === 'connected' ? '+55 (11) 9XXXX-XXXX' : '-'}</span>
+            </div>
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+              <span className="text-sm text-slate-600">Mensagens hoje</span>
+              <span className="text-sm font-medium text-slate-900">{status === 'connected' ? '0' : '-'}</span>
+            </div>
+          </div>
+          {status === 'connected' && (
+            <button onClick={() => { setStatus('disconnected'); toast.info('WhatsApp desconectado'); }} className="btn-secondary text-sm w-full mt-4">
+              Desconectar
+            </button>
+          )}
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 /* ========== APPOINTMENTS ========== */
 const AppointmentsPage = () => {
@@ -632,13 +786,53 @@ const CategoriesPage = () => {
   );
 };
 
-/* ========== MY SITE (BOOKING PAGE) ========== */
+/* ========== MY SITE (BOOKING PAGE) WITH UPLOAD ========== */
 const MySitePage = () => {
   const [page, setPage] = useState(null);
+  const [uploading, setUploading] = useState(null); // 'logo' | 'banner' | null
+  const [saving, setSaving] = useState(false);
+  const logoRef = useRef(null);
+  const bannerRef = useRef(null);
+
   useEffect(() => { schedulingAPI.getBookingPage().then(r => setPage(r.data)).catch(() => {}); }, []);
+
+  const handleUpload = async (file, type) => {
+    if (!file) return;
+    setUploading(type);
+    try {
+      const res = await uploadAPI.uploadBookingImage(file);
+      const url = res.data.url;
+      const updateData = type === 'logo' ? { logo_url: url } : { banner_url: url };
+      await schedulingAPI.updateBookingPage(updateData);
+      const updated = await schedulingAPI.getBookingPage();
+      setPage(updated.data);
+      toast.success(`${type === 'logo' ? 'Logo' : 'Banner'} atualizado!`);
+    } catch (e) {
+      toast.error(`Erro ao fazer upload do ${type}`);
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const handleColorSave = async (field, value) => {
+    setSaving(true);
+    try {
+      await schedulingAPI.updateBookingPage({ [field]: value });
+      const updated = await schedulingAPI.getBookingPage();
+      setPage(updated.data);
+      toast.success('Cor atualizada!');
+    } catch (e) {
+      toast.error('Erro ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const API_BASE = process.env.REACT_APP_BACKEND_URL;
+
   return (
     <div className="animate-fade-in" data-testid="my-site-page">
-      <div className="card">
+      <div className="card mb-6">
         <h3 className="text-lg font-semibold font-heading text-slate-900 mb-2">Minha Pagina de Agendamento</h3>
         <p className="text-sm text-slate-600 mb-4">Personalize a pagina onde seus clientes fazem agendamentos</p>
         {page?.slug && (
@@ -647,17 +841,69 @@ const MySitePage = () => {
             <div className="flex items-center gap-2">
               <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/booking/{page.slug}</code>
               <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/booking/${page.slug}`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-link-btn">Copiar</button>
+              <a href={`/booking/${page.slug}`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
             </div>
           </div>
         )}
+      </div>
+
+      {/* Identity Section */}
+      <div className="card mb-6">
+        <h3 className="font-semibold text-slate-900 mb-4">Identidade Visual</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Logo Upload */}
+          <div>
+            <p className="text-sm font-medium text-slate-700 mb-2">Logo da Empresa</p>
+            <input type="file" ref={logoRef} className="hidden" accept="image/*" onChange={(e) => handleUpload(e.target.files[0], 'logo')} />
+            <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-primary transition-colors cursor-pointer" onClick={() => logoRef.current?.click()} data-testid="logo-upload-area">
+              {page?.logo_url ? (
+                <img src={`${API_BASE}${page.logo_url}`} alt="Logo" className="max-h-24 mx-auto rounded" />
+              ) : (
+                <div className="flex flex-col items-center">
+                  <Upload className="w-8 h-8 text-slate-400 mb-2" />
+                  <p className="text-sm text-slate-500">Clique para enviar logo</p>
+                </div>
+              )}
+              {uploading === 'logo' && <p className="text-xs text-primary mt-2">Enviando...</p>}
+            </div>
+          </div>
+
+          {/* Banner Upload */}
+          <div>
+            <p className="text-sm font-medium text-slate-700 mb-2">Banner da Pagina</p>
+            <input type="file" ref={bannerRef} className="hidden" accept="image/*" onChange={(e) => handleUpload(e.target.files[0], 'banner')} />
+            <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-primary transition-colors cursor-pointer" onClick={() => bannerRef.current?.click()} data-testid="banner-upload-area">
+              {page?.banner_url ? (
+                <img src={`${API_BASE}${page.banner_url}`} alt="Banner" className="max-h-24 mx-auto rounded" />
+              ) : (
+                <div className="flex flex-col items-center">
+                  <Image className="w-8 h-8 text-slate-400 mb-2" />
+                  <p className="text-sm text-slate-500">Clique para enviar banner</p>
+                </div>
+              )}
+              {uploading === 'banner' && <p className="text-xs text-primary mt-2">Enviando...</p>}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Colors */}
+      <div className="card">
+        <h3 className="font-semibold text-slate-900 mb-4">Cores</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="p-4 border border-slate-200 rounded-lg">
             <p className="text-sm font-medium text-slate-700 mb-2">Cor Primaria</p>
-            <div className="flex items-center gap-2"><div className="w-8 h-8 rounded" style={{ background: page?.primary_color || '#4F46E5' }} /><span className="text-sm text-slate-600">{page?.primary_color || '#4F46E5'}</span></div>
+            <div className="flex items-center gap-3">
+              <input type="color" value={page?.primary_color || '#4F46E5'} onChange={(e) => handleColorSave('primary_color', e.target.value)} className="w-10 h-10 rounded cursor-pointer border-0" data-testid="primary-color-picker" />
+              <span className="text-sm text-slate-600">{page?.primary_color || '#4F46E5'}</span>
+            </div>
           </div>
           <div className="p-4 border border-slate-200 rounded-lg">
             <p className="text-sm font-medium text-slate-700 mb-2">Cor Secundaria</p>
-            <div className="flex items-center gap-2"><div className="w-8 h-8 rounded" style={{ background: page?.secondary_color || '#10B981' }} /><span className="text-sm text-slate-600">{page?.secondary_color || '#10B981'}</span></div>
+            <div className="flex items-center gap-3">
+              <input type="color" value={page?.secondary_color || '#10B981'} onChange={(e) => handleColorSave('secondary_color', e.target.value)} className="w-10 h-10 rounded cursor-pointer border-0" data-testid="secondary-color-picker" />
+              <span className="text-sm text-slate-600">{page?.secondary_color || '#10B981'}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -786,5 +1032,124 @@ const PriorityBadge = ({ p }) => (
     p === 'high' ? 'bg-red-100 text-red-700' : p === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
   }`}>{p}</span>
 );
+
+/* ========== ONBOARDING WIZARD ========== */
+const OnboardingWizard = ({ onClose }) => {
+  const [step, setStep] = useState(0);
+  const [serviceForm, setServiceForm] = useState({ name: '', price: '', duration: '' });
+  const [profForm, setProfForm] = useState({ name: '', phone: '' });
+  const [status, setStatus] = useState({ has_services: false, has_professionals: false });
+
+  useEffect(() => {
+    schedulingAPI.getOnboardingStatus().then(r => setStatus(r.data.steps)).catch(() => {});
+  }, []);
+
+  const steps = [
+    { title: 'Bem-vindo!', desc: 'Vamos configurar sua empresa em poucos passos', icon: CheckCircle2 },
+    { title: 'Adicionar Servico', desc: 'Cadastre pelo menos um servico que voce oferece', icon: Scissors },
+    { title: 'Adicionar Profissional', desc: 'Cadastre um profissional para realizar atendimentos', icon: Briefcase },
+    { title: 'Tudo Pronto!', desc: 'Sua empresa esta configurada. Compartilhe sua pagina!', icon: CheckCircle2 },
+  ];
+
+  const handleCreateService = async () => {
+    if (!serviceForm.name || !serviceForm.price || !serviceForm.duration) { toast.error('Preencha todos os campos'); return; }
+    try {
+      await schedulingAPI.createService({ ...serviceForm, price: parseFloat(serviceForm.price), duration: parseInt(serviceForm.duration), type: 'service' });
+      toast.success('Servico criado!');
+      setStep(2);
+    } catch (e) { toast.error('Erro ao criar servico'); }
+  };
+
+  const handleCreateProfessional = async () => {
+    if (!profForm.name) { toast.error('Preencha o nome'); return; }
+    try {
+      await schedulingAPI.createProfessional({ name: profForm.name, phone: profForm.phone });
+      toast.success('Profissional criado!');
+      setStep(3);
+    } catch (e) { toast.error('Erro ao criar profissional'); }
+  };
+
+  const CurrentIcon = steps[step].icon;
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+        {/* Progress */}
+        <div className="h-1.5 bg-slate-100">
+          <div className="h-full bg-primary transition-all duration-500" style={{ width: `${((step + 1) / steps.length) * 100}%` }} />
+        </div>
+
+        <div className="p-8">
+          {/* Step indicator */}
+          <div className="flex items-center justify-center mb-6">
+            {steps.map((_, i) => (
+              <React.Fragment key={i}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all ${
+                  i <= step ? 'bg-primary text-white' : 'bg-slate-200 text-slate-400'
+                }`}>
+                  {i < step ? <CheckCircle2 className="w-4 h-4" /> : i + 1}
+                </div>
+                {i < steps.length - 1 && <div className={`w-12 h-0.5 ${i < step ? 'bg-primary' : 'bg-slate-200'}`} />}
+              </React.Fragment>
+            ))}
+          </div>
+
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+              <CurrentIcon className="w-8 h-8 text-primary" />
+            </div>
+            <h2 className="text-2xl font-bold font-heading text-slate-900 mb-2">{steps[step].title}</h2>
+            <p className="text-sm text-slate-600">{steps[step].desc}</p>
+          </div>
+
+          {/* Step Content */}
+          {step === 0 && (
+            <div className="text-center">
+              <p className="text-sm text-slate-600 mb-6">Este assistente vai te ajudar a configurar os itens essenciais para comecar a receber agendamentos.</p>
+              <button onClick={() => setStep(1)} className="btn-primary w-full flex items-center justify-center gap-2" data-testid="onboarding-start-btn">
+                Comecar <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="space-y-3">
+              <input value={serviceForm.name} onChange={e => setServiceForm({...serviceForm, name: e.target.value})} placeholder="Nome do servico (ex: Corte de Cabelo)" className="input-field" data-testid="onboarding-service-name" />
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" value={serviceForm.price} onChange={e => setServiceForm({...serviceForm, price: e.target.value})} placeholder="Preco (R$)" className="input-field" data-testid="onboarding-service-price" />
+                <input type="number" value={serviceForm.duration} onChange={e => setServiceForm({...serviceForm, duration: e.target.value})} placeholder="Duracao (min)" className="input-field" data-testid="onboarding-service-duration" />
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => setStep(2)} className="btn-secondary flex-1 text-sm">Pular</button>
+                <button onClick={handleCreateService} className="btn-primary flex-1 text-sm" data-testid="onboarding-save-service">Criar e Continuar</button>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-3">
+              <input value={profForm.name} onChange={e => setProfForm({...profForm, name: e.target.value})} placeholder="Nome do profissional" className="input-field" data-testid="onboarding-prof-name" />
+              <input value={profForm.phone} onChange={e => setProfForm({...profForm, phone: e.target.value})} placeholder="Telefone" className="input-field" />
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => setStep(3)} className="btn-secondary flex-1 text-sm">Pular</button>
+                <button onClick={handleCreateProfessional} className="btn-primary flex-1 text-sm" data-testid="onboarding-save-prof">Criar e Continuar</button>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="text-center">
+              <div className="bg-emerald-50 rounded-xl p-4 mb-4">
+                <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-2" />
+                <p className="text-sm font-medium text-emerald-800">Configuracao concluida!</p>
+              </div>
+              <button onClick={onClose} className="btn-primary w-full" data-testid="onboarding-finish-btn">Ir para o Dashboard</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default CompanyDashboard;

@@ -329,3 +329,39 @@ async def update_booking_page(
     
     updated_page = await db.booking_pages.find_one({"company_id": user["company_id"]}, {"_id": 0})
     return updated_page
+
+# Onboarding status
+@router.get("/onboarding-status")
+async def get_onboarding_status(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    company_id = user["company_id"]
+    services_count = await db.services.count_documents({"company_id": company_id})
+    professionals_count = await db.professionals.count_documents({"company_id": company_id})
+    booking_page = await db.booking_pages.find_one({"company_id": company_id}, {"_id": 0})
+    company = await db.companies.find_one({"id": company_id}, {"_id": 0})
+    onboarding_done = company.get("onboarding_done", False) if company else False
+
+    return {
+        "onboarding_done": onboarding_done,
+        "steps": {
+            "company_configured": bool(company and company.get("theme_colors")),
+            "has_services": services_count > 0,
+            "has_professionals": professionals_count > 0,
+            "has_booking_page": bool(booking_page and booking_page.get("slug")),
+        },
+        "services_count": services_count,
+        "professionals_count": professionals_count,
+    }
+
+@router.post("/onboarding-complete")
+async def complete_onboarding(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    await db.companies.update_one(
+        {"id": user["company_id"]},
+        {"$set": {"onboarding_done": True}}
+    )
+    return {"message": "Onboarding completed"}
