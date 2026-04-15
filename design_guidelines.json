@@ -1,0 +1,120 @@
+{
+  "project_domain": "SaaS CRM & Scheduling System (Super Admin + Client Portal)",
+  "theme": "Light",
+  "archetype": "4 (Swiss & High-Contrast) with Vibrant Variables",
+  "reasoning": "A Super Admin dashboard and CRM need authority, clarity, and structural precision (Archetype 4). However, to meet the user's request for 'modern/vibrant' and customizable client environments, we use stark white and 10% grey for the structural base, and inject vibrant, highly saturated primary colors (like Blurple and Emerald) that can be swapped out via CSS variables per client. This ensures the data is readable while feeling cutting-edge.",
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "rules": [
+      "Headings must use Outfit with tight letter spacing (tracking-tight or tracking-tighter).",
+      "Body text must use Manrope with increased line height for readability.",
+      "Never use default bold for headers everywhere. Use font-light for large expressive headers and font-black for impact.",
+      "Overlines and labels must be uppercase, tiny, and have wide spacing (tracking-[0.2em]).",
+      "Never use Inter, Roboto, or Open Sans."
+    ],
+    "scale": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight font-bold",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-semibold",
+      "h3": "text-xl sm:text-2xl font-medium",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-base leading-relaxed text-slate-600",
+      "small": "text-sm text-slate-500",
+      "label": "text-xs font-bold uppercase tracking-widest text-slate-400"
+    }
+  },
+  "colors": {
+    "backgrounds": {
+      "app_bg": "#F8FAFC",
+      "surface": "#FFFFFF",
+      "glass": "rgba(255, 255, 255, 0.8)",
+      "dark_surface": "#0F172A"
+    },
+    "text": {
+      "primary": "#020617",
+      "secondary": "#475569",
+      "muted": "#94A3B8",
+      "inverse": "#FFFFFF"
+    },
+    "brand_variables": {
+      "primary": "var(--primary-color, #4F46E5)",
+      "primary_hover": "var(--primary-hover, #4338CA)",
+      "primary_light": "var(--primary-light, #EEF2FF)",
+      "secondary": "var(--secondary-color, #10B981)",
+      "accent": "var(--accent-color, #F43F5E)"
+    },
+    "borders": {
+      "default": "#E2E8F0",
+      "focus": "var(--primary-color, #4F46E5)"
+    },
+    "rules": [
+      "Use pure #FFFFFF for cards and #F8FAFC for the main app background to create subtle depth without shadows.",
+      "The primary brand color must be injected via CSS variables to allow client customization. Default to vibrant Indigo (#4F46E5).",
+      "Never use pure black or pure grey. Always tint with the primary hue (e.g., slate).",
+      "Text on primary buttons must have at least 4.5:1 contrast."
+    ]
+  },
+  "layout_and_spacing": {
+    "system": "Tailwind Space Scale",
+    "rules": [
+      "Mobile-first responsive grids.",
+      "Use 'Bento' grid protocol for Dashboard/Analytics: grid-cols-1 md:grid-cols-3 lg:grid-cols-4 with gap-6. Every pixel must be utilized with full-height children.",
+      "Use pure HTML + Tailwind CSS for major layout structures, avoiding overly restrictive container components.",
+      "Generous spacing: p-6 or p-8 inside cards.",
+      "Kanban boards must use horizontal scrolling swimlanes and vertical columns.",
+      "Flowbuilder must span 100% of the viewport height minus header, utilizing absolute positioning or a dedicated library like React Flow."
+    ]
+  },
+  "surfaces_and_micro_themes": {
+    "dashboard_cards": "Flat solid background (#FFFFFF), 1px subtle border (#E2E8F0), no shadow by default. Hover: slight lift (-translate-y-1) and shadow-lg.",
+    "headers": "Crystal Glassmorphism. bg-white/80 backdrop-blur-xl border-b border-slate-200. Ensure z-50.",
+    "flowbuilder_canvas": "Technical Grid pattern background. bg-slate-50 with a dotted or grid SVG pattern overlay to denote a technical workspace.",
+    "modals": "Solid surface with dark backdrop (bg-slate-900/40 backdrop-blur-sm)."
+  },
+  "components_strategy": {
+    "libraries": [
+      "Shadcn/UI primitives for inputs, dialogs, selects, tabs, dropdowns.",
+      "React Flow (@xyflow/react) for Flowbuilder.",
+      "Recharts or Shadcn Charts for Dashboard Analytics.",
+      "Framer Motion for micro-interactions.",
+      "Lucide-react for standard icons."
+    ],
+    "overrides": [
+      "Strip Shadcn's default 'Vercel-look'. Flatten shadows and use sharp borders (rounded-md or rounded-lg max).",
+      "Tables must have sticky headers and hover states on rows (hover:bg-slate-50).",
+      "Kanban cards should be minimal, prioritizing titles and tags, with a subtle border."
+    ]
+  },
+  "media_and_assets": {
+    "rules": [
+      "Never use placeholder image services like via.placeholder.com.",
+      "Images must be responsive and follow the max-h-[80vh] rule on mobile."
+    ],
+    "urls": {
+      "scheduling_hero_banner": {
+        "url": "https://images.unsplash.com/photo-1633681926022-84c23e8cb2d6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1Mjh8MHwxfHNlYXJjaHwyfHxzYWxvbiUyMGludGVyaW9yfGVufDB8fHx8MTc3NjIxOTc5N3ww&ixlib=rb-4.1.0&q=85",
+        "description": "A chic salon interior, used for the public scheduling page hero section."
+      },
+      "scheduling_alternative_banner": {
+        "url": "https://images.pexels.com/photos/853427/pexels-photo-853427.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Spacious stylish hair salon interior, good for salon client customization."
+      },
+      "ai_agent_avatar": {
+        "url": "https://images.unsplash.com/photo-1754325973411-3955f1322bcb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwxfHxyb2JvdCUyMG1hc2NvdHxlbnwwfHx8fDE3NzYyMTk3OTh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Robot performer image, to be cropped as avatar for AI agent."
+      }
+    }
+  },
+  "motion_and_interactions": {
+    "rules": [
+      "All interactive elements must have clear hover states (e.g., hover:bg-slate-100 hover:text-primary).",
+      "Focus states are mandatory for accessibility: focus:ring-2 focus:ring-primary focus:outline-none.",
+      "Use framer-motion for smooth page transitions and stagger effects on Kanban cards."
+    ]
+  },
+  "development_instructions": {
+    "tech_stack": "React.js (JavaScript, not TSX), Tailwind CSS, Shadcn UI, React Flow",
+    "testing": "All interactive elements (buttons, inputs, kanban cards, navigation links) MUST include data-testid attributes in kebab-case (e.g., data-testid=\"kanban-card-123\").",
+    "notes": "Ensure CSS variables are utilized in tailwind.config.js for theming colors. This allows the Super Admin to configure specific colors per client organization."
+  }
+}
