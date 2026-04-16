@@ -8,13 +8,20 @@ from typing import List
 
 router = APIRouter(prefix="/public", tags=["public"])
 
+async def find_booking_page(db, slug, projection=None):
+    """Find booking page by slug or custom_domain."""
+    page = await db.booking_pages.find_one({"slug": slug, "is_active": True}, projection)
+    if not page:
+        page = await db.booking_pages.find_one({"custom_domain": slug, "is_active": True}, projection)
+    return page
+
 @router.get("/booking/{slug}/client-lookup/{phone}")
 async def public_client_lookup(
     slug: str,
     phone: str,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    page = await db.booking_pages.find_one({"slug": slug, "is_active": True})
+    page = await find_booking_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail="Pagina nao encontrada")
     
@@ -48,15 +55,14 @@ async def get_booking_page(
     slug: str,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    # Get booking page
-    page = await db.booking_pages.find_one({"slug": slug, "is_active": True}, {"_id": 0})
+    # Try slug first, then custom_domain
+    page = await find_booking_page(db, slug, {"_id": 0})
     if not page:
-        raise HTTPException(status_code=404, detail="Página de agendamento não encontrada")
+        raise HTTPException(status_code=404, detail="Pagina de agendamento nao encontrada")
     
-    # Get company info
     company = await db.companies.find_one({"id": page["company_id"]}, {"_id": 0})
     if not company:
-        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
     
     return {
         "page": page,
@@ -75,9 +81,9 @@ async def get_public_services(
     type: str = None
 ):
     # Get booking page to find company
-    page = await db.booking_pages.find_one({"slug": slug, "is_active": True})
+    page = await find_booking_page(db, slug)
     if not page:
-        raise HTTPException(status_code=404, detail="Página de agendamento não encontrada")
+        raise HTTPException(status_code=404, detail="Pagina de agendamento nao encontrada")
     
     query = {"company_id": page["company_id"], "is_active": True}
     if type:
@@ -103,9 +109,9 @@ async def get_public_professionals(
     service_id: str = None
 ):
     # Get booking page to find company
-    page = await db.booking_pages.find_one({"slug": slug, "is_active": True})
+    page = await find_booking_page(db, slug)
     if not page:
-        raise HTTPException(status_code=404, detail="Página de agendamento não encontrada")
+        raise HTTPException(status_code=404, detail="Pagina de agendamento nao encontrada")
     
     query = {"company_id": page["company_id"], "is_active": True}
     
@@ -120,7 +126,7 @@ async def get_availability(
     db: AsyncIOMotorDatabase = Depends(get_database),
     service_id: str = None
 ):
-    page = await db.booking_pages.find_one({"slug": slug, "is_active": True})
+    page = await find_booking_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail="Pagina nao encontrada")
 
@@ -199,9 +205,9 @@ async def create_public_booking(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     # Get booking page to find company
-    page = await db.booking_pages.find_one({"slug": slug, "is_active": True})
+    page = await find_booking_page(db, slug)
     if not page:
-        raise HTTPException(status_code=404, detail="Página de agendamento não encontrada")
+        raise HTTPException(status_code=404, detail="Pagina de agendamento nao encontrada")
     
     # Check if service exists
     service = await db.services.find_one({
@@ -268,7 +274,7 @@ async def get_indoor_display(
     slug: str,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    page = await db.booking_pages.find_one({"slug": slug, "is_active": True})
+    page = await find_booking_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail="Pagina nao encontrada")
 

@@ -13,7 +13,7 @@ import {
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
 import WhatsAppConnectionsPage from '../CRM/WhatsAppConnectionsPage';
-import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull } from '../Scheduling/SchedulingPages';
+import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
@@ -201,7 +201,7 @@ const PageContent = ({ page, hasFeature }) => {
     case 'flowbuilder': return <FlowBuilderPage />;
     case 'agente_ia': return <AIAgentPage />;
     case 'conexoes': return <WhatsAppConnectionsPage />;
-    case 'calendario': return <CalendarPage />;
+    case 'calendario': return <CalendarPageFull />;
     case 'agendamentos': return <AppointmentsPage />;
     case 'clientes': return <ClientsPage />;
     case 'servicos_produtos': return <ServicesPageFull />;
@@ -952,15 +952,23 @@ const CategoriesPage = () => {
   );
 };
 
-/* ========== MY SITE (BOOKING PAGE) WITH UPLOAD ========== */
+/* ========== MY SITE (BOOKING PAGE) WITH UPLOAD + SUBDOMAIN ========== */
 const MySitePage = () => {
   const [page, setPage] = useState(null);
-  const [uploading, setUploading] = useState(null); // 'logo' | 'banner' | null
+  const [uploading, setUploading] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [slugEdit, setSlugEdit] = useState('');
+  const [domainEdit, setDomainEdit] = useState('');
   const logoRef = useRef(null);
   const bannerRef = useRef(null);
 
-  useEffect(() => { schedulingAPI.getBookingPage().then(r => setPage(r.data)).catch(() => {}); }, []);
+  useEffect(() => {
+    schedulingAPI.getBookingPage().then(r => {
+      setPage(r.data);
+      setSlugEdit(r.data?.slug || '');
+      setDomainEdit(r.data?.custom_domain || '');
+    }).catch(() => {});
+  }, []);
 
   const handleUpload = async (file, type) => {
     if (!file) return;
@@ -994,6 +1002,37 @@ const MySitePage = () => {
     }
   };
 
+  const handleSlugSave = async () => {
+    if (!slugEdit.trim()) return;
+    setSaving(true);
+    try {
+      await schedulingAPI.updateBookingPage({ slug: slugEdit.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') });
+      const updated = await schedulingAPI.getBookingPage();
+      setPage(updated.data);
+      setSlugEdit(updated.data.slug);
+      toast.success('Slug atualizado!');
+    } catch (e) {
+      toast.error('Erro ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDomainSave = async () => {
+    setSaving(true);
+    try {
+      await schedulingAPI.updateBookingPage({ custom_domain: domainEdit.trim() || null });
+      const updated = await schedulingAPI.getBookingPage();
+      setPage(updated.data);
+      setDomainEdit(updated.data.custom_domain || '');
+      toast.success('Dominio atualizado!');
+    } catch (e) {
+      toast.error('Erro ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const API_BASE = process.env.REACT_APP_BACKEND_URL;
 
   return (
@@ -1011,6 +1050,38 @@ const MySitePage = () => {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Subdomain / Custom Domain */}
+      <div className="card mb-6">
+        <h3 className="font-semibold text-slate-900 mb-4">Endereco da Pagina</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <p className="text-sm font-medium text-slate-700 mb-2">Slug (caminho na URL)</p>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 flex items-center border border-slate-200 rounded-lg overflow-hidden">
+                <span className="px-3 py-2 bg-slate-50 text-xs text-slate-500 border-r border-slate-200 whitespace-nowrap">/booking/</span>
+                <input value={slugEdit} onChange={e => setSlugEdit(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} className="flex-1 px-3 py-2 text-sm focus:outline-none" data-testid="slug-input" />
+              </div>
+              <button onClick={handleSlugSave} disabled={saving || slugEdit === page?.slug} className="btn-primary text-sm" data-testid="save-slug-btn">Salvar</button>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Use letras minusculas, numeros e hifens</p>
+          </div>
+          <div>
+            <p className="text-sm font-medium text-slate-700 mb-2">Dominio Personalizado</p>
+            <div className="flex items-center gap-2">
+              <input value={domainEdit} onChange={e => setDomainEdit(e.target.value)} placeholder="meusite.com.br" className="input-field flex-1" data-testid="domain-input" />
+              <button onClick={handleDomainSave} disabled={saving} className="btn-primary text-sm" data-testid="save-domain-btn">Salvar</button>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Configure um CNAME apontando para esta pagina. Apos configurar no seu provedor DNS, salve aqui.</p>
+            {page?.custom_domain && (
+              <div className="mt-2 p-2 bg-emerald-50 rounded border border-emerald-200">
+                <p className="text-xs text-emerald-700">Dominio configurado: <strong>{page.custom_domain}</strong></p>
+                <p className="text-xs text-emerald-600">Acesse via: /booking/{page.custom_domain}</p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Identity Section */}
@@ -1255,9 +1326,29 @@ const NotificacoesPage = () => {
 /* ========== CONFIG ========== */
 const ConfigPage = () => {
   const { user } = useAuth();
+  const [businessHours, setBusinessHours] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const DAY_LABELS = { seg: 'Segunda', ter: 'Terca', qua: 'Quarta', qui: 'Quinta', sex: 'Sexta', sab: 'Sabado', dom: 'Domingo' };
+
+  useEffect(() => { schedulingAPI.getBusinessHours().then(r => setBusinessHours(r.data)).catch(() => {}); }, []);
+
+  const updateDay = (day, field, value) => {
+    setBusinessHours(h => ({ ...h, [day]: { ...h[day], [field]: value } }));
+  };
+
+  const saveHours = async () => {
+    setSaving(true);
+    try {
+      await schedulingAPI.updateBusinessHours(businessHours);
+      toast.success('Horarios do estabelecimento salvos!');
+    } catch (e) { toast.error('Erro ao salvar'); }
+    finally { setSaving(false); }
+  };
+
   return (
     <div className="animate-fade-in" data-testid="config-page">
-      <div className="card max-w-2xl">
+      <div className="card max-w-2xl mb-6">
         <h3 className="font-semibold text-slate-900 mb-4">Configuracoes da Empresa</h3>
         <div className="space-y-3">
           <div><label className="text-xs font-bold uppercase text-slate-400">Nome</label><p className="text-sm">{user?.company?.name}</p></div>
@@ -1266,6 +1357,45 @@ const ConfigPage = () => {
           <div><label className="text-xs font-bold uppercase text-slate-400">Status</label><p className="text-sm capitalize">{user?.company?.status}</p></div>
         </div>
       </div>
+
+      {businessHours && (
+        <div className="card max-w-2xl">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-slate-900">Horario de Funcionamento</h3>
+              <p className="text-xs text-slate-500">Define os horarios do estabelecimento. Profissionais podem ter horarios proprios.</p>
+            </div>
+            <button onClick={saveHours} disabled={saving} className="btn-primary text-sm" data-testid="save-biz-hours-btn">
+              {saving ? 'Salvando...' : 'Salvar'}
+            </button>
+          </div>
+          <div className="space-y-2">
+            {Object.entries(DAY_LABELS).map(([key, label]) => (
+              <div key={key} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg" data-testid={`biz-hours-${key}`}>
+                <label className="flex items-center gap-2 w-28 cursor-pointer">
+                  <input type="checkbox" checked={businessHours[key]?.active ?? false}
+                    onChange={e => updateDay(key, 'active', e.target.checked)}
+                    className="w-4 h-4 text-primary rounded" />
+                  <span className="text-sm font-medium text-slate-700">{label}</span>
+                </label>
+                {businessHours[key]?.active ? (
+                  <div className="flex items-center gap-2">
+                    <input type="time" value={businessHours[key]?.start || '08:00'}
+                      onChange={e => updateDay(key, 'start', e.target.value)}
+                      className="input-field !py-1.5 text-sm" />
+                    <span className="text-xs text-slate-400">ate</span>
+                    <input type="time" value={businessHours[key]?.end || '18:00'}
+                      onChange={e => updateDay(key, 'end', e.target.value)}
+                      className="input-field !py-1.5 text-sm" />
+                  </div>
+                ) : (
+                  <span className="text-xs text-slate-400">Fechado</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

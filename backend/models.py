@@ -191,6 +191,7 @@ class ProfessionalUpdate(BaseModel):
     working_hours: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
     image_url: Optional[str] = None
+    commission_percent: Optional[float] = None
 
 # Category Models
 class CategoryCreate(BaseModel):
@@ -205,6 +206,8 @@ class BookingPageUpdate(BaseModel):
     secondary_color: Optional[str] = None
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
+    custom_domain: Optional[str] = None
+    slug: Optional[str] = None
 
 # Quick Response Models
 class QuickResponseCreate(BaseModel):

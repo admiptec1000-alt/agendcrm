@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { publicAPI } from '../../services/api';
 import { toast } from 'sonner';
-import { Calendar, Clock, User, Phone, Mail, CheckCircle2, Star, ArrowLeft, Sparkles } from 'lucide-react';
+import { Calendar, Clock, User, Phone, Mail, CheckCircle2, Star, ArrowLeft, Sparkles, Scissors } from 'lucide-react';
 
 const PublicBooking = () => {
   const { slug } = useParams();
@@ -171,21 +171,28 @@ const PublicBooking = () => {
                     <button key={svc.id} type="button" onClick={() => { setFormData({...formData, service_id: svc.id}); setSelectedService(svc); setStep(2); }}
                       data-testid={`svc-${svc.id}`}
                       className="w-full p-4 border-2 border-slate-200 rounded-xl hover:border-primary/50 hover:bg-primary/5 transition-all text-left group">
-                      <div className="flex items-center justify-between">
-                        <div>
+                      <div className="flex items-center gap-4">
+                        {svc.image_url ? (
+                          <img src={`${API_BASE}${svc.image_url}`} alt={svc.name} className="w-16 h-16 rounded-lg object-cover flex-shrink-0" />
+                        ) : (
+                          <div className="w-16 h-16 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0">
+                            <Scissors className="w-6 h-6 text-slate-400" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
                           <p className="font-semibold text-slate-900 group-hover:text-primary transition-colors">{svc.name}</p>
-                          {svc.description && <p className="text-xs text-slate-500 mt-0.5">{svc.description}</p>}
+                          {svc.description && <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{svc.description}</p>}
+                          <p className="text-xs text-slate-400 mt-1">{svc.duration} min</p>
                         </div>
-                        <div className="text-right">
+                        <div className="text-right flex-shrink-0">
                           {isIncluded ? (
                             <div>
                               <p className="text-xs line-through text-slate-400">R$ {svc.price.toFixed(2)}</p>
-                              <p className="font-bold text-emerald-600">Incluso no Plano</p>
+                              <p className="font-bold text-emerald-600 text-sm">Incluso no Plano</p>
                             </div>
                           ) : (
-                            <p className="font-bold" style={{ color: primaryColor }}>R$ {price.toFixed(2)}</p>
+                            <p className="font-bold text-lg" style={{ color: primaryColor }}>R$ {price.toFixed(2)}</p>
                           )}
-                          <p className="text-xs text-slate-400 mt-0.5">{svc.duration} min</p>
                         </div>
                       </div>
                     </button>
@@ -206,9 +213,13 @@ const PublicBooking = () => {
                   <button key={prof.id} type="button" onClick={() => { setFormData({...formData, professional_id: prof.id}); setStep(3); }}
                     data-testid={`prof-${prof.id}`}
                     className="w-full p-4 border-2 border-slate-200 rounded-xl hover:border-primary/50 transition-all text-left flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold">
-                      {prof.name?.substring(0, 2).toUpperCase()}
-                    </div>
+                    {prof.image_url ? (
+                      <img src={`${API_BASE}${prof.image_url}`} alt={prof.name} className="w-14 h-14 rounded-full object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-14 h-14 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-lg flex-shrink-0">
+                        {prof.name?.substring(0, 2).toUpperCase()}
+                      </div>
+                    )}
                     <div>
                       <p className="font-semibold text-slate-900">{prof.name}</p>
                       <div className="flex items-center gap-1 mt-0.5">
