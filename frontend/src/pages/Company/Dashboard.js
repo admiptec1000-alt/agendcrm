@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
+import WhatsAppConnectionsPage from '../CRM/WhatsAppConnectionsPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull } from '../Scheduling/SchedulingPages';
 
 const ICON_MAP = {
@@ -189,7 +190,7 @@ const PageContent = ({ page, hasFeature }) => {
     case 'tags': return <TagsPage />;
     case 'flowbuilder': return <FlowBuilderPage />;
     case 'agente_ia': return <AIAgentPage />;
-    case 'conexoes': return <WhatsAppPage />;
+    case 'conexoes': return <WhatsAppConnectionsPage />;
     case 'calendario': return <CalendarPage />;
     case 'agendamentos': return <AppointmentsPage />;
     case 'clientes': return <ClientsPage />;
@@ -361,7 +362,155 @@ const TicketsPage = () => {
 
 /* ========== CONTACTS / CLIENTS ========== */
 const ContactsPage = () => <CrudListPage title="Contatos" fetchFn={() => crmAPI.getTickets()} columns={[{key:'customer_name',label:'Nome'},{key:'customer_phone',label:'Telefone'},{key:'customer_email',label:'Email'}]} testId="contacts-page" />;
-const ClientsPage = () => <CrudListPage title="Clientes" fetchFn={() => schedulingAPI.getAppointments()} columns={[{key:'customer_name',label:'Nome'},{key:'customer_phone',label:'Telefone'},{key:'service_name',label:'Servico'}]} testId="clients-page" />;
+
+/* ========== CLIENTS PAGE (ENHANCED) ========== */
+const ClientsPage = () => {
+  const [clients, setClients] = useState([]);
+  const [search, setSearch] = useState('');
+  const [showAdd, setShowAdd] = useState(false);
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [clientHistory, setClientHistory] = useState([]);
+
+  useEffect(() => { load(); }, [search]);
+  const load = async () => {
+    const res = await schedulingAPI.getClients({ search: search || undefined });
+    setClients(res.data);
+  };
+
+  const loadHistory = async (phone) => {
+    const res = await schedulingAPI.getAppointments({ search: phone });
+    // filter by phone
+    const filtered = res.data.filter(a => a.customer_phone === phone);
+    setClientHistory(filtered);
+  };
+
+  const handleSelectClient = (client) => {
+    setSelectedClient(client);
+    loadHistory(client.phone);
+  };
+
+  const handleAddClient = async (form) => {
+    try {
+      await schedulingAPI.createClient(form);
+      toast.success('Cliente criado!');
+      setShowAdd(false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro');
+    }
+  };
+
+  return (
+    <div className="animate-fade-in" data-testid="clients-page">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Clientes</h2>
+          <p className="text-sm text-slate-600">{clients.length} clientes cadastrados</p>
+        </div>
+        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2" data-testid="add-client-btn">
+          <Plus className="w-4 h-4" /> Novo Cliente
+        </button>
+      </div>
+
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nome ou telefone..." className="input-field pl-10" data-testid="client-search" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Client List */}
+        <div className="lg:col-span-2">
+          <div className="card">
+            <table className="w-full">
+              <thead><tr className="border-b border-slate-200">
+                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Cliente</th>
+                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Telefone</th>
+                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Assinatura</th>
+                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Agend.</th>
+              </tr></thead>
+              <tbody>
+                {clients.map(c => (
+                  <tr key={c.id} onClick={() => handleSelectClient(c)}
+                    className={`border-b border-slate-100 hover:bg-slate-50 cursor-pointer text-sm transition-colors ${selectedClient?.id === c.id ? 'bg-primary/5' : ''}`}
+                    data-testid={`client-row-${c.id}`}>
+                    <td className="py-2 px-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold">{c.name?.substring(0,2).toUpperCase()}</div>
+                        <div><p className="font-medium">{c.name}</p><p className="text-xs text-slate-400">{c.email || ''}</p></div>
+                      </div>
+                    </td>
+                    <td className="py-2 px-3 text-slate-600">{c.phone}</td>
+                    <td className="py-2 px-3">
+                      {c.active_subscription ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Plano Ativo</span>
+                      ) : (
+                        <span className="text-xs text-slate-400">-</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 font-medium">{c.total_appointments || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {clients.length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhum cliente</p>}
+          </div>
+        </div>
+
+        {/* Client Detail */}
+        <div>
+          {selectedClient ? (
+            <div className="card" data-testid="client-detail">
+              <div className="text-center mb-4">
+                <div className="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center text-lg font-bold mx-auto mb-2">
+                  {selectedClient.name?.substring(0,2).toUpperCase()}
+                </div>
+                <p className="font-bold text-slate-900">{selectedClient.name}</p>
+                <p className="text-sm text-slate-500">{selectedClient.phone}</p>
+              </div>
+              {selectedClient.active_subscription && (
+                <div className="p-3 bg-emerald-50 rounded-lg mb-4 text-center">
+                  <p className="text-xs font-bold text-emerald-700">Assinante</p>
+                  <p className="text-sm text-emerald-600">{selectedClient.active_subscription.credits_remaining} creditos restantes</p>
+                </div>
+              )}
+              <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Historico</h4>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {clientHistory.map(a => (
+                  <div key={a.id} className="p-2 bg-slate-50 rounded text-xs">
+                    <div className="flex justify-between"><span className="font-medium">{a.service_name}</span><span className="text-slate-400">{a.date}</span></div>
+                    <div className="flex justify-between mt-1"><span className="text-slate-500">{a.professional_name}</span><span className="font-medium">R$ {(a.price || 0).toFixed(2)}</span></div>
+                  </div>
+                ))}
+                {clientHistory.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Sem historico</p>}
+              </div>
+            </div>
+          ) : (
+            <div className="card text-center py-8"><p className="text-sm text-slate-500">Selecione um cliente</p></div>
+          )}
+        </div>
+      </div>
+
+      {showAdd && (
+        <Modal title="Novo Cliente" onClose={() => setShowAdd(false)}>
+          <ClientForm onSave={handleAddClient} />
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+const ClientForm = ({ onSave }) => {
+  const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '' });
+  return (
+    <div className="space-y-3">
+      <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Nome completo" className="input-field" data-testid="client-name-input" />
+      <input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} placeholder="Telefone" className="input-field" data-testid="client-phone-input" />
+      <input value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="Email (opcional)" className="input-field" type="email" />
+      <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} placeholder="Observacoes" className="input-field" rows={2} />
+      <div className="flex justify-end gap-2"><button onClick={() => form.name && form.phone && onSave(form)} className="btn-primary text-sm" data-testid="save-client-btn">Salvar</button></div>
+    </div>
+  );
+};
 
 /* ========== QUICK RESPONSES ========== */
 const QuickResponsesPage = () => {

@@ -20,6 +20,7 @@ from routes.crm_routes import router as crm_router
 from routes.scheduling_routes import router as scheduling_router
 from routes.upload_routes import router as upload_router
 from routes.public_routes import router as public_router
+from routes.whatsapp_routes import router as whatsapp_router
 
 # Import auth functions
 from auth import get_password_hash
@@ -45,6 +46,7 @@ api_router.include_router(crm_router)
 api_router.include_router(scheduling_router)
 api_router.include_router(upload_router)
 api_router.include_router(public_router)
+api_router.include_router(whatsapp_router)
 
 # Include the API router in the main app
 app.include_router(api_router)

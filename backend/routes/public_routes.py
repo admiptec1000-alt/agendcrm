@@ -8,6 +8,41 @@ from typing import List
 
 router = APIRouter(prefix="/public", tags=["public"])
 
+@router.get("/booking/{slug}/client-lookup/{phone}")
+async def public_client_lookup(
+    slug: str,
+    phone: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    page = await db.booking_pages.find_one({"slug": slug, "is_active": True})
+    if not page:
+        raise HTTPException(status_code=404, detail="Pagina nao encontrada")
+    
+    client = await db.clients.find_one({"company_id": page["company_id"], "phone": phone}, {"_id": 0})
+    if not client:
+        return {"found": False}
+    
+    # Check subscription
+    sub = await db.client_subscriptions.find_one({
+        "company_id": page["company_id"],
+        "client_phone": phone,
+        "status": "active"
+    }, {"_id": 0})
+    
+    included_service_ids = []
+    if sub:
+        plan = await db.subscription_plans.find_one({"id": sub["plan_id"]}, {"_id": 0})
+        if plan:
+            sub["plan"] = plan
+            included_service_ids = plan.get("included_service_ids", [])
+    
+    return {
+        "found": True,
+        "client": client,
+        "subscription": sub,
+        "included_service_ids": included_service_ids
+    }
+
 @router.get("/booking/{slug}")
 async def get_booking_page(
     slug: str,

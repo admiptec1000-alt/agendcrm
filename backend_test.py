@@ -8,6 +8,7 @@ class AgentCRMAPITester:
         self.base_url = base_url
         self.super_admin_token = None
         self.company_admin_token = None
+        self.crm_admin_token = None
         self.tests_run = 0
         self.tests_passed = 0
         self.test_results = []
@@ -231,6 +232,166 @@ class AgentCRMAPITester:
             return True
         return False
 
+    def test_crm_admin_login(self):
+        """Test CRM company admin login"""
+        success, response = self.run_test(
+            "CRM Admin Login",
+            "POST",
+            "auth/login",
+            200,
+            data={"email": "joao@crm.com", "password": "senha123"}
+        )
+        if success and 'access_token' in response:
+            self.crm_admin_token = response['access_token']
+            self.log_test("CRM Admin Token Check", True)
+            return True
+        return False
+
+    def test_whatsapp_connections(self):
+        """Test WhatsApp connections API"""
+        if not hasattr(self, 'crm_admin_token') or not self.crm_admin_token:
+            self.log_test("WhatsApp Connections", False, "No CRM admin token")
+            return False
+
+        headers = {"Authorization": f"Bearer {self.crm_admin_token}"}
+        
+        # Test GET connections
+        success, response = self.run_test(
+            "GET WhatsApp Connections",
+            "GET",
+            "whatsapp/connections",
+            200,
+            headers=headers
+        )
+        
+        if not success:
+            return False
+        
+        # Test GET connection stats
+        success, stats = self.run_test(
+            "GET WhatsApp Connection Stats",
+            "GET",
+            "whatsapp/connections/stats",
+            200,
+            headers=headers
+        )
+        
+        if success and isinstance(stats, dict):
+            required_stats = ['total', 'connected', 'disconnected']
+            if all(key in stats for key in required_stats):
+                self.log_test("WhatsApp Stats Fields Check", True)
+            else:
+                self.log_test("WhatsApp Stats Fields Check", False, f"Missing stats fields")
+        
+        # Test POST create connection
+        connection_data = {"name": f"Test Connection {datetime.now().strftime('%H%M%S')}"}
+        success, conn_response = self.run_test(
+            "POST Create WhatsApp Connection",
+            "POST",
+            "whatsapp/connections",
+            200,
+            data=connection_data,
+            headers=headers
+        )
+        
+        if success and 'id' in conn_response:
+            conn_id = conn_response['id']
+            self.log_test("Connection Creation Response Check", True, f"Connection ID: {conn_id}")
+            
+            # Test POST connect
+            success, connect_response = self.run_test(
+                "POST Connect WhatsApp",
+                "POST",
+                f"whatsapp/connections/{conn_id}/connect",
+                200,
+                headers=headers
+            )
+            
+            if success and connect_response.get('status') == 'connecting':
+                self.log_test("WhatsApp Connect Status Check", True)
+                
+                # Test simulate connected
+                success, sim_response = self.run_test(
+                    "POST Simulate Connected",
+                    "POST",
+                    f"whatsapp/connections/{conn_id}/simulate-connected",
+                    200,
+                    headers=headers
+                )
+                
+                if success and sim_response.get('status') == 'connected':
+                    self.log_test("WhatsApp Simulate Connected Check", True)
+                
+            # Test DELETE connection
+            success, delete_response = self.run_test(
+                "DELETE WhatsApp Connection",
+                "DELETE",
+                f"whatsapp/connections/{conn_id}",
+                200,
+                headers=headers
+            )
+        
+        return True
+
+    def test_public_booking_apis(self):
+        """Test public booking APIs"""
+        slug = "salaoteste"
+        
+        # Test GET booking page
+        success, page_response = self.run_test(
+            "GET Public Booking Page",
+            "GET",
+            f"public/booking/{slug}",
+            200
+        )
+        
+        if not success:
+            return False
+        
+        # Test GET services
+        success, services_response = self.run_test(
+            "GET Public Services",
+            "GET",
+            f"public/booking/{slug}/services",
+            200
+        )
+        
+        if success and 'services' in services_response:
+            self.log_test("Public Services Response Check", True)
+        
+        # Test GET professionals
+        success, profs_response = self.run_test(
+            "GET Public Professionals",
+            "GET",
+            f"public/booking/{slug}/professionals",
+            200
+        )
+        
+        if success and isinstance(profs_response, list):
+            self.log_test("Public Professionals Response Check", True)
+        
+        # Test client lookup
+        phone = "62912345678"
+        success, lookup_response = self.run_test(
+            "GET Public Client Lookup",
+            "GET",
+            f"public/booking/{slug}/client-lookup/{phone}",
+            200
+        )
+        
+        if success:
+            if lookup_response.get('found'):
+                client = lookup_response.get('client', {})
+                subscription = lookup_response.get('subscription')
+                if client.get('name') and subscription:
+                    self.log_test("Client Lookup with Subscription Check", True, f"Found: {client.get('name')}")
+                else:
+                    self.log_test("Client Lookup Data Check", False, "Missing client or subscription data")
+            else:
+                self.log_test("Client Lookup Not Found", True, "Client not found (expected for some cases)")
+        
+        return True
+
     def test_all_features_endpoint(self):
         """Test getting all available features"""
         if not self.super_admin_token:
@@ -273,6 +434,9 @@ class AgentCRMAPITester:
             ("All Features Endpoint", self.test_all_features_endpoint),
             ("Company Creation", self.test_create_company),
             ("Company Admin Auth", self.test_company_admin_login),
+            ("CRM Admin Auth", self.test_crm_admin_login),
+            ("WhatsApp Connections API", self.test_whatsapp_connections),
+            ("Public Booking APIs", self.test_public_booking_apis),
         ]
 
         for test_name, test_func in tests:

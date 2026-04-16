@@ -121,7 +121,20 @@ export const publicAPI = {
   getProfessionals: (slug, params) => axios.get(`${API_URL}/public/booking/${slug}/professionals`, { params }),
   getAvailability: (slug, params) => axios.get(`${API_URL}/public/booking/${slug}/availability`, { params }),
   createBooking: (slug, data) => axios.post(`${API_URL}/public/booking/${slug}/book`, data),
-  getBusinessTypes: () => axios.get(`${API_URL}/auth/business-types`)
+  getBusinessTypes: () => axios.get(`${API_URL}/auth/business-types`),
+  lookupClient: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/client-lookup/${phone}`)
+};
+
+// WhatsApp API
+export const whatsappAPI = {
+  getConnections: () => api.get('/whatsapp/connections'),
+  getConnectionStats: () => api.get('/whatsapp/connections/stats'),
+  createConnection: (data) => api.post('/whatsapp/connections', data),
+  updateConnection: (id, data) => api.put(`/whatsapp/connections/${id}`, data),
+  connectWhatsApp: (id) => api.post(`/whatsapp/connections/${id}/connect`),
+  disconnectWhatsApp: (id) => api.post(`/whatsapp/connections/${id}/disconnect`),
+  simulateConnected: (id) => api.post(`/whatsapp/connections/${id}/simulate-connected`),
+  deleteConnection: (id) => api.delete(`/whatsapp/connections/${id}`)
 };
 
 // Upload API
