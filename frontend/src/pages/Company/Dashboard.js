@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
+import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull } from '../Scheduling/SchedulingPages';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
@@ -192,8 +193,9 @@ const PageContent = ({ page, hasFeature }) => {
     case 'calendario': return <CalendarPage />;
     case 'agendamentos': return <AppointmentsPage />;
     case 'clientes': return <ClientsPage />;
-    case 'servicos_produtos': return <ServicesPage />;
-    case 'profissionais': return <ProfessionalsPage />;
+    case 'servicos_produtos': return <ServicesPageFull />;
+    case 'profissionais': return <ProfessionalsPageFull />;
+    case 'assinaturas': return <SubscriptionsPageFull />;
     case 'categorias': return <CategoriesPage />;
     case 'meu_site': return <MySitePage />;
     case 'financeiro': return <FinanceiroPage />;
