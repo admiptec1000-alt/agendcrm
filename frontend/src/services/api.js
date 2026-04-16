@@ -137,6 +137,20 @@ export const whatsappAPI = {
   deleteConnection: (id) => api.delete(`/whatsapp/connections/${id}`)
 };
 
+// Reports API
+export const reportsAPI = {
+  getCommissions: (params) => api.get('/reports/commissions', { params }),
+  getFinancial: (params) => api.get('/reports/financial', { params }),
+};
+
+// Notifications API
+export const notificationsAPI = {
+  getSettings: () => api.get('/notifications/settings'),
+  updateSettings: (data) => api.put('/notifications/settings', data),
+  getHistory: () => api.get('/notifications/history'),
+  sendTest: () => api.post('/notifications/send-test'),
+};
+
 // Upload API
 export const uploadAPI = {
   uploadFile: (file) => {

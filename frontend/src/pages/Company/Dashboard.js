@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { crmAPI, schedulingAPI, uploadAPI } from '../../services/api';
+import { crmAPI, schedulingAPI, uploadAPI, reportsAPI, notificationsAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
   LogOut, LayoutDashboard, Headphones, Zap, Columns3, Users, Tag,
@@ -200,6 +200,9 @@ const PageContent = ({ page, hasFeature }) => {
     case 'categorias': return <CategoriesPage />;
     case 'meu_site': return <MySitePage />;
     case 'financeiro': return <FinanceiroPage />;
+    case 'comissoes': return <ComissoesPage />;
+    case 'notificacoes': return <NotificacoesPage />;
+    case 'relatorios': return <FinanceiroPage />;
     case 'configuracoes': return <ConfigPage />;
     default: return <PlaceholderPage title={FEATURE_META[page]?.label || page} />;
   }
@@ -1063,17 +1066,180 @@ const MySitePage = () => {
   );
 };
 
-/* ========== FINANCEIRO ========== */
-const FinanceiroPage = () => (
-  <div className="animate-fade-in" data-testid="financeiro-page">
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-      <StatCard label="Receita Total" value="R$ 0,00" icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
-      <StatCard label="A Receber" value="R$ 0,00" icon={<Clock className="w-5 h-5" />} color="bg-amber-500" />
-      <StatCard label="Comissoes" value="R$ 0,00" icon={<PieChart className="w-5 h-5" />} color="bg-violet-500" />
+/* ========== FINANCEIRO (REAL) ========== */
+const FinanceiroPage = () => {
+  const [data, setData] = useState(null);
+  const [period, setPeriod] = useState('');
+  useEffect(() => { reportsAPI.getFinancial(period ? { start_date: period } : {}).then(r => setData(r.data)).catch(() => {}); }, [period]);
+  return (
+    <div className="animate-fade-in" data-testid="financeiro-page">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-6">
+        <StatCard label="Receita Total" value={`R$ ${(data?.total_revenue || 0).toFixed(2)}`} icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
+        <StatCard label="Concluidos" value={data?.completed_count || 0} icon={<CheckCircle2 className="w-5 h-5" />} color="bg-blue-500" />
+        <StatCard label="Pendentes" value={data?.pending_count || 0} icon={<Clock className="w-5 h-5" />} color="bg-amber-500" />
+        <StatCard label="Cancelados" value={data?.cancelled_count || 0} icon={<X className="w-5 h-5" />} color="bg-red-500" />
+      </div>
+      <div className="card">
+        <h3 className="font-semibold text-slate-900 mb-4">Resumo Financeiro</h3>
+        <div className="space-y-3">
+          <div className="flex justify-between p-3 bg-emerald-50 rounded-lg"><span className="text-sm text-slate-700">Receita Concluida</span><span className="font-bold text-emerald-700">R$ {(data?.completed_revenue || 0).toFixed(2)}</span></div>
+          <div className="flex justify-between p-3 bg-amber-50 rounded-lg"><span className="text-sm text-slate-700">Receita Pendente</span><span className="font-bold text-amber-700">R$ {(data?.pending_revenue || 0).toFixed(2)}</span></div>
+          <div className="flex justify-between p-3 bg-slate-50 rounded-lg"><span className="text-sm font-medium text-slate-900">Total</span><span className="font-bold text-lg text-slate-900">R$ {(data?.total_revenue || 0).toFixed(2)}</span></div>
+        </div>
+      </div>
     </div>
-    <div className="card"><p className="text-sm text-slate-500 text-center py-8">Nenhuma transacao registrada</p></div>
-  </div>
-);
+  );
+};
+
+/* ========== COMISSOES (REAL) ========== */
+const ComissoesPage = () => {
+  const [data, setData] = useState(null);
+  useEffect(() => { reportsAPI.getCommissions().then(r => setData(r.data)).catch(() => {}); }, []);
+  return (
+    <div className="animate-fade-in" data-testid="comissoes-page">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Comissoes</h2>
+          <p className="text-sm text-slate-600">Relatorio de comissoes por profissional</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Faturamento Total" value={`R$ ${(data?.summary?.total_revenue || 0).toFixed(2)}`} icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
+        <StatCard label="Total Comissoes" value={`R$ ${(data?.summary?.total_commission || 0).toFixed(2)}`} icon={<PieChart className="w-5 h-5" />} color="bg-violet-500" />
+        <StatCard label="Atendimentos" value={data?.summary?.total_appointments || 0} icon={<CalendarCheck className="w-5 h-5" />} color="bg-blue-500" />
+        <StatCard label="Ticket Medio" value={`R$ ${(data?.summary?.avg_ticket || 0).toFixed(2)}`} icon={<BarChart3 className="w-5 h-5" />} color="bg-amber-500" />
+      </div>
+      <div className="card">
+        <table className="w-full" data-testid="commissions-table">
+          <thead><tr className="border-b border-slate-200">
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Profissional</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Atendimentos</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Faturamento</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">% Comissao</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor Comissao</th>
+          </tr></thead>
+          <tbody>
+            {(data?.report || []).map(r => (
+              <tr key={r.professional_id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
+                <td className="py-3 px-4 font-medium text-slate-900">{r.professional_name}</td>
+                <td className="py-3 px-4 text-slate-600">{r.appointments_count}</td>
+                <td className="py-3 px-4 text-slate-600">R$ {r.revenue.toFixed(2)}</td>
+                <td className="py-3 px-4"><span className="text-xs px-2 py-1 rounded-full bg-violet-100 text-violet-700 font-medium">{r.commission_percent}%</span></td>
+                <td className="py-3 px-4 font-bold text-emerald-600">R$ {r.commission_value.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {(data?.report || []).length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhum dado de comissao disponivel. Complete atendimentos para gerar relatorio.</p>}
+      </div>
+    </div>
+  );
+};
+
+/* ========== NOTIFICACOES (REAL) ========== */
+const NotificacoesPage = () => {
+  const [settings, setSettings] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    Promise.all([notificationsAPI.getSettings(), notificationsAPI.getHistory()])
+      .then(([s, h]) => { setSettings(s.data); setHistory(h.data); }).catch(() => {});
+  }, []);
+
+  const toggleSetting = async (key) => {
+    if (!settings) return;
+    setSaving(true);
+    const newValue = !settings[key];
+    await notificationsAPI.updateSettings({ [key]: newValue });
+    setSettings({ ...settings, [key]: newValue });
+    toast.success('Configuracao atualizada!');
+    setSaving(false);
+  };
+
+  const handleSendTest = async () => {
+    const res = await notificationsAPI.sendTest();
+    toast.success('Notificacao de teste enviada!');
+    setHistory(h => [res.data, ...h]);
+  };
+
+  const notifTypes = [
+    { key: 'booking_confirmation', label: 'Confirmacao de Agendamento', desc: 'Envia mensagem quando agendamento e confirmado' },
+    { key: 'booking_reminder_24h', label: 'Lembrete 24h antes', desc: 'Envia lembrete 24 horas antes do agendamento' },
+    { key: 'booking_cancelled', label: 'Cancelamento', desc: 'Envia notificacao quando agendamento e cancelado' },
+    { key: 'new_client', label: 'Novo Cliente', desc: 'Notifica quando um novo cliente se cadastra' },
+    { key: 'daily_summary', label: 'Resumo Diario', desc: 'Envia resumo dos agendamentos do dia seguinte' },
+  ];
+
+  return (
+    <div className="animate-fade-in" data-testid="notificacoes-page">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Notificacoes</h2>
+          <p className="text-sm text-slate-600">Configure as notificacoes automaticas da sua empresa</p>
+        </div>
+        <button onClick={handleSendTest} className="btn-secondary text-sm" data-testid="send-test-notif">Enviar Teste</button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-4">
+          {/* Channel */}
+          <div className="card">
+            <h3 className="font-semibold text-slate-900 mb-3">Canal de Envio</h3>
+            <div className="flex gap-3">
+              {['whatsapp', 'email', 'both'].map(ch => (
+                <button key={ch} onClick={() => notificationsAPI.updateSettings({ channel: ch }).then(r => setSettings(r.data))}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                    settings?.channel === ch ? 'border-primary bg-primary/5 text-primary' : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                  }`} data-testid={`channel-${ch}`}>
+                  {ch === 'whatsapp' ? 'WhatsApp' : ch === 'email' ? 'Email' : 'Ambos'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Settings */}
+          <div className="card">
+            <h3 className="font-semibold text-slate-900 mb-4">Tipos de Notificacao</h3>
+            <div className="space-y-3">
+              {notifTypes.map(nt => (
+                <div key={nt.key} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">{nt.label}</p>
+                    <p className="text-xs text-slate-500">{nt.desc}</p>
+                  </div>
+                  <button onClick={() => toggleSetting(nt.key)} disabled={saving}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${settings?.[nt.key] ? 'bg-primary' : 'bg-slate-300'}`}
+                    data-testid={`toggle-${nt.key}`}>
+                    <div className={`w-5 h-5 rounded-full bg-white shadow-sm absolute top-0.5 transition-all ${settings?.[nt.key] ? 'left-[26px]' : 'left-0.5'}`} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* History */}
+        <div className="card">
+          <h3 className="font-semibold text-slate-900 mb-4">Historico</h3>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {history.map(n => (
+              <div key={n.id} className="p-2 bg-slate-50 rounded text-xs">
+                <div className="flex justify-between mb-1">
+                  <span className="font-medium text-slate-900">{n.title}</span>
+                  <span className={`px-1.5 py-0.5 rounded ${n.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{n.status}</span>
+                </div>
+                <p className="text-slate-500">{n.message}</p>
+                <p className="text-slate-400 mt-1">{new Date(n.created_at).toLocaleString('pt-BR')}</p>
+              </div>
+            ))}
+            {history.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Nenhuma notificacao enviada</p>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 /* ========== CONFIG ========== */
 const ConfigPage = () => {

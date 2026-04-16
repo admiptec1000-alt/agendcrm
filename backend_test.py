@@ -392,6 +392,120 @@ class AgentCRMAPITester:
         
         return True
 
+    def test_reports_apis(self):
+        """Test reports APIs"""
+        if not self.company_admin_token:
+            self.log_test("Reports APIs", False, "No company admin token")
+            return False
+
+        headers = {"Authorization": f"Bearer {self.company_admin_token}"}
+        
+        # Test GET commissions report
+        success, comm_response = self.run_test(
+            "GET Commissions Report",
+            "GET",
+            "reports/commissions",
+            200,
+            headers=headers
+        )
+        
+        if success:
+            if 'report' in comm_response and 'summary' in comm_response:
+                summary = comm_response['summary']
+                required_fields = ['total_revenue', 'total_commission', 'total_appointments', 'avg_ticket']
+                if all(field in summary for field in required_fields):
+                    self.log_test("Commissions Report Structure Check", True)
+                else:
+                    self.log_test("Commissions Report Structure Check", False, f"Missing summary fields")
+            else:
+                self.log_test("Commissions Report Structure Check", False, "Missing report or summary")
+        
+        # Test GET financial report
+        success, fin_response = self.run_test(
+            "GET Financial Report",
+            "GET",
+            "reports/financial",
+            200,
+            headers=headers
+        )
+        
+        if success:
+            required_fields = ['total_revenue', 'completed_revenue', 'pending_revenue', 'completed_count', 'pending_count', 'cancelled_count']
+            if all(field in fin_response for field in required_fields):
+                self.log_test("Financial Report Structure Check", True)
+            else:
+                self.log_test("Financial Report Structure Check", False, f"Missing financial fields")
+        
+        return success
+
+    def test_notifications_apis(self):
+        """Test notifications APIs"""
+        if not self.company_admin_token:
+            self.log_test("Notifications APIs", False, "No company admin token")
+            return False
+
+        headers = {"Authorization": f"Bearer {self.company_admin_token}"}
+        
+        # Test GET notification settings
+        success, settings_response = self.run_test(
+            "GET Notification Settings",
+            "GET",
+            "notifications/settings",
+            200,
+            headers=headers
+        )
+        
+        if success:
+            required_fields = ['booking_confirmation', 'booking_reminder_24h', 'booking_cancelled', 'new_client', 'daily_summary', 'channel']
+            if all(field in settings_response for field in required_fields):
+                self.log_test("Notification Settings Structure Check", True)
+            else:
+                self.log_test("Notification Settings Structure Check", False, f"Missing settings fields")
+        
+        # Test PUT notification settings
+        update_data = {"booking_confirmation": True, "channel": "whatsapp"}
+        success, update_response = self.run_test(
+            "PUT Notification Settings",
+            "PUT",
+            "notifications/settings",
+            200,
+            data=update_data,
+            headers=headers
+        )
+        
+        if success and update_response.get('booking_confirmation') == True:
+            self.log_test("Notification Settings Update Check", True)
+        
+        # Test POST send test notification
+        success, test_response = self.run_test(
+            "POST Send Test Notification",
+            "POST",
+            "notifications/send-test",
+            200,
+            headers=headers
+        )
+        
+        if success:
+            required_fields = ['id', 'type', 'title', 'message', 'status']
+            if all(field in test_response for field in required_fields):
+                self.log_test("Test Notification Structure Check", True)
+            else:
+                self.log_test("Test Notification Structure Check", False, f"Missing notification fields")
+        
+        # Test GET notification history
+        success, history_response = self.run_test(
+            "GET Notification History",
+            "GET",
+            "notifications/history",
+            200,
+            headers=headers
+        )
+        
+        if success and isinstance(history_response, list):
+            self.log_test("Notification History Structure Check", True)
+        
+        return success
+
     def test_all_features_endpoint(self):
         """Test getting all available features"""
         if not self.super_admin_token:
@@ -437,6 +551,8 @@ class AgentCRMAPITester:
             ("CRM Admin Auth", self.test_crm_admin_login),
             ("WhatsApp Connections API", self.test_whatsapp_connections),
             ("Public Booking APIs", self.test_public_booking_apis),
+            ("Reports APIs", self.test_reports_apis),
+            ("Notifications APIs", self.test_notifications_apis),
         ]
 
         for test_name, test_func in tests:
