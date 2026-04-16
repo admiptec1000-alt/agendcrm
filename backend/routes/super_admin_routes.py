@@ -152,13 +152,13 @@ async def delete_business_type(
 async def list_companies(
     user: dict = Depends(require_super_admin),
     db: AsyncIOMotorDatabase = Depends(get_database),
-    status: str = None,
+    status_filter: str = None,
     plan_type: str = None,
     search: str = None
 ):
     query = {}
-    if status:
-        query["status"] = status
+    if status_filter:
+        query["status"] = status_filter
     if plan_type:
         query["plan_type"] = plan_type
     if search:
@@ -207,6 +207,7 @@ async def create_company(
         "plan_type": data.plan_type,
         "business_type_id": data.business_type_id,
         "features": features,
+        "subdomain": data.subdomain,
         "theme_colors": (data.theme_colors or ThemeColors()).model_dump(),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": user["id"]
@@ -225,12 +226,13 @@ async def create_company(
     }
     await db.company_users.insert_one(admin_user)
 
-    # Create booking page slug
-    slug = data.name.lower().replace(" ", "").replace(".", "")[:20]
+    # Create booking page with subdomain as slug if provided
+    slug = data.subdomain or data.name.lower().replace(" ", "").replace(".", "")[:20]
     booking_page = {
         "id": str(uuid.uuid4()),
         "company_id": company_id,
         "slug": slug,
+        "custom_domain": data.subdomain,
         "primary_color": company["theme_colors"]["primary"],
         "secondary_color": company["theme_colors"]["secondary"],
         "is_active": True,
@@ -269,6 +271,13 @@ async def update_company(
 
     if update_data:
         await db.companies.update_one({"id": company_id}, {"$set": update_data})
+
+    # Sync subdomain with booking_pages
+    if data.subdomain is not None:
+        await db.booking_pages.update_one(
+            {"company_id": company_id},
+            {"$set": {"slug": data.subdomain, "custom_domain": data.subdomain}}
+        )
 
     updated = await db.companies.find_one({"id": company_id}, {"_id": 0})
     return updated

@@ -7,7 +7,6 @@ import { LogIn, Mail, Lock } from 'lucide-react';
 const LoginPage = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -15,16 +14,13 @@ const LoginPage = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-
-    const result = await login({ email, password }, isSuperAdmin);
-
+    const result = await login({ email, password }, false);
     if (result.success) {
       toast.success('Login realizado com sucesso!');
       navigate('/');
     } else {
       toast.error(result.error || 'Erro ao fazer login');
     }
-
     setLoading(false);
   };
 
@@ -83,20 +79,6 @@ const LoginPage = () => {
               </div>
             </div>
 
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="superAdmin"
-                data-testid="super-admin-checkbox"
-                checked={isSuperAdmin}
-                onChange={(e) => setIsSuperAdmin(e.target.checked)}
-                className="w-4 h-4 text-primary border-slate-300 rounded focus:ring-2 focus:ring-primary"
-              />
-              <label htmlFor="superAdmin" className="ml-2 text-sm text-slate-600">
-                Entrar como Super Admin
-              </label>
-            </div>
-
             <button
               type="submit"
               data-testid="login-submit-button"
@@ -110,17 +92,11 @@ const LoginPage = () => {
           {/* Register Link */}
           <div className="mt-6 text-center">
             <p className="text-sm text-slate-600">
-              Não tem uma conta?{' '}
+              Nao tem uma conta?{' '}
               <Link to="/register" className="text-primary font-medium hover:underline">
                 Cadastre-se
               </Link>
             </p>
-          </div>
-
-          {/* Demo Credentials */}
-          <div className="mt-6 p-4 bg-slate-50 rounded-lg border border-slate-200">
-            <p className="text-xs font-medium text-slate-700 mb-2">Credenciais de Teste:</p>
-            <p className="text-xs text-slate-600">Super Admin: admin@agentcrm.com / admin123</p>
           </div>
         </div>
       </div>

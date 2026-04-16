@@ -6,7 +6,7 @@ import {
   LogOut, Building, Users, TrendingUp, DollarSign, Settings,
   Plus, Pencil, Trash2, X, ChevronRight, Search, LayoutGrid,
   Briefcase, BarChart3, Eye, Check, Scissors, Stethoscope,
-  Headphones, Sparkles, GitBranch, Bot, Code
+  Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe
 } from 'lucide-react';
 
 const iconMap = {
@@ -27,6 +27,7 @@ const SuperAdminDashboard = () => {
   const [editingCompany, setEditingCompany] = useState(null);
   const [editingType, setEditingType] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -66,19 +67,27 @@ const SuperAdminDashboard = () => {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex">
+      {/* Mobile overlay */}
+      {mobileSidebarOpen && <div className="fixed inset-0 bg-slate-900/50 z-30 lg:hidden" onClick={() => setMobileSidebarOpen(false)} />}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col fixed h-full z-40">
-        <div className="p-6 border-b border-slate-200">
-          <h1 className="text-xl font-bold font-heading text-slate-900 tracking-tight">AgentCRM</h1>
-          <p className="text-xs text-slate-500 mt-1 uppercase tracking-widest font-bold">Super Admin</p>
+      <aside className={`w-64 bg-white border-r border-slate-200 flex flex-col fixed h-full z-40 transition-transform duration-200 ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold font-heading text-slate-900 tracking-tight">AgentCRM</h1>
+            <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Super Admin</p>
+          </div>
+          <button onClick={() => setMobileSidebarOpen(false)} className="lg:hidden p-1.5 rounded-lg hover:bg-slate-100" data-testid="close-sidebar-btn">
+            <X className="w-5 h-5 text-slate-500" />
+          </button>
         </div>
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-3 space-y-1">
           {sidebarItems.map(item => (
             <button
               key={item.key}
-              onClick={() => setActiveTab(item.key)}
+              onClick={() => { setActiveTab(item.key); setMobileSidebarOpen(false); }}
               data-testid={`sidebar-${item.key}`}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 activeTab === item.key
                   ? 'bg-primary/10 text-primary'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -106,14 +115,17 @@ const SuperAdminDashboard = () => {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 ml-64">
-        <header className="glass border-b border-slate-200 sticky top-0 z-30 px-8 py-4">
-          <h2 className="text-xl font-bold font-heading text-slate-900">
+      <main className="flex-1 lg:ml-64 transition-all duration-200 min-w-0">
+        <header className="glass border-b border-slate-200 sticky top-0 z-20 px-4 lg:px-8 py-3 flex items-center gap-3">
+          <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100" data-testid="mobile-menu-btn">
+            <Menu className="w-5 h-5 text-slate-600" />
+          </button>
+          <h2 className="text-lg font-bold font-heading text-slate-900">
             {sidebarItems.find(i => i.key === activeTab)?.label || 'Dashboard'}
           </h2>
         </header>
 
-        <div className="p-8">
+        <div className="p-4 lg:p-8">
           {activeTab === 'dashboard' && <DashboardTab stats={stats} companies={companies} businessTypes={businessTypes} />}
           {activeTab === 'companies' && (
             <CompaniesTab
@@ -232,19 +244,19 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-center justify-between mb-6">
-        <div className="relative flex-1 max-w-md">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-6">
+        <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
             type="text"
             data-testid="company-search"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="input-field pl-10"
+            className="input-field pl-10 w-full"
             placeholder="Buscar por nome, CNPJ ou email..."
           />
         </div>
-        <button onClick={onAdd} data-testid="add-company-btn" className="btn-primary flex items-center gap-2">
+        <button onClick={onAdd} data-testid="add-company-btn" className="btn-primary flex items-center justify-center gap-2 whitespace-nowrap">
           <Plus className="w-4 h-4" /> Nova Empresa
         </button>
       </div>
@@ -255,9 +267,9 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
             <thead>
               <tr className="border-b border-slate-200">
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Empresa</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Contato</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Tipo</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Plano</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden md:table-cell">Contato</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden lg:table-cell">Subdominio</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden md:table-cell">Tipo</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Status</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Acoes</th>
               </tr>
@@ -268,22 +280,27 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                   <td className="py-3 px-4">
                     <p className="text-sm font-medium text-slate-900">{company.name}</p>
                     {company.cnpj && <p className="text-xs text-slate-500">{company.cnpj}</p>}
+                    <p className="text-xs text-slate-500 md:hidden">{company.email}</p>
                   </td>
-                  <td className="py-3 px-4">
+                  <td className="py-3 px-4 hidden md:table-cell">
                     <p className="text-sm text-slate-600">{company.email}</p>
                     {company.phone && <p className="text-xs text-slate-500">{company.phone}</p>}
                   </td>
-                  <td className="py-3 px-4">
-                    <span className="text-sm text-slate-600">{company.business_type_name || 'Personalizado'}</span>
+                  <td className="py-3 px-4 hidden lg:table-cell">
+                    {company.subdomain ? (
+                      <span className="text-xs px-2 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-mono">{company.subdomain}</span>
+                    ) : (
+                      <span className="text-xs text-slate-400">-</span>
+                    )}
                   </td>
-                  <td className="py-3 px-4">
-                    <PlanBadge planType={company.plan_type} />
+                  <td className="py-3 px-4 hidden md:table-cell">
+                    <span className="text-sm text-slate-600">{company.business_type_name || 'Personalizado'}</span>
                   </td>
                   <td className="py-3 px-4">
                     <StatusBadge status={company.status} />
                   </td>
                   <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
                       <button onClick={() => onEdit(company)} data-testid={`edit-company-${company.id}`}
                         className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
                         <Pencil className="w-4 h-4" />
@@ -378,6 +395,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     admin_email: '',
     admin_password: '',
     status: company?.status || 'active',
+    subdomain: company?.subdomain || '',
   });
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
@@ -423,6 +441,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           plan_type: form.plan_type,
           business_type_id: form.business_type_id || null,
           status: form.status,
+          subdomain: form.subdomain || null,
         });
         if (showCustomFeatures) {
           await superAdminAPI.updateCompanyFeatures(company.id, customFeatures);
@@ -437,6 +456,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         await superAdminAPI.createCompany({
           ...form,
           business_type_id: form.business_type_id || null,
+          subdomain: form.subdomain || null,
         });
         toast.success('Empresa criada!');
       }
@@ -483,6 +503,16 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Telefone</label>
                 <input data-testid="company-phone-input" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className="input-field" />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-slate-700 mb-1">Subdominio / Slug</label>
+                <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden">
+                  <span className="px-3 py-2 bg-slate-50 text-xs text-slate-500 border-r border-slate-200 whitespace-nowrap">/booking/</span>
+                  <input data-testid="company-subdomain-input" value={form.subdomain}
+                    onChange={e => setForm({...form, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')})}
+                    className="flex-1 px-3 py-2 text-sm focus:outline-none" placeholder="meu-salao" />
+                </div>
+                <p className="text-xs text-slate-500 mt-1">Usado para acesso publico: /booking/slug e /login/slug</p>
               </div>
             </div>
           </div>

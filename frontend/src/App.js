@@ -5,6 +5,7 @@ import { Toaster } from './components/ui/sonner';
 
 // Pages
 import LoginPage from './pages/LoginPage';
+import AdminLoginPage from './pages/AdminLoginPage';
 import RegisterPage from './pages/RegisterPage';
 import LandingPage from './pages/Public/LandingPage';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
@@ -43,6 +44,7 @@ const AppRoutes = () => {
       {/* Public */}
       <Route path="/landing" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/admin-login" element={<AdminLoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/booking/:slug" element={<PublicBooking />} />
       <Route path="/indoor/:slug" element={<IndoorDisplay />} />

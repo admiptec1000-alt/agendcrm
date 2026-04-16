@@ -95,6 +95,7 @@ class CompanyCreate(BaseModel):
     admin_name: str
     admin_email: EmailStr
     admin_password: str
+    subdomain: Optional[str] = None
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -105,6 +106,7 @@ class CompanyUpdate(BaseModel):
     plan_type: Optional[PlanType] = None
     business_type_id: Optional[str] = None
     theme_colors: Optional[ThemeColors] = None
+    subdomain: Optional[str] = None
 
 class CompanyResponse(BaseModel):
     id: str
