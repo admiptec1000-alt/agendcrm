@@ -39,7 +39,7 @@ const FEATURE_META = {
   conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'CRM' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Agenda', group: 'Operacional' },
-  agendamentos:       { icon: 'CalendarCheck',    label: 'Agenda', group: 'Operacional' },
+  agendamentos:       { icon: 'CalendarCheck',    label: 'Agendamentos', group: 'Operacional' },
   clientes:           { icon: 'UserCheck',        label: 'Clientes / Leads', group: 'Operacional' },
   categorias:         { icon: 'FolderOpen',       label: 'Categorias', group: 'Catalogo' },
   servicos_produtos:  { icon: 'Scissors',         label: 'Servicos e Produtos', group: 'Catalogo' },
