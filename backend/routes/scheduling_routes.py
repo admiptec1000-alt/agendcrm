@@ -287,7 +287,16 @@ async def create_professional(
         "email": data.email,
         "phone": data.phone,
         "specialties": data.specialties,
-        "working_hours": data.working_hours,
+        "working_hours": data.working_hours or {
+            "seg": {"start": "08:00", "end": "18:00", "active": True},
+            "ter": {"start": "08:00", "end": "18:00", "active": True},
+            "qua": {"start": "08:00", "end": "18:00", "active": True},
+            "qui": {"start": "08:00", "end": "18:00", "active": True},
+            "sex": {"start": "08:00", "end": "18:00", "active": True},
+            "sab": {"start": "08:00", "end": "13:00", "active": True},
+            "dom": {"start": "00:00", "end": "00:00", "active": False},
+        },
+        "suspensions": [],
         "is_active": True,
         "image_url": data.image_url,
         "commission_percent": 0,
@@ -594,3 +603,212 @@ async def complete_onboarding(
 ):
     await db.companies.update_one({"id": user["company_id"]}, {"$set": {"onboarding_done": True}})
     return {"message": "Onboarding completed"}
+
+# === BUSINESS HOURS ===
+class BusinessHoursUpdate(BaseModel):
+    hours: dict  # {"seg": {"start":"08:00","end":"18:00","active":true}, ...}
+
+@router.get("/business-hours")
+async def get_business_hours(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0})
+    default_hours = {
+        "seg": {"start": "08:00", "end": "18:00", "active": True},
+        "ter": {"start": "08:00", "end": "18:00", "active": True},
+        "qua": {"start": "08:00", "end": "18:00", "active": True},
+        "qui": {"start": "08:00", "end": "18:00", "active": True},
+        "sex": {"start": "08:00", "end": "18:00", "active": True},
+        "sab": {"start": "08:00", "end": "13:00", "active": True},
+        "dom": {"start": "00:00", "end": "00:00", "active": False},
+    }
+    return company.get("business_hours", default_hours) if company else default_hours
+
+@router.put("/business-hours")
+async def update_business_hours(
+    data: BusinessHoursUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    await db.companies.update_one({"id": user["company_id"]}, {"$set": {"business_hours": data.hours}})
+    return data.hours
+
+# === PROFESSIONAL SUSPENSIONS ===
+class SuspensionCreate(BaseModel):
+    start_date: str
+    end_date: str
+    reason: Optional[str] = None
+
+@router.post("/professionals/{professional_id}/suspensions")
+async def add_suspension(
+    professional_id: str,
+    data: SuspensionCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    prof = await db.professionals.find_one({"id": professional_id, "company_id": user["company_id"]})
+    if not prof:
+        raise HTTPException(status_code=404, detail="Profissional nao encontrado")
+    suspension = {"id": str(uuid.uuid4()), "start_date": data.start_date, "end_date": data.end_date, "reason": data.reason}
+    await db.professionals.update_one({"id": professional_id}, {"$push": {"suspensions": suspension}})
+    return suspension
+
+@router.delete("/professionals/{professional_id}/suspensions/{suspension_id}")
+async def remove_suspension(
+    professional_id: str,
+    suspension_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    await db.professionals.update_one(
+        {"id": professional_id, "company_id": user["company_id"]},
+        {"$pull": {"suspensions": {"id": suspension_id}}}
+    )
+    return {"message": "Suspensao removida"}
+
+# === INDOOR DISPLAY ===
+class IndoorSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    slide_duration: Optional[int] = None  # seconds
+    media_links: Optional[List[str]] = None  # URLs to images/videos
+
+@router.get("/indoor")
+async def get_indoor_settings(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    settings = await db.indoor_settings.find_one({"company_id": user["company_id"]}, {"_id": 0})
+    if not settings:
+        settings = {
+            "company_id": user["company_id"],
+            "enabled": True,
+            "slide_duration": 10,
+            "media_links": [],
+        }
+    return settings
+
+@router.put("/indoor")
+async def update_indoor_settings(
+    data: IndoorSettingsUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    company_id = user["company_id"]
+    existing = await db.indoor_settings.find_one({"company_id": company_id})
+    update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if existing:
+        await db.indoor_settings.update_one({"company_id": company_id}, {"$set": update_data})
+    else:
+        await db.indoor_settings.insert_one({
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "enabled": True,
+            "slide_duration": 10,
+            "media_links": [],
+            **update_data
+        })
+    return await db.indoor_settings.find_one({"company_id": company_id}, {"_id": 0})
+
+# === SMART AVAILABILITY (considering business hours, professional hours, suspensions, duration) ===
+@router.get("/smart-availability")
+async def get_smart_availability(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    professional_id: str = None,
+    date: str = None,
+    service_id: str = None
+):
+    if not date:
+        raise HTTPException(status_code=400, detail="Data obrigatoria")
+
+    company_id = user["company_id"]
+    company = await db.companies.find_one({"id": company_id}, {"_id": 0})
+
+    # Day of week mapping
+    day_map = {0: "seg", 1: "ter", 2: "qua", 3: "qui", 4: "sex", 5: "sab", 6: "dom"}
+    from datetime import date as date_type
+    parts = date.split("-")
+    d = date_type(int(parts[0]), int(parts[1]), int(parts[2]))
+    day_key = day_map[d.weekday()]
+
+    # Get business hours
+    biz_hours = company.get("business_hours", {}).get(day_key, {"start": "08:00", "end": "18:00", "active": True})
+    if not biz_hours.get("active", True):
+        return {"date": date, "available_slots": [], "reason": "Estabelecimento fechado"}
+
+    biz_start = biz_hours["start"]
+    biz_end = biz_hours["end"]
+
+    # Service duration
+    duration = 30
+    if service_id:
+        service = await db.services.find_one({"id": service_id, "company_id": company_id})
+        if service:
+            duration = service.get("duration", 30)
+
+    # Get professionals to check
+    prof_ids = []
+    if professional_id and professional_id != "all":
+        prof_ids = [professional_id]
+    else:
+        profs = await db.professionals.find({"company_id": company_id, "is_active": True}, {"_id": 0}).to_list(100)
+        prof_ids = [p["id"] for p in profs]
+
+    all_slots = set()
+    for pid in prof_ids:
+        prof = await db.professionals.find_one({"id": pid}, {"_id": 0})
+        if not prof or not prof.get("is_active", True):
+            continue
+
+        # Check suspensions
+        is_suspended = False
+        for sus in prof.get("suspensions", []):
+            if sus["start_date"] <= date <= sus["end_date"]:
+                is_suspended = True
+                break
+        if is_suspended:
+            continue
+
+        # Professional hours override business hours
+        prof_hours = (prof.get("working_hours") or {}).get(day_key)
+        if prof_hours:
+            if not prof_hours.get("active", True):
+                continue
+            start = prof_hours["start"]
+            end = prof_hours["end"]
+        else:
+            start = biz_start
+            end = biz_end
+
+        # Generate slots considering duration
+        start_h, start_m = map(int, start.split(":"))
+        end_h, end_m = map(int, end.split(":"))
+        start_min = start_h * 60 + start_m
+        end_min = end_h * 60 + end_m
+
+        # Get existing appointments
+        existing = await db.appointments.find({
+            "company_id": company_id,
+            "professional_id": pid,
+            "date": date,
+            "status": {"$nin": ["cancelado"]}
+        }, {"_id": 0}).to_list(1000)
+        booked = []
+        for apt in existing:
+            apt_h, apt_m = map(int, apt["time"].split(":"))
+            apt_start = apt_h * 60 + apt_m
+            apt_dur = apt.get("duration", 30)
+            booked.append((apt_start, apt_start + apt_dur))
+
+        current = start_min
+        while current + duration <= end_min:
+            slot_end = current + duration
+            conflict = any(not (slot_end <= bs or current >= be) for bs, be in booked)
+            if not conflict:
+                h, m = divmod(current, 60)
+                all_slots.add(f"{h:02d}:{m:02d}")
+            current += 30  # 30min intervals
+
+    sorted_slots = sorted(all_slots)
+    return {"date": date, "available_slots": sorted_slots, "duration": duration}

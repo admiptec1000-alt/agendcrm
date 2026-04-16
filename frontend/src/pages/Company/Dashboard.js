@@ -8,7 +8,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle
+  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -19,7 +19,7 @@ const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
   Megaphone, GitBranch, Info, Code, UserCog, Bot, Link, Sparkles, Calendar,
   CalendarCheck, UserCheck, FolderOpen, Scissors, CreditCard, Briefcase,
-  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy
+  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor
 };
 
 const FEATURE_META = {
@@ -27,7 +27,7 @@ const FEATURE_META = {
   atendimentos:       { icon: 'Headphones',      label: 'Atendimentos', group: 'CRM' },
   respostas_rapidas:  { icon: 'Zap',             label: 'Respostas Rapidas', group: 'CRM' },
   kanban:             { icon: 'Columns3',         label: 'Kanban', group: 'CRM' },
-  contatos:           { icon: 'Users',            label: 'Contatos', group: 'CRM' },
+  contatos:           { icon: 'Users',            label: 'Clientes / Leads', group: 'CRM' },
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   chat_interno:       { icon: 'MessageSquare',    label: 'Chat Interno', group: 'CRM' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
@@ -38,9 +38,9 @@ const FEATURE_META = {
   filas_chatbot:      { icon: 'Bot',              label: 'Filas & Chatbot', group: 'CRM' },
   conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'CRM' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
-  calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
-  agendamentos:       { icon: 'CalendarCheck',    label: 'Agendamentos', group: 'Operacional' },
-  clientes:           { icon: 'UserCheck',        label: 'Clientes', group: 'Operacional' },
+  calendario:         { icon: 'Calendar',         label: 'Agenda', group: 'Operacional' },
+  agendamentos:       { icon: 'CalendarCheck',    label: 'Agenda', group: 'Operacional' },
+  clientes:           { icon: 'UserCheck',        label: 'Clientes / Leads', group: 'Operacional' },
   categorias:         { icon: 'FolderOpen',       label: 'Categorias', group: 'Catalogo' },
   servicos_produtos:  { icon: 'Scissors',         label: 'Servicos e Produtos', group: 'Catalogo' },
   assinaturas:        { icon: 'CreditCard',       label: 'Assinaturas', group: 'Catalogo' },
@@ -53,12 +53,14 @@ const FEATURE_META = {
   'integrações':      { icon: 'Puzzle',           label: 'Integracoes', group: 'Config Empresa' },
   relatorios:         { icon: 'BarChart3',        label: 'Relatorios', group: 'Analise' },
   suporte:            { icon: 'LifeBuoy',         label: 'Suporte', group: 'Config Empresa' },
+  indoor:             { icon: 'Monitor',          label: 'Indoor / TV', group: 'Config Empresa' },
 };
 
 const CompanyDashboard = () => {
   const { user, logout } = useAuth();
   const [activePage, setActivePage] = useState('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
   const enabledFeatures = useMemo(() => {
@@ -89,8 +91,11 @@ const CompanyDashboard = () => {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex">
+      {/* Mobile overlay */}
+      {mobileSidebarOpen && <div className="fixed inset-0 bg-slate-900/50 z-30 lg:hidden" onClick={() => setMobileSidebarOpen(false)} />}
+
       {/* Sidebar */}
-      <aside className={`${sidebarCollapsed ? 'w-16' : 'w-60'} bg-white border-r border-slate-200 flex flex-col fixed h-full z-40 transition-all duration-200`}>
+      <aside className={`${sidebarCollapsed ? 'w-16' : 'w-60'} bg-white border-r border-slate-200 flex flex-col fixed h-full z-40 transition-all duration-200 ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="p-4 border-b border-slate-200 flex items-center justify-between">
           {!sidebarCollapsed && (
             <div className="min-w-0">
@@ -113,7 +118,7 @@ const CompanyDashboard = () => {
                 return (
                   <button
                     key={item.key}
-                    onClick={() => setActivePage(item.key)}
+                    onClick={() => { setActivePage(item.key); setMobileSidebarOpen(false); }}
                     data-testid={`nav-${item.key}`}
                     title={sidebarCollapsed ? item.label : undefined}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all ${
@@ -155,11 +160,16 @@ const CompanyDashboard = () => {
       </aside>
 
       {/* Main Content */}
-      <main className={`flex-1 ${sidebarCollapsed ? 'ml-16' : 'ml-60'} transition-all duration-200`}>
+      <main className={`flex-1 ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-60'} transition-all duration-200`}>
         <header className="glass border-b border-slate-200 sticky top-0 z-30 px-6 py-3 flex items-center justify-between">
-          <h2 className="text-lg font-bold font-heading text-slate-900">
-            {FEATURE_META[activePage]?.label || 'Dashboard'}
-          </h2>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100" data-testid="mobile-menu-btn">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+            <h2 className="text-lg font-bold font-heading text-slate-900">
+              {FEATURE_META[activePage]?.label || 'Dashboard'}
+            </h2>
+          </div>
           <div className="text-right">
             <p className="text-xs text-slate-500">{user?.company?.name}</p>
           </div>
@@ -204,6 +214,7 @@ const PageContent = ({ page, hasFeature }) => {
     case 'notificacoes': return <NotificacoesPage />;
     case 'relatorios': return <FinanceiroPage />;
     case 'configuracoes': return <ConfigPage />;
+    case 'indoor': return <IndoorSettingsPage />;
     default: return <PlaceholderPage title={FEATURE_META[page]?.label || page} />;
   }
 };
@@ -1265,6 +1276,84 @@ const PlaceholderPage = ({ title }) => (
     <p className="text-slate-500">{title} - Em breve</p>
   </div>
 );
+
+/* ========== INDOOR SETTINGS ========== */
+const IndoorSettingsPage = () => {
+  const { user } = useAuth();
+  const [settings, setSettings] = useState(null);
+  const [newLink, setNewLink] = useState('');
+
+  useEffect(() => { schedulingAPI.getIndoorSettings().then(r => setSettings(r.data)).catch(() => {}); }, []);
+
+  const handleSave = async (update) => {
+    const res = await schedulingAPI.updateIndoorSettings(update);
+    setSettings(res.data);
+    toast.success('Configuracao salva!');
+  };
+
+  const addMedia = () => {
+    if (!newLink.trim()) return;
+    const links = [...(settings?.media_links || []), newLink.trim()];
+    handleSave({ media_links: links });
+    setNewLink('');
+  };
+
+  const removeMedia = (idx) => {
+    const links = (settings?.media_links || []).filter((_, i) => i !== idx);
+    handleSave({ media_links: links });
+  };
+
+  const bookingPage = user?.company?.name?.toLowerCase().replace(/\s/g, '').replace(/\./g, '').substring(0, 20);
+
+  return (
+    <div className="animate-fade-in" data-testid="indoor-settings-page">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Indoor / TV</h2>
+          <p className="text-sm text-slate-600">Configure a tela que sera exibida no salao ou clinica</p>
+        </div>
+        <a href={`/indoor/${bookingPage}`} target="_blank" rel="noopener noreferrer" className="btn-primary text-sm flex items-center gap-2" data-testid="open-indoor-btn">
+          <Monitor className="w-4 h-4" /> Abrir Tela Indoor
+        </a>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="card">
+          <h3 className="font-semibold text-slate-900 mb-4">Configuracoes</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-700 mb-1 block">Link publico da TV</label>
+              <code className="block bg-slate-50 px-3 py-2 rounded text-sm border border-slate-200">{window.location.origin}/indoor/{bookingPage}</code>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700 mb-1 block">Duracao do slide (segundos)</label>
+              <input type="number" value={settings?.slide_duration || 10} onChange={e => handleSave({ slide_duration: parseInt(e.target.value) || 10 })}
+                className="input-field" min={5} max={120} data-testid="slide-duration" />
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-semibold text-slate-900 mb-4">Midias (Propagandas)</h3>
+          <p className="text-xs text-slate-500 mb-3">Adicione links de imagens ou videos que serao intercalados com a agenda</p>
+          <div className="flex gap-2 mb-4">
+            <input value={newLink} onChange={e => setNewLink(e.target.value)} placeholder="https://... (imagem ou video)" className="input-field flex-1" data-testid="media-link-input" />
+            <button onClick={addMedia} className="btn-primary text-sm">Adicionar</button>
+          </div>
+          <div className="space-y-2">
+            {(settings?.media_links || []).map((link, i) => (
+              <div key={i} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                <span className="text-xs text-slate-600 truncate flex-1">{link}</span>
+                <button onClick={() => removeMedia(i)} className="text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button>
+              </div>
+            ))}
+            {(settings?.media_links || []).length === 0 && <p className="text-xs text-slate-400 text-center py-4">Nenhuma midia adicionada</p>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const Modal = ({ title, onClose, children }) => (
   <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>

@@ -10,6 +10,7 @@ import LandingPage from './pages/Public/LandingPage';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
 import CompanyDashboard from './pages/Company/Dashboard';
 import PublicBooking from './pages/Public/BookingPage';
+import IndoorDisplay from './pages/Public/IndoorDisplay';
 import './index.css';
 
 const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
@@ -44,6 +45,7 @@ const AppRoutes = () => {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/booking/:slug" element={<PublicBooking />} />
+      <Route path="/indoor/:slug" element={<IndoorDisplay />} />
 
       {/* Protected */}
       <Route

@@ -97,6 +97,8 @@ export const schedulingAPI = {
   createProfessional: (data) => api.post('/scheduling/professionals', data),
   updateProfessional: (id, data) => api.put(`/scheduling/professionals/${id}`, data),
   deleteProfessional: (id) => api.delete(`/scheduling/professionals/${id}`),
+  addSuspension: (profId, data) => api.post(`/scheduling/professionals/${profId}/suspensions`, data),
+  removeSuspension: (profId, susId) => api.delete(`/scheduling/professionals/${profId}/suspensions/${susId}`),
   getCategories: () => api.get('/scheduling/categories'),
   createCategory: (data) => api.post('/scheduling/categories', data),
   getClients: (params) => api.get('/scheduling/clients', { params }),
@@ -110,6 +112,11 @@ export const schedulingAPI = {
   cancelSubscription: (id) => api.delete(`/scheduling/subscriptions/${id}`),
   getBookingPage: () => api.get('/scheduling/booking-page'),
   updateBookingPage: (data) => api.put('/scheduling/booking-page', data),
+  getBusinessHours: () => api.get('/scheduling/business-hours'),
+  updateBusinessHours: (hours) => api.put('/scheduling/business-hours', { hours }),
+  getIndoorSettings: () => api.get('/scheduling/indoor'),
+  updateIndoorSettings: (data) => api.put('/scheduling/indoor', data),
+  getSmartAvailability: (params) => api.get('/scheduling/smart-availability', { params }),
   getOnboardingStatus: () => api.get('/scheduling/onboarding-status'),
   completeOnboarding: () => api.post('/scheduling/onboarding-complete'),
 };
@@ -122,7 +129,8 @@ export const publicAPI = {
   getAvailability: (slug, params) => axios.get(`${API_URL}/public/booking/${slug}/availability`, { params }),
   createBooking: (slug, data) => axios.post(`${API_URL}/public/booking/${slug}/book`, data),
   getBusinessTypes: () => axios.get(`${API_URL}/auth/business-types`),
-  lookupClient: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/client-lookup/${phone}`)
+  lookupClient: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/client-lookup/${phone}`),
+  getIndoorDisplay: (slug) => axios.get(`${API_URL}/public/indoor/${slug}`)
 };
 
 // WhatsApp API

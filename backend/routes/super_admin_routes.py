@@ -47,6 +47,7 @@ ALL_FEATURES = [
     {"feature_key": "integrações", "label": "API e Integracoes", "category": "shared", "icon": "Puzzle"},
     {"feature_key": "relatorios", "label": "Relatorios", "category": "shared", "icon": "BarChart3"},
     {"feature_key": "suporte", "label": "Suporte", "category": "shared", "icon": "LifeBuoy"},
+    {"feature_key": "indoor", "label": "Indoor / TV", "category": "scheduling", "icon": "Monitor"},
 ]
 
 # === FEATURES ENDPOINT ===
