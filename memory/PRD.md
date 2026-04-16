@@ -45,7 +45,16 @@ Multi-tenant SaaS platform (PWA mobile + modal PC) with:
 - [x] Business hours management in ConfigPage
 - [x] Subdomain/Custom domain configuration for booking page
 - [x] Public BookingPage shows service & professional photos
-- [x] Hierarchical availability logic (Establishment > Professional > Suspensions) in backend
+- [x] Hierarchical availability logic (Establishment > Professional > Suspensions)
+
+### Phase 5 - Mobile & Auth Improvements (2026-04-16)
+- [x] Super Admin mobile responsive sidebar (hamburger menu, close on item click, overlay)
+- [x] Separate Admin login page at /admin-login (dark theme)
+- [x] Removed Super Admin checkbox from regular login page
+- [x] Subdomain field in Company creation/editing in Super Admin
+- [x] Subdomain syncs with booking_pages (slug + custom_domain)
+- [x] Companies table shows subdomain column
+- [x] All responsive table columns (hidden on mobile)
 
 ## Backlog
 
@@ -62,9 +71,19 @@ Multi-tenant SaaS platform (PWA mobile + modal PC) with:
 - [ ] Relatorios avancados com graficos
 - [ ] PWA mobile full optimization
 
+## Key Routes
+- `/login` - Company user login
+- `/admin-login` - Super Admin login (dark theme)
+- `/register` - New company registration
+- `/app` - Company Dashboard
+- `/super-admin` - Super Admin Dashboard
+- `/booking/:slug` - Public booking page
+- `/indoor/:slug` - Indoor TV display
+
 ## Key Technical Notes
 - All backend endpoints prefixed with /api
 - MongoDB _id excluded from responses
 - company_id from JWT restricts all tenant data
 - Object Storage via Emergent for file uploads
 - WhatsApp and Stripe backends are MOCKED
+- Subdomain set by Super Admin syncs with booking_pages slug
