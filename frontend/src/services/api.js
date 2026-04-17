@@ -147,6 +147,25 @@ export const whatsappAPI = {
   deleteConnection: (id) => api.delete(`/whatsapp/connections/${id}`)
 };
 
+// Channels API (Connections, Templates, Scheduled Messages, Chat)
+export const channelsAPI = {
+  getConnections: () => api.get('/channels/connections'),
+  createConnection: (data) => api.post('/channels/connections', data),
+  connectChannel: (id) => api.post(`/channels/connections/${id}/connect`),
+  disconnectChannel: (id) => api.post(`/channels/connections/${id}/disconnect`),
+  deleteConnection: (id) => api.delete(`/channels/connections/${id}`),
+  getTemplates: () => api.get('/channels/templates'),
+  createTemplate: (data) => api.post('/channels/templates', data),
+  updateTemplate: (id, data) => api.put(`/channels/templates/${id}`, data),
+  getScheduledMessages: (params) => api.get('/channels/scheduled-messages', { params }),
+  createScheduledMessage: (data) => api.post('/channels/scheduled-messages', data),
+  updateScheduledMessage: (id, data) => api.put(`/channels/scheduled-messages/${id}`, data),
+  deleteScheduledMessage: (id) => api.delete(`/channels/scheduled-messages/${id}`),
+  getChatChannels: () => api.get('/channels/chat/channels'),
+  getChatMessages: (params) => api.get('/channels/chat/messages', { params }),
+  sendChatMessage: (data) => api.post('/channels/chat/messages', data),
+};
+
 // Reports API
 export const reportsAPI = {
   getCommissions: (params) => api.get('/reports/commissions', { params }),

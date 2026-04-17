@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { crmAPI, schedulingAPI, uploadAPI, reportsAPI, notificationsAPI } from '../../services/api';
+import { crmAPI, schedulingAPI, uploadAPI, reportsAPI, notificationsAPI, channelsAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
   LogOut, LayoutDashboard, Headphones, Zap, Columns3, Users, Tag,
@@ -8,7 +8,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor
+  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -30,6 +30,7 @@ const FEATURE_META = {
   contatos:           { icon: 'Users',            label: 'Clientes / Leads', group: 'CRM' },
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   chat_interno:       { icon: 'MessageSquare',    label: 'Chat Interno', group: 'CRM' },
+  chat_interno:       { icon: 'MessageSquare',    label: 'Chat Interno', group: 'Operacional' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
   informativos:       { icon: 'Info',             label: 'Informativos', group: 'CRM' },
@@ -201,6 +202,7 @@ const PageContent = ({ page, hasFeature }) => {
     case 'flowbuilder': return <FlowBuilderPage />;
     case 'agente_ia': return <AIAgentPage />;
     case 'conexoes': return <ConexoesPage />;
+    case 'chat_interno': return <ChatInternoPage />;
     case 'calendario': return <CalendarPageFull />;
     case 'agendamentos': return <MessageSchedulingPage />;
     case 'clientes': return <ClientsPage />;
@@ -759,14 +761,31 @@ const WhatsAppPage = () => {
 const MessageSchedulingPage = () => {
   const [messages, setMessages] = useState([]);
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({ recipient: '', channel: 'whatsapp', message: '', scheduled_at: '', status: 'pendente' });
+  const [form, setForm] = useState({ recipient: '', channel: 'whatsapp', message: '', scheduled_at: '' });
+  const [loading, setLoading] = useState(true);
 
-  const handleSave = () => {
+  useEffect(() => { loadMessages(); }, []);
+  const loadMessages = async () => {
+    try { const r = await channelsAPI.getScheduledMessages(); setMessages(r.data); }
+    catch (e) {} finally { setLoading(false); }
+  };
+
+  const handleSave = async () => {
     if (!form.recipient || !form.message || !form.scheduled_at) { toast.error('Preencha todos os campos'); return; }
-    setMessages(m => [...m, { ...form, id: Date.now().toString(), created_at: new Date().toISOString() }]);
-    setShowModal(false);
-    setForm({ recipient: '', channel: 'whatsapp', message: '', scheduled_at: '', status: 'pendente' });
-    toast.success('Mensagem agendada!');
+    try {
+      await channelsAPI.createScheduledMessage(form);
+      setShowModal(false);
+      setForm({ recipient: '', channel: 'whatsapp', message: '', scheduled_at: '' });
+      loadMessages();
+      toast.success('Mensagem agendada!');
+    } catch (e) { toast.error('Erro ao agendar'); }
+  };
+
+  const handleCancel = async (id) => {
+    try {
+      await channelsAPI.updateScheduledMessage(id, { status: 'cancelada' });
+      loadMessages(); toast.success('Cancelada!');
+    } catch (e) { toast.error('Erro ao cancelar'); }
   };
 
   return (
@@ -811,6 +830,9 @@ const MessageSchedulingPage = () => {
                 <div className="text-right flex-shrink-0 ml-3">
                   <p className="text-xs font-medium text-primary">{new Date(msg.scheduled_at).toLocaleString('pt-BR')}</p>
                   <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${msg.status === 'pendente' ? 'bg-amber-100 text-amber-700' : msg.status === 'enviada' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{msg.status}</span>
+                  {msg.status === 'pendente' && (
+                    <button onClick={() => handleCancel(msg.id)} className="block text-[10px] text-red-500 hover:text-red-700 mt-1 font-medium">Cancelar</button>
+                  )}
                 </div>
               </div>
             ))}
@@ -851,6 +873,112 @@ const MessageSchedulingPage = () => {
 };
 
 /* ========== CALENDAR ========== */
+
+/* ========== CHAT INTERNO ========== */
+const ChatInternoPage = () => {
+  const { user } = useAuth();
+  const [channels, setChannels] = useState([]);
+  const [activeChannel, setActiveChannel] = useState('general');
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    channelsAPI.getChatChannels().then(r => setChannels(r.data)).catch(() => {});
+    loadMessages();
+  }, []);
+
+  useEffect(() => { loadMessages(); }, [activeChannel]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const loadMessages = async () => {
+    setLoading(true);
+    try { const r = await channelsAPI.getChatMessages({ channel_id: activeChannel, limit: 50 }); setMessages(r.data); }
+    catch (e) {} finally { setLoading(false); }
+  };
+
+  const sendMessage = async () => {
+    if (!newMessage.trim()) return;
+    try {
+      await channelsAPI.sendChatMessage({ content: newMessage, channel_id: activeChannel });
+      setNewMessage('');
+      loadMessages();
+    } catch (e) { toast.error('Erro ao enviar'); }
+  };
+
+  // Poll for new messages every 5s
+  useEffect(() => {
+    const interval = setInterval(loadMessages, 5000);
+    return () => clearInterval(interval);
+  }, [activeChannel]);
+
+  return (
+    <div className="animate-fade-in h-[calc(100vh-120px)] flex flex-col" data-testid="chat-interno-page">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Chat Interno</h2>
+          <p className="text-sm text-slate-600">Comunicacao da equipe</p>
+        </div>
+      </div>
+
+      <div className="flex-1 flex gap-4 min-h-0">
+        {/* Channels sidebar */}
+        <div className="w-48 bg-white rounded-xl border border-slate-200 p-3 flex-shrink-0 hidden lg:block">
+          <p className="text-[10px] font-bold uppercase text-slate-400 tracking-widest mb-2 px-2">Canais</p>
+          {channels.map(ch => (
+            <button key={ch.id} onClick={() => setActiveChannel(ch.id)}
+              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${activeChannel === ch.id ? 'bg-primary/10 text-primary font-medium' : 'text-slate-600 hover:bg-slate-50'}`}
+              data-testid={`chat-channel-${ch.id}`}>
+              # {ch.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Messages area */}
+        <div className="flex-1 bg-white rounded-xl border border-slate-200 flex flex-col min-h-0">
+          <div className="px-5 py-3 border-b border-slate-200">
+            <p className="text-sm font-semibold text-slate-900"># {channels.find(c => c.id === activeChannel)?.name || 'Geral'}</p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {loading && messages.length === 0 && <p className="text-sm text-slate-400 text-center py-8">Carregando...</p>}
+            {!loading && messages.length === 0 && <p className="text-sm text-slate-400 text-center py-8">Nenhuma mensagem ainda. Comece uma conversa!</p>}
+            {messages.map(msg => {
+              const isMe = msg.sender_id === user?.id;
+              return (
+                <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`} data-testid={`chat-msg-${msg.id}`}>
+                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${isMe ? 'bg-primary text-white rounded-br-md' : 'bg-slate-100 text-slate-900 rounded-bl-md'}`}>
+                    {!isMe && <p className="text-[10px] font-bold mb-0.5 opacity-70">{msg.sender_name}</p>}
+                    <p className="text-sm leading-relaxed">{msg.content}</p>
+                    <p className={`text-[10px] mt-1 ${isMe ? 'text-white/60' : 'text-slate-400'}`}>
+                      {new Date(msg.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <div className="px-4 py-3 border-t border-slate-200">
+            <div className="flex items-center gap-2">
+              <input value={newMessage} onChange={e => setNewMessage(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendMessage())}
+                placeholder="Digite uma mensagem..."
+                className="flex-1 input-field" data-testid="chat-input" />
+              <button onClick={sendMessage} disabled={!newMessage.trim()}
+                className="btn-primary p-2.5 rounded-lg" data-testid="chat-send-btn">
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const CalendarPage = () => {
   const [items, setItems] = useState([]);
   useEffect(() => { schedulingAPI.getAppointments().then(r => setItems(r.data)).catch(() => {}); }, []);
@@ -889,34 +1017,55 @@ const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', 
 
 const ConexoesPage = () => {
   const [tab, setTab] = useState('conexoes');
-  const [connections, setConnections] = useState([
-    { id: '1', type: 'whatsapp', name: 'WhatsApp Principal', status: 'disconnected', number: '' },
-  ]);
-  const [templates, setTemplates] = useState(PROCESS_TYPES.map(p => ({ ...p, message: '', active: false })));
+  const [connections, setConnections] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [editingTemplate, setEditingTemplate] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const handleConnect = (connId) => {
-    setConnections(c => c.map(cn => cn.id === connId ? { ...cn, status: 'connecting' } : cn));
-    setTimeout(() => {
-      setConnections(c => c.map(cn => cn.id === connId ? { ...cn, status: 'waiting_qr' } : cn));
-    }, 1500);
-    toast.success('Iniciando conexao...');
+  useEffect(() => { loadData(); }, []);
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [conns, tmpls] = await Promise.all([channelsAPI.getConnections(), channelsAPI.getTemplates()]);
+      setConnections(conns.data);
+      const merged = PROCESS_TYPES.map(p => {
+        const saved = tmpls.data.find(t => t.process_key === p.key);
+        return saved ? { ...p, ...saved } : { ...p, message: '', active: false };
+      });
+      setTemplates(merged);
+    } catch (e) { toast.error('Erro ao carregar dados'); }
+    finally { setLoading(false); }
   };
 
-  const handleDisconnect = (connId) => {
-    setConnections(c => c.map(cn => cn.id === connId ? { ...cn, status: 'disconnected' } : cn));
-    toast.success('Desconectado!');
+  const handleConnect = async (connId) => {
+    try { await channelsAPI.connectChannel(connId); loadData(); toast.success('Conectando...'); }
+    catch (e) { toast.error('Erro ao conectar'); }
   };
 
-  const addConnection = (type) => {
+  const handleDisconnect = async (connId) => {
+    try { await channelsAPI.disconnectChannel(connId); loadData(); toast.success('Desconectado!'); }
+    catch (e) { toast.error('Erro ao desconectar'); }
+  };
+
+  const addConnection = async (type) => {
     const name = type === 'whatsapp' ? 'WhatsApp' : 'Instagram';
-    setConnections(c => [...c, { id: Date.now().toString(), type, name: `${name} ${c.length + 1}`, status: 'disconnected', number: '' }]);
+    try {
+      await channelsAPI.createConnection({ name: `${name} ${connections.length + 1}`, type });
+      loadData(); toast.success('Conexao adicionada!');
+    } catch (e) { toast.error('Erro ao criar conexao'); }
   };
 
-  const saveTemplate = (key, message, active) => {
-    setTemplates(t => t.map(tp => tp.key === key ? { ...tp, message, active } : tp));
-    setEditingTemplate(null);
-    toast.success('Modelo salvo!');
+  const removeConnection = async (connId) => {
+    try { await channelsAPI.deleteConnection(connId); loadData(); toast.success('Removida!'); }
+    catch (e) { toast.error('Erro ao remover'); }
+  };
+
+  const saveTemplate = async (key, message, active) => {
+    const tmpl = PROCESS_TYPES.find(p => p.key === key);
+    try {
+      await channelsAPI.createTemplate({ process_key: key, label: tmpl.label, description: tmpl.desc, message, active });
+      loadData(); setEditingTemplate(null); toast.success('Modelo salvo!');
+    } catch (e) { toast.error('Erro ao salvar'); }
   };
 
   const STATUS_LABEL = { connected: 'Conectado', disconnected: 'Desconectado', connecting: 'Conectando...', waiting_qr: 'Aguardando QR Code' };
@@ -974,7 +1123,7 @@ const ConexoesPage = () => {
                     {(conn.status === 'connected' || conn.status === 'connecting') && (
                       <button onClick={() => handleDisconnect(conn.id)} className="text-sm text-red-500 hover:text-red-700 font-medium">Desconectar</button>
                     )}
-                    <button onClick={() => setConnections(c => c.filter(cn => cn.id !== conn.id))} className="p-2 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600">
+                    <button onClick={() => removeConnection(conn.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>

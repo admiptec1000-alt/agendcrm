@@ -23,6 +23,7 @@ from routes.public_routes import router as public_router
 from routes.whatsapp_routes import router as whatsapp_router
 from routes.reports_routes import router as reports_router
 from routes.notification_routes import router as notification_router
+from routes.channels_routes import router as channels_router
 
 # Import auth functions
 from auth import get_password_hash
@@ -51,6 +52,7 @@ api_router.include_router(public_router)
 api_router.include_router(whatsapp_router)
 api_router.include_router(reports_router)
 api_router.include_router(notification_router)
+api_router.include_router(channels_router)
 
 # Include the API router in the main app
 app.include_router(api_router)
@@ -103,7 +105,7 @@ async def seed_business_types(db):
         {"feature_key": k, "enabled": True}
         for k in ["calendario", "agendamentos", "clientes", "categorias", "servicos_produtos",
                    "assinaturas", "profissionais", "financeiro", "comissoes", "meu_site",
-                   "conexoes", "notificacoes", "configuracoes", "relatorios"]
+                   "conexoes", "chat_interno", "notificacoes", "configuracoes", "relatorios"]
     ]
     now = datetime.now(timezone.utc).isoformat()
     default_types = [
