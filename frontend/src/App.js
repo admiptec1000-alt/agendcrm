@@ -46,7 +46,6 @@ const AppRoutes = () => {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/admin-login" element={<AdminLoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
-      <Route path="/booking/:slug" element={<PublicBooking />} />
       <Route path="/indoor/:slug" element={<IndoorDisplay />} />
 
       {/* Protected */}
@@ -70,6 +69,7 @@ const AppRoutes = () => {
       {/* Legacy routes redirect */}
       <Route path="/crm/*" element={<Navigate to="/app" />} />
       <Route path="/scheduling/*" element={<Navigate to="/app" />} />
+      <Route path="/booking/:slug" element={<PublicBooking />} />
 
       {/* Default Route */}
       <Route
@@ -86,6 +86,9 @@ const AppRoutes = () => {
           )
         }
       />
+
+      {/* Public booking - must be LAST (catch-all for /:slug) */}
+      <Route path="/:slug" element={<PublicBooking />} />
     </Routes>
   );
 };

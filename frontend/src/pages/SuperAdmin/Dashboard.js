@@ -490,7 +490,11 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Nome da Empresa</label>
-                <input data-testid="company-name-input" value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="input-field" required />
+                <input data-testid="company-name-input" value={form.name} onChange={e => {
+                  const name = e.target.value;
+                  const slug = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+                  setForm({...form, name, subdomain: form.subdomain || slug});
+                }} className="input-field" required />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">CNPJ</label>
@@ -507,12 +511,12 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-slate-700 mb-1">Subdominio / Slug</label>
                 <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden">
-                  <span className="px-3 py-2 bg-slate-50 text-xs text-slate-500 border-r border-slate-200 whitespace-nowrap">/booking/</span>
+                  <span className="px-3 py-2 bg-slate-50 text-xs text-slate-500 border-r border-slate-200 whitespace-nowrap">{window.location.origin}/</span>
                   <input data-testid="company-subdomain-input" value={form.subdomain}
                     onChange={e => setForm({...form, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')})}
                     className="flex-1 px-3 py-2 text-sm focus:outline-none" placeholder="meu-salao" />
                 </div>
-                <p className="text-xs text-slate-500 mt-1">Usado para acesso publico: /booking/slug e /login/slug</p>
+                <p className="text-xs text-slate-500 mt-1">Usado para acesso publico: /nome-da-loja</p>
               </div>
             </div>
           </div>

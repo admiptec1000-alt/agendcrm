@@ -131,12 +131,20 @@ async def register_company(
     }
     await db.company_users.insert_one(user)
     
-    # Create booking page
-    slug = company["name"].lower().replace(" ", "").replace(".", "")[:20]
+    # Create booking page - slug from company name
+    import re, unicodedata
+    normalized = unicodedata.normalize('NFD', company["name"])
+    ascii_name = normalized.encode('ascii', 'ignore').decode('ascii')
+    slug = re.sub(r'[^a-z0-9]+', '-', ascii_name.lower()).strip('-')[:30]
+    
+    company["subdomain"] = slug
+    await db.companies.update_one({"id": company_id}, {"$set": {"subdomain": slug}})
+    
     booking_page = {
         "id": str(uuid.uuid4()),
         "company_id": company_id,
         "slug": slug,
+        "custom_domain": slug,
         "primary_color": company["theme_colors"]["primary"],
         "secondary_color": company["theme_colors"]["secondary"],
         "is_active": True,

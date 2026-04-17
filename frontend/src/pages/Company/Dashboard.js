@@ -1044,9 +1044,9 @@ const MySitePage = () => {
           <div className="p-4 bg-slate-50 rounded-lg mb-4">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Link da Sua Pagina</p>
             <div className="flex items-center gap-2">
-              <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/booking/{page.slug}</code>
-              <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/booking/${page.slug}`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-link-btn">Copiar</button>
-              <a href={`/booking/${page.slug}`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+              <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}</code>
+              <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-link-btn">Copiar</button>
+              <a href={`/${page.slug}`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
             </div>
           </div>
         )}
@@ -1060,7 +1060,7 @@ const MySitePage = () => {
             <p className="text-sm font-medium text-slate-700 mb-2">Slug (caminho na URL)</p>
             <div className="flex items-center gap-2">
               <div className="flex-1 flex items-center border border-slate-200 rounded-lg overflow-hidden">
-                <span className="px-3 py-2 bg-slate-50 text-xs text-slate-500 border-r border-slate-200 whitespace-nowrap">/booking/</span>
+                <span className="px-3 py-2 bg-slate-50 text-xs text-slate-500 border-r border-slate-200 whitespace-nowrap">{window.location.origin}/</span>
                 <input value={slugEdit} onChange={e => setSlugEdit(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} className="flex-1 px-3 py-2 text-sm focus:outline-none" data-testid="slug-input" />
               </div>
               <button onClick={handleSlugSave} disabled={saving || slugEdit === page?.slug} className="btn-primary text-sm" data-testid="save-slug-btn">Salvar</button>
@@ -1077,7 +1077,7 @@ const MySitePage = () => {
             {page?.custom_domain && (
               <div className="mt-2 p-2 bg-emerald-50 rounded border border-emerald-200">
                 <p className="text-xs text-emerald-700">Dominio configurado: <strong>{page.custom_domain}</strong></p>
-                <p className="text-xs text-emerald-600">Acesse via: /booking/{page.custom_domain}</p>
+                <p className="text-xs text-emerald-600">Acesse via: /{page.custom_domain}</p>
               </div>
             )}
           </div>
