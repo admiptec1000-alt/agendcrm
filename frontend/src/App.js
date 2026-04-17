@@ -4,14 +4,15 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Toaster } from './components/ui/sonner';
 
 // Pages
-import LoginPage from './pages/LoginPage';
 import AdminLoginPage from './pages/AdminLoginPage';
+import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import LandingPage from './pages/Public/LandingPage';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
 import CompanyDashboard from './pages/Company/Dashboard';
 import PublicBooking from './pages/Public/BookingPage';
 import IndoorDisplay from './pages/Public/IndoorDisplay';
+import CompanyLoginPage from './pages/Public/CompanyLoginPage';
 import './index.css';
 
 const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
@@ -41,54 +42,33 @@ const AppRoutes = () => {
 
   return (
     <Routes>
-      {/* Public */}
+      {/* System pages */}
       <Route path="/landing" element={<LandingPage />} />
-      <Route path="/login" element={<LoginPage />} />
       <Route path="/admin-login" element={<AdminLoginPage />} />
+      <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
-      <Route path="/indoor/:slug" element={<IndoorDisplay />} />
 
       {/* Protected */}
-      <Route
-        path="/super-admin/*"
-        element={
-          <PrivateRoute requireSuperAdmin={true}>
-            <SuperAdminDashboard />
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/app/*"
-        element={
-          <PrivateRoute>
-            <CompanyDashboard />
-          </PrivateRoute>
-        }
-      />
+      <Route path="/super-admin/*" element={<PrivateRoute requireSuperAdmin={true}><SuperAdminDashboard /></PrivateRoute>} />
+      <Route path="/app/*" element={<PrivateRoute><CompanyDashboard /></PrivateRoute>} />
 
-      {/* Legacy routes redirect */}
+      {/* Legacy redirects */}
       <Route path="/crm/*" element={<Navigate to="/app" />} />
       <Route path="/scheduling/*" element={<Navigate to="/app" />} />
       <Route path="/booking/:slug" element={<PublicBooking />} />
+      <Route path="/indoor/:slug" element={<IndoorDisplay />} />
 
-      {/* Default Route */}
-      <Route
-        path="/"
-        element={
-          isAuthenticated ? (
-            isSuperAdmin ? (
-              <Navigate to="/super-admin" />
-            ) : (
-              <Navigate to="/app" />
-            )
-          ) : (
-            <Navigate to="/landing" />
-          )
-        }
-      />
+      {/* Default */}
+      <Route path="/" element={
+        isAuthenticated
+          ? <Navigate to={isSuperAdmin ? "/super-admin" : "/app"} />
+          : <Navigate to="/landing" />
+      } />
 
-      {/* Public booking - must be LAST (catch-all for /:slug) */}
-      <Route path="/:slug" element={<PublicBooking />} />
+      {/* Company public routes: /:slug/login, /:slug/agenda, /:slug/indoor */}
+      <Route path="/:slug/login" element={<CompanyLoginPage />} />
+      <Route path="/:slug/agenda" element={<PublicBooking />} />
+      <Route path="/:slug/indoor" element={<IndoorDisplay />} />
     </Routes>
   );
 };

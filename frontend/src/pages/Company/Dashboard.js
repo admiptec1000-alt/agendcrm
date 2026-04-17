@@ -1041,12 +1041,30 @@ const MySitePage = () => {
         <h3 className="text-lg font-semibold font-heading text-slate-900 mb-2">Minha Pagina de Agendamento</h3>
         <p className="text-sm text-slate-600 mb-4">Personalize a pagina onde seus clientes fazem agendamentos</p>
         {page?.slug && (
-          <div className="p-4 bg-slate-50 rounded-lg mb-4">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Link da Sua Pagina</p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}</code>
-              <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-link-btn">Copiar</button>
-              <a href={`/${page.slug}`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+          <div className="space-y-3">
+            <div className="p-4 bg-slate-50 rounded-lg">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Agenda Publica</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}/agenda</code>
+                <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/agenda`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-link-btn">Copiar</button>
+                <a href={`/${page.slug}/agenda`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+              </div>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-lg">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Login da Empresa</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}/login</code>
+                <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/login`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-login-link-btn">Copiar</button>
+                <a href={`/${page.slug}/login`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+              </div>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-lg">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Indoor TV</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}/indoor</code>
+                <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/indoor`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-indoor-link-btn">Copiar</button>
+                <a href={`/${page.slug}/indoor`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+              </div>
             </div>
           </div>
         )}
@@ -1442,7 +1460,7 @@ const IndoorSettingsPage = () => {
           <h2 className="text-2xl font-bold font-heading text-slate-900">Indoor / TV</h2>
           <p className="text-sm text-slate-600">Configure a tela que sera exibida no salao ou clinica</p>
         </div>
-        <a href={`/indoor/${bookingPage}`} target="_blank" rel="noopener noreferrer" className="btn-primary text-sm flex items-center gap-2" data-testid="open-indoor-btn">
+        <a href={`/${bookingPage}/indoor`} target="_blank" rel="noopener noreferrer" className="btn-primary text-sm flex items-center gap-2" data-testid="open-indoor-btn">
           <Monitor className="w-4 h-4" /> Abrir Tela Indoor
         </a>
       </div>
@@ -1453,7 +1471,7 @@ const IndoorSettingsPage = () => {
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium text-slate-700 mb-1 block">Link publico da TV</label>
-              <code className="block bg-slate-50 px-3 py-2 rounded text-sm border border-slate-200">{window.location.origin}/indoor/{bookingPage}</code>
+              <code className="block bg-slate-50 px-3 py-2 rounded text-sm border border-slate-200">{window.location.origin}/{bookingPage}/indoor</code>
             </div>
             <div>
               <label className="text-sm font-medium text-slate-700 mb-1 block">Duracao do slide (segundos)</label>
