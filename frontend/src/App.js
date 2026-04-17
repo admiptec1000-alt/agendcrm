@@ -38,7 +38,8 @@ const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
 };
 
 const AppRoutes = () => {
-  const { isAuthenticated, isSuperAdmin } = useAuth();
+  const { isAuthenticated, isSuperAdmin, user } = useAuth();
+  const companySlug = user?.company?.subdomain;
 
   return (
     <Routes>
@@ -50,7 +51,11 @@ const AppRoutes = () => {
 
       {/* Protected */}
       <Route path="/super-admin/*" element={<PrivateRoute requireSuperAdmin={true}><SuperAdminDashboard /></PrivateRoute>} />
-      <Route path="/app/*" element={<PrivateRoute><CompanyDashboard /></PrivateRoute>} />
+      <Route path="/app/*" element={
+        isAuthenticated && !isSuperAdmin && companySlug
+          ? <Navigate to={`/${companySlug}/painel`} replace />
+          : <PrivateRoute><CompanyDashboard /></PrivateRoute>
+      } />
 
       {/* Legacy redirects */}
       <Route path="/crm/*" element={<Navigate to="/app" />} />
@@ -61,14 +66,17 @@ const AppRoutes = () => {
       {/* Default */}
       <Route path="/" element={
         isAuthenticated
-          ? <Navigate to={isSuperAdmin ? "/super-admin" : "/app"} />
+          ? <Navigate to={isSuperAdmin ? "/super-admin" : (companySlug ? `/${companySlug}/painel` : "/app")} />
           : <Navigate to="/landing" />
       } />
 
-      {/* Company public routes: /:slug/login, /:slug/agenda, /:slug/indoor */}
+      {/* Company public routes */}
       <Route path="/:slug/login" element={<CompanyLoginPage />} />
       <Route path="/:slug/agenda" element={<PublicBooking />} />
       <Route path="/:slug/indoor" element={<IndoorDisplay />} />
+
+      {/* Company dashboard routes - /:slug/painel/* */}
+      <Route path="/:slug/painel/*" element={<PrivateRoute><CompanyDashboard /></PrivateRoute>} />
     </Routes>
   );
 };

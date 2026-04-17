@@ -261,11 +261,68 @@ async def create_public_booking(
     }
     await db.appointments.insert_one(appointment)
     
+    # Create/update client record
+    company_id = page["company_id"]
+    existing_client = await db.clients.find_one({"company_id": company_id, "phone": data.customer_phone})
+    if not existing_client:
+        await db.clients.insert_one({
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "name": data.customer_name,
+            "phone": data.customer_phone,
+            "email": data.customer_email,
+            "total_appointments": 1,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+    else:
+        await db.clients.update_one(
+            {"id": existing_client["id"]},
+            {"$inc": {"total_appointments": 1}, "$set": {"name": data.customer_name}}
+        )
+    
     return {
         "id": appointment_id,
         "message": "Agendamento realizado com sucesso!",
         "appointment": {k: v for k, v in appointment.items() if k != "_id"}
     }
+
+
+# === MY APPOINTMENTS (public - by phone) ===
+@router.get("/booking/{slug}/my-appointments/{phone}")
+async def get_my_appointments(
+    slug: str,
+    phone: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    page = await find_booking_page(db, slug)
+    if not page:
+        raise HTTPException(status_code=404, detail="Pagina nao encontrada")
+    
+    appointments = await db.appointments.find(
+        {"company_id": page["company_id"], "customer_phone": phone},
+        {"_id": 0}
+    ).sort("date", -1).to_list(100)
+    return appointments
+
+
+@router.put("/booking/{slug}/my-appointments/{appointment_id}/cancel")
+async def cancel_my_appointment(
+    slug: str,
+    appointment_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    page = await find_booking_page(db, slug)
+    if not page:
+        raise HTTPException(status_code=404, detail="Pagina nao encontrada")
+    
+    apt = await db.appointments.find_one({"id": appointment_id, "company_id": page["company_id"]})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Agendamento nao encontrado")
+    if apt.get("status") in ["cancelado", "concluido"]:
+        raise HTTPException(status_code=400, detail="Agendamento ja finalizado")
+    
+    await db.appointments.update_one({"id": appointment_id}, {"$set": {"status": "cancelado"}})
+    return {"message": "Agendamento cancelado"}
 
 
 # === INDOOR PUBLIC DISPLAY ===

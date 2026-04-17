@@ -30,7 +30,7 @@ const CompanyLoginPage = () => {
     const result = await login({ email, password }, false);
     if (result.success) {
       toast.success('Login realizado!');
-      navigate('/app');
+      navigate(`/${slug}/painel`);
     } else {
       toast.error(result.error || 'Email ou senha incorretos');
     }

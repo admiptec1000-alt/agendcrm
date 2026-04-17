@@ -130,7 +130,9 @@ export const publicAPI = {
   createBooking: (slug, data) => axios.post(`${API_URL}/public/booking/${slug}/book`, data),
   getBusinessTypes: () => axios.get(`${API_URL}/auth/business-types`),
   lookupClient: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/client-lookup/${phone}`),
-  getIndoorDisplay: (slug) => axios.get(`${API_URL}/public/indoor/${slug}`)
+  getIndoorDisplay: (slug) => axios.get(`${API_URL}/public/indoor/${slug}`),
+  getMyAppointments: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/my-appointments/${phone}`),
+  cancelMyAppointment: (slug, appointmentId) => axios.put(`${API_URL}/public/booking/${slug}/my-appointments/${appointmentId}/cancel`),
 };
 
 // WhatsApp API

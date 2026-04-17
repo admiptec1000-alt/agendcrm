@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { publicAPI } from '../../services/api';
 import { toast } from 'sonner';
-import { Calendar, Clock, User, Phone, Mail, CheckCircle2, Star, ArrowLeft, Sparkles, Scissors } from 'lucide-react';
+import { Calendar, Clock, User, Phone, Mail, CheckCircle2, Star, ArrowLeft, Sparkles, Scissors, ClipboardList, X, Ban } from 'lucide-react';
 
 const PublicBooking = () => {
   const { slug } = useParams();
@@ -10,6 +10,7 @@ const PublicBooking = () => {
   const [pageData, setPageData] = useState(null);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
+  const [showMyAppointments, setShowMyAppointments] = useState(false);
   const [availableSlots, setAvailableSlots] = useState([]);
   const [loading, setLoading] = useState(true);
   const [clientLookup, setClientLookup] = useState(null);
@@ -130,6 +131,9 @@ const PublicBooking = () => {
               <p className="text-xs text-slate-500">Agende seu horario</p>
             </div>
           </div>
+          <button onClick={() => setShowMyAppointments(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors" style={{ color: primaryColor }} data-testid="my-appointments-btn">
+            <ClipboardList className="w-4 h-4" /> <span className="hidden sm:inline">Meus Agendamentos</span>
+          </button>
         </div>
       </header>
 
@@ -349,6 +353,94 @@ const PublicBooking = () => {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Meus Agendamentos Modal */}
+      {showMyAppointments && <MyAppointmentsModal slug={slug} primaryColor={primaryColor} onClose={() => setShowMyAppointments(false)} />}
+    </div>
+  );
+};
+
+const MyAppointmentsModal = ({ slug, primaryColor, onClose }) => {
+  const [phone, setPhone] = useState('');
+  const [appointments, setAppointments] = useState([]);
+  const [searched, setSearched] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleSearch = async () => {
+    if (phone.length < 8) { toast.error('Digite um telefone valido'); return; }
+    setLoading(true);
+    try {
+      const res = await publicAPI.getMyAppointments(slug, phone);
+      setAppointments(res.data);
+      setSearched(true);
+    } catch (e) { toast.error('Erro ao buscar'); }
+    finally { setLoading(false); }
+  };
+
+  const handleCancel = async (id) => {
+    try {
+      await publicAPI.cancelMyAppointment(slug, id);
+      setAppointments(a => a.map(apt => apt.id === id ? { ...apt, status: 'cancelado' } : apt));
+      toast.success('Agendamento cancelado!');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao cancelar'); }
+  };
+
+  const STATUS = { confirmado: { bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'Confirmado' }, pendente: { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Pendente' }, cancelado: { bg: 'bg-red-100', text: 'text-red-700', label: 'Cancelado' }, concluido: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Concluido' } };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
+      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+          <div>
+            <h3 className="text-lg font-bold font-heading">Meus Agendamentos</h3>
+            <p className="text-xs text-slate-500">Busque pelo seu numero de telefone</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5">
+          <div className="flex gap-2 mb-4">
+            <div className="relative flex-1">
+              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                placeholder="(62) 99999-0000" className="input-field pl-10" data-testid="my-apt-phone" />
+            </div>
+            <button onClick={handleSearch} disabled={loading} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ background: primaryColor }} data-testid="my-apt-search-btn">
+              {loading ? '...' : 'Buscar'}
+            </button>
+          </div>
+
+          <div className="max-h-[50vh] overflow-y-auto space-y-2">
+            {searched && appointments.length === 0 && (
+              <div className="text-center py-8">
+                <ClipboardList className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <p className="text-sm text-slate-500">Nenhum agendamento encontrado</p>
+              </div>
+            )}
+            {appointments.map(apt => {
+              const st = STATUS[apt.status] || STATUS.pendente;
+              return (
+                <div key={apt.id} className="p-4 border border-slate-200 rounded-xl" data-testid={`my-apt-${apt.id}`}>
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <p className="text-sm font-bold" style={{ color: primaryColor }}>{apt.date?.split('-').reverse().join('/')} - {apt.time}</p>
+                      <p className="text-sm font-medium text-slate-900">{apt.service_name}</p>
+                      <p className="text-xs text-slate-500">{apt.professional_name}</p>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${st.bg} ${st.text}`}>{st.label}</span>
+                  </div>
+                  {apt.price > 0 && <p className="text-xs text-slate-500">R$ {apt.price.toFixed(2)}</p>}
+                  {apt.status !== 'cancelado' && apt.status !== 'concluido' && (
+                    <button onClick={() => handleCancel(apt.id)} className="mt-2 flex items-center gap-1 text-xs text-red-500 hover:text-red-700 font-medium" data-testid={`cancel-my-apt-${apt.id}`}>
+                      <Ban className="w-3 h-3" /> Cancelar agendamento
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

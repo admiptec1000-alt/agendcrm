@@ -4,6 +4,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Hide Emergent badge */
+a#emergent-badge { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }
+
 :root {
   --primary-color: #4F46E5;
   --primary-hover: #4338CA;

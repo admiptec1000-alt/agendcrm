@@ -103,7 +103,7 @@ async def seed_business_types(db):
         {"feature_key": k, "enabled": True}
         for k in ["calendario", "agendamentos", "clientes", "categorias", "servicos_produtos",
                    "assinaturas", "profissionais", "financeiro", "comissoes", "meu_site",
-                   "notificacoes", "configuracoes", "relatorios"]
+                   "conexoes", "notificacoes", "configuracoes", "relatorios"]
     ]
     now = datetime.now(timezone.utc).isoformat()
     default_types = [

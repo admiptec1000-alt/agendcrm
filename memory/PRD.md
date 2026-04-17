@@ -2,38 +2,45 @@
 
 ## Current State
 - Super Admin: admin@agentcrm.com / admin123 → /admin-login
-- 1 Company: Boss (admin@boss.com.br / boss123) → /boss/login
+- 1 Company: Boss (admin@boss.com.br / boss123) → /boss/login → /boss/painel
 - Public booking: /boss/agenda | Indoor TV: /boss/indoor
 
 ## URL Structure
 - `/landing` - Landing page de vendas
-- `/admin-login` - Super Admin login (dark)
+- `/admin-login` - Super Admin login
 - `/:slug/login` - Login personalizado por empresa
 - `/:slug/agenda` - Pagina publica de agendamento
 - `/:slug/indoor` - Indoor TV
+- `/:slug/painel` - Painel da empresa (dashboard)
 - `/super-admin` - Painel Super Admin
-- `/app` - Painel da empresa
 
 ## Implemented Features
 - [x] JWT Auth, Landing Page, PWA
-- [x] Super Admin: Dashboard, Companies CRUD, Business Types CRUD
+- [x] Super Admin: Dashboard, Companies CRUD, Business Types CRUD, Subdomain config
 - [x] Dynamic Company Dashboard with feature-flagged sidebar
-- [x] CRM: Atendimentos, FlowBuilder, Kanban, WhatsApp (MOCK), AI Agent
-- [x] Scheduling: Services, Professionals, Subscriptions, Calendar
-- [x] CalendarPageFull modernized (calendar+sidebar, status management, view toggle)
-- [x] Menu Calendario (visual calendar) + Menu Agendamento (message scheduling)
+- [x] CRM: Atendimentos, FlowBuilder, Kanban, AI Agent
+- [x] Scheduling: Services, Professionals, Subscriptions, Calendar modernizado
+- [x] CalendarPageFull (calendar+sidebar, status management, view toggle)
+- [x] Menu Calendario + Menu Agendamento (message scheduling)
 - [x] Company-branded login pages (/:slug/login)
-- [x] Subdomain auto-generated from company name
-- [x] Indoor TV display with appointment info
-- [x] MySitePage shows 3 links (Agenda, Login, Indoor)
-- [x] Mobile responsive (Super Admin + Company Dashboard)
+- [x] URLs com subdominio (/:slug/painel ao inves de /app)
+- [x] Meus Agendamentos - busca por telefone na pagina publica + cancelamento
+- [x] Bug fix: cliente criado automaticamente ao agendar pelo publico
+- [x] Conexoes page: WhatsApp/Instagram connections + message templates com variaveis
+- [x] MySitePage: sem config de subdominio (so Super Admin), mostra 3 links
+- [x] Badge "Made with Emergent" oculta via CSS
+- [x] Indoor TV display
+- [x] Mobile responsive
 
-## Bug Fixes
-- [x] White screen on booking with empty email - fixed by removing empty email from payload
+## Mocked
+- WhatsApp/Instagram connections (frontend state only)
+- Message templates (frontend state only)
+- Stripe payments
 
 ## Backlog
 ### P0
 - [ ] WhatsApp real integration (Baileys)
+- [ ] Persist message templates in backend
 ### P1
 - [ ] Message scheduling backend persistence
 - [ ] Chat interno em tempo real

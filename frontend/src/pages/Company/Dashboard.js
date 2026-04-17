@@ -36,7 +36,7 @@ const FEATURE_META = {
   api:                { icon: 'Code',             label: 'API', group: 'Administracao' },
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
   filas_chatbot:      { icon: 'Bot',              label: 'Filas & Chatbot', group: 'CRM' },
-  conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'CRM' },
+  conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'Config Empresa' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
   agendamentos:       { icon: 'CalendarCheck',    label: 'Agendamento', group: 'Operacional' },
@@ -200,7 +200,7 @@ const PageContent = ({ page, hasFeature }) => {
     case 'tags': return <TagsPage />;
     case 'flowbuilder': return <FlowBuilderPage />;
     case 'agente_ia': return <AIAgentPage />;
-    case 'conexoes': return <WhatsAppConnectionsPage />;
+    case 'conexoes': return <ConexoesPage />;
     case 'calendario': return <CalendarPageFull />;
     case 'agendamentos': return <MessageSchedulingPage />;
     case 'clientes': return <ClientsPage />;
@@ -874,6 +874,175 @@ const CalendarPage = () => {
   );
 };
 
+
+/* ========== CONEXOES PAGE (Connections + Message Templates) ========== */
+const PROCESS_TYPES = [
+  { key: 'confirmacao', label: 'Confirmacao de Agendamento', desc: 'Enviada ao confirmar um agendamento' },
+  { key: 'lembrete', label: 'Lembrete', desc: 'Enviada antes do horario agendado' },
+  { key: 'cancelamento', label: 'Cancelamento', desc: 'Enviada ao cancelar um agendamento' },
+  { key: 'boas_vindas', label: 'Boas-vindas', desc: 'Enviada para novos clientes' },
+  { key: 'pos_atendimento', label: 'Pos-Atendimento', desc: 'Enviada apos o atendimento' },
+  { key: 'aniversario', label: 'Aniversario', desc: 'Mensagem de aniversario' },
+];
+
+const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', '{empresa}', '{valor}'];
+
+const ConexoesPage = () => {
+  const [tab, setTab] = useState('conexoes');
+  const [connections, setConnections] = useState([
+    { id: '1', type: 'whatsapp', name: 'WhatsApp Principal', status: 'disconnected', number: '' },
+  ]);
+  const [templates, setTemplates] = useState(PROCESS_TYPES.map(p => ({ ...p, message: '', active: false })));
+  const [editingTemplate, setEditingTemplate] = useState(null);
+
+  const handleConnect = (connId) => {
+    setConnections(c => c.map(cn => cn.id === connId ? { ...cn, status: 'connecting' } : cn));
+    setTimeout(() => {
+      setConnections(c => c.map(cn => cn.id === connId ? { ...cn, status: 'waiting_qr' } : cn));
+    }, 1500);
+    toast.success('Iniciando conexao...');
+  };
+
+  const handleDisconnect = (connId) => {
+    setConnections(c => c.map(cn => cn.id === connId ? { ...cn, status: 'disconnected' } : cn));
+    toast.success('Desconectado!');
+  };
+
+  const addConnection = (type) => {
+    const name = type === 'whatsapp' ? 'WhatsApp' : 'Instagram';
+    setConnections(c => [...c, { id: Date.now().toString(), type, name: `${name} ${c.length + 1}`, status: 'disconnected', number: '' }]);
+  };
+
+  const saveTemplate = (key, message, active) => {
+    setTemplates(t => t.map(tp => tp.key === key ? { ...tp, message, active } : tp));
+    setEditingTemplate(null);
+    toast.success('Modelo salvo!');
+  };
+
+  const STATUS_LABEL = { connected: 'Conectado', disconnected: 'Desconectado', connecting: 'Conectando...', waiting_qr: 'Aguardando QR Code' };
+  const STATUS_COLOR = { connected: 'bg-emerald-500', disconnected: 'bg-slate-400', connecting: 'bg-amber-500 animate-pulse', waiting_qr: 'bg-blue-500 animate-pulse' };
+
+  return (
+    <div className="animate-fade-in" data-testid="conexoes-page">
+      <h2 className="text-2xl font-bold font-heading text-slate-900 mb-1">Conexoes</h2>
+      <p className="text-sm text-slate-600 mb-6">Gerencie canais de comunicacao e mensagens automaticas</p>
+
+      <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1 mb-6 w-fit">
+        <button onClick={() => setTab('conexoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${tab==='conexoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-conexoes">Canais</button>
+        <button onClick={() => setTab('templates')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${tab==='templates'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-templates">Mensagens Modelo</button>
+      </div>
+
+      {tab === 'conexoes' && (
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <button onClick={() => addConnection('whatsapp')} className="btn-primary text-sm flex items-center gap-2" data-testid="add-whatsapp-btn">
+              <Plus className="w-4 h-4" /> WhatsApp
+            </button>
+            <button onClick={() => addConnection('instagram')} className="btn-secondary text-sm flex items-center gap-2" data-testid="add-instagram-btn">
+              <Plus className="w-4 h-4" /> Instagram
+            </button>
+          </div>
+          <div className="space-y-3">
+            {connections.map(conn => (
+              <div key={conn.id} className="card !p-5" data-testid={`conn-${conn.id}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white ${conn.type === 'whatsapp' ? 'bg-emerald-500' : 'bg-gradient-to-br from-purple-500 to-pink-500'}`}>
+                      <Phone className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{conn.name}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <div className={`w-2 h-2 rounded-full ${STATUS_COLOR[conn.status]}`} />
+                        <span className="text-xs text-slate-500">{STATUS_LABEL[conn.status]}</span>
+                      </div>
+                      {conn.number && <p className="text-xs text-slate-400 mt-0.5">{conn.number}</p>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {conn.status === 'disconnected' && (
+                      <button onClick={() => handleConnect(conn.id)} className="btn-primary text-sm" data-testid={`connect-${conn.id}`}>Conectar</button>
+                    )}
+                    {conn.status === 'waiting_qr' && (
+                      <div className="p-4 bg-white rounded-xl border-2 border-slate-200">
+                        <div className="grid grid-cols-8 gap-0.5 w-24 h-24 mx-auto">
+                          {Array.from({length: 64}).map((_,i) => <div key={`qr-${conn.id}-${i}`} className={`w-full h-full rounded-[1px] ${Math.random() > 0.5 ? 'bg-slate-800' : 'bg-white'}`} />)}
+                        </div>
+                        <p className="text-xs text-center text-slate-500 mt-2">Escaneie com seu celular</p>
+                      </div>
+                    )}
+                    {(conn.status === 'connected' || conn.status === 'connecting') && (
+                      <button onClick={() => handleDisconnect(conn.id)} className="text-sm text-red-500 hover:text-red-700 font-medium">Desconectar</button>
+                    )}
+                    <button onClick={() => setConnections(c => c.filter(cn => cn.id !== conn.id))} className="p-2 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === 'templates' && (
+        <div>
+          <p className="text-xs text-slate-500 mb-3">
+            Variaveis disponiveis: {VARIABLES.map(v => <code key={v} className="mx-0.5 px-1.5 py-0.5 bg-slate-100 rounded text-primary text-[10px] font-mono">{v}</code>)}
+          </p>
+          <div className="space-y-3">
+            {templates.map(tmpl => (
+              <div key={tmpl.key} className="card !p-5" data-testid={`template-${tmpl.key}`}>
+                {editingTemplate === tmpl.key ? (
+                  <TemplateEditor tmpl={tmpl} onSave={saveTemplate} onCancel={() => setEditingTemplate(null)} />
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="text-sm font-semibold text-slate-900">{tmpl.label}</p>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${tmpl.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {tmpl.active ? 'Ativo' : 'Inativo'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500">{tmpl.desc}</p>
+                      {tmpl.message && <p className="text-xs text-slate-700 mt-1 bg-slate-50 rounded p-2 line-clamp-2">{tmpl.message}</p>}
+                    </div>
+                    <button onClick={() => setEditingTemplate(tmpl.key)} className="btn-secondary text-sm ml-3" data-testid={`edit-template-${tmpl.key}`}>
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const TemplateEditor = ({ tmpl, onSave, onCancel }) => {
+  const [message, setMessage] = useState(tmpl.message || '');
+  const [active, setActive] = useState(tmpl.active);
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-semibold text-slate-900">{tmpl.label}</p>
+      <textarea value={message} onChange={e => setMessage(e.target.value)} rows={3}
+        className="input-field text-sm" placeholder="Ola {nome}, seu agendamento de {servico} foi confirmado para {data} as {hora}." data-testid={`template-msg-${tmpl.key}`} />
+      <div className="flex items-center justify-between">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="w-4 h-4 text-primary rounded" />
+          <span className="text-sm text-slate-700">Ativo</span>
+        </label>
+        <div className="flex gap-2">
+          <button onClick={onCancel} className="btn-secondary text-sm">Cancelar</button>
+          <button onClick={() => onSave(tmpl.key, message, active)} className="btn-primary text-sm" data-testid={`save-template-${tmpl.key}`}>Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ========== SERVICES ========== */
 const ServicesPage = () => {
   const [items, setItems] = useState([]);
@@ -1016,16 +1185,12 @@ const MySitePage = () => {
   const [page, setPage] = useState(null);
   const [uploading, setUploading] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [slugEdit, setSlugEdit] = useState('');
-  const [domainEdit, setDomainEdit] = useState('');
   const logoRef = useRef(null);
   const bannerRef = useRef(null);
 
   useEffect(() => {
     schedulingAPI.getBookingPage().then(r => {
       setPage(r.data);
-      setSlugEdit(r.data?.slug || '');
-      setDomainEdit(r.data?.custom_domain || '');
     }).catch(() => {});
   }, []);
 
@@ -1054,37 +1219,6 @@ const MySitePage = () => {
       const updated = await schedulingAPI.getBookingPage();
       setPage(updated.data);
       toast.success('Cor atualizada!');
-    } catch (e) {
-      toast.error('Erro ao salvar');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleSlugSave = async () => {
-    if (!slugEdit.trim()) return;
-    setSaving(true);
-    try {
-      await schedulingAPI.updateBookingPage({ slug: slugEdit.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') });
-      const updated = await schedulingAPI.getBookingPage();
-      setPage(updated.data);
-      setSlugEdit(updated.data.slug);
-      toast.success('Slug atualizado!');
-    } catch (e) {
-      toast.error('Erro ao salvar');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDomainSave = async () => {
-    setSaving(true);
-    try {
-      await schedulingAPI.updateBookingPage({ custom_domain: domainEdit.trim() || null });
-      const updated = await schedulingAPI.getBookingPage();
-      setPage(updated.data);
-      setDomainEdit(updated.data.custom_domain || '');
-      toast.success('Dominio atualizado!');
     } catch (e) {
       toast.error('Erro ao salvar');
     } finally {
@@ -1127,38 +1261,6 @@ const MySitePage = () => {
             </div>
           </div>
         )}
-      </div>
-
-      {/* Subdomain / Custom Domain */}
-      <div className="card mb-6">
-        <h3 className="font-semibold text-slate-900 mb-4">Endereco da Pagina</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <p className="text-sm font-medium text-slate-700 mb-2">Slug (caminho na URL)</p>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 flex items-center border border-slate-200 rounded-lg overflow-hidden">
-                <span className="px-3 py-2 bg-slate-50 text-xs text-slate-500 border-r border-slate-200 whitespace-nowrap">{window.location.origin}/</span>
-                <input value={slugEdit} onChange={e => setSlugEdit(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} className="flex-1 px-3 py-2 text-sm focus:outline-none" data-testid="slug-input" />
-              </div>
-              <button onClick={handleSlugSave} disabled={saving || slugEdit === page?.slug} className="btn-primary text-sm" data-testid="save-slug-btn">Salvar</button>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">Use letras minusculas, numeros e hifens</p>
-          </div>
-          <div>
-            <p className="text-sm font-medium text-slate-700 mb-2">Dominio Personalizado</p>
-            <div className="flex items-center gap-2">
-              <input value={domainEdit} onChange={e => setDomainEdit(e.target.value)} placeholder="meusite.com.br" className="input-field flex-1" data-testid="domain-input" />
-              <button onClick={handleDomainSave} disabled={saving} className="btn-primary text-sm" data-testid="save-domain-btn">Salvar</button>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">Configure um CNAME apontando para esta pagina. Apos configurar no seu provedor DNS, salve aqui.</p>
-            {page?.custom_domain && (
-              <div className="mt-2 p-2 bg-emerald-50 rounded border border-emerald-200">
-                <p className="text-xs text-emerald-700">Dominio configurado: <strong>{page.custom_domain}</strong></p>
-                <p className="text-xs text-emerald-600">Acesse via: /{page.custom_domain}</p>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* Identity Section */}
