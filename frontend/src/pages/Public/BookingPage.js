@@ -69,11 +69,15 @@ const PublicBooking = () => {
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      await publicAPI.createBooking(slug, formData);
+      const payload = { ...formData };
+      if (!payload.customer_email) delete payload.customer_email;
+      await publicAPI.createBooking(slug, payload);
       setBookingDone(true);
       toast.success('Agendamento realizado!');
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Erro ao agendar');
+      const detail = e.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : 'Erro ao agendar';
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }

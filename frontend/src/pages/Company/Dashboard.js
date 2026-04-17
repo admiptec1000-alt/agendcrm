@@ -38,8 +38,8 @@ const FEATURE_META = {
   filas_chatbot:      { icon: 'Bot',              label: 'Filas & Chatbot', group: 'CRM' },
   conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'CRM' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
-  calendario:         { icon: 'Calendar',         label: 'Agenda', group: 'Operacional' },
-  agendamentos:       { icon: 'CalendarCheck',    label: 'Agendamentos', group: 'Operacional' },
+  calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
+  agendamentos:       { icon: 'CalendarCheck',    label: 'Agendamento', group: 'Operacional' },
   clientes:           { icon: 'UserCheck',        label: 'Clientes / Leads', group: 'Operacional' },
   categorias:         { icon: 'FolderOpen',       label: 'Categorias', group: 'Catalogo' },
   servicos_produtos:  { icon: 'Scissors',         label: 'Servicos e Produtos', group: 'Catalogo' },
@@ -202,7 +202,7 @@ const PageContent = ({ page, hasFeature }) => {
     case 'agente_ia': return <AIAgentPage />;
     case 'conexoes': return <WhatsAppConnectionsPage />;
     case 'calendario': return <CalendarPageFull />;
-    case 'agendamentos': return <AppointmentsPage />;
+    case 'agendamentos': return <MessageSchedulingPage />;
     case 'clientes': return <ClientsPage />;
     case 'servicos_produtos': return <ServicesPageFull />;
     case 'profissionais': return <ProfessionalsPageFull />;
@@ -756,37 +756,96 @@ const WhatsAppPage = () => {
 };
 
 /* ========== APPOINTMENTS ========== */
-const AppointmentsPage = () => {
-  const [items, setItems] = useState([]);
-  useEffect(() => { schedulingAPI.getAppointments().then(r => setItems(r.data)).catch(() => {}); }, []);
+const MessageSchedulingPage = () => {
+  const [messages, setMessages] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState({ recipient: '', channel: 'whatsapp', message: '', scheduled_at: '', status: 'pendente' });
+
+  const handleSave = () => {
+    if (!form.recipient || !form.message || !form.scheduled_at) { toast.error('Preencha todos os campos'); return; }
+    setMessages(m => [...m, { ...form, id: Date.now().toString(), created_at: new Date().toISOString() }]);
+    setShowModal(false);
+    setForm({ recipient: '', channel: 'whatsapp', message: '', scheduled_at: '', status: 'pendente' });
+    toast.success('Mensagem agendada!');
+  };
+
   return (
-    <div className="animate-fade-in" data-testid="appointments-page">
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-slate-600 text-sm">{items.length} agendamentos</p>
+    <div className="animate-fade-in" data-testid="message-scheduling-page">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Agendamento de Mensagens</h2>
+          <p className="text-sm text-slate-600">Agende envios de mensagens via WhatsApp e outros canais</p>
+        </div>
+        <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2" data-testid="new-msg-schedule-btn">
+          <Plus className="w-4 h-4" /> Agendar Mensagem
+        </button>
       </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Total</p><p className="text-xl font-bold font-heading">{messages.length}</p></div>
+        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Pendentes</p><p className="text-xl font-bold font-heading text-amber-600">{messages.filter(m => m.status === 'pendente').length}</p></div>
+        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Enviadas</p><p className="text-xl font-bold font-heading text-emerald-600">{messages.filter(m => m.status === 'enviada').length}</p></div>
+        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Canceladas</p><p className="text-xl font-bold font-heading text-red-600">{messages.filter(m => m.status === 'cancelada').length}</p></div>
+      </div>
+
       <div className="card">
-        <table className="w-full">
-          <thead><tr className="border-b border-slate-200">
-            <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Cliente</th>
-            <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Servico</th>
-            <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Profissional</th>
-            <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Data</th>
-            <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Hora</th>
-            <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Status</th>
-          </tr></thead>
-          <tbody>{items.map(a => (
-            <tr key={a.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
-              <td className="py-2 px-3 font-medium">{a.customer_name}</td>
-              <td className="py-2 px-3 text-slate-600">{a.service_name}</td>
-              <td className="py-2 px-3 text-slate-600">{a.professional_name}</td>
-              <td className="py-2 px-3 text-slate-600">{a.date}</td>
-              <td className="py-2 px-3 font-medium text-primary">{a.time}</td>
-              <td className="py-2 px-3"><StatusBadge s={a.status} /></td>
-            </tr>
-          ))}</tbody>
-        </table>
-        {items.length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhum agendamento</p>}
+        {messages.length === 0 ? (
+          <div className="text-center py-16">
+            <CalendarCheck className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+            <p className="text-slate-500 text-sm">Nenhuma mensagem agendada</p>
+            <p className="text-slate-400 text-xs mt-1">Clique em "Agendar Mensagem" para comecar</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {messages.map(msg => (
+              <div key={msg.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${msg.channel === 'whatsapp' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
+                    <Phone className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">{msg.recipient}</p>
+                    <p className="text-xs text-slate-500 truncate">{msg.message}</p>
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0 ml-3">
+                  <p className="text-xs font-medium text-primary">{new Date(msg.scheduled_at).toLocaleString('pt-BR')}</p>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${msg.status === 'pendente' ? 'bg-amber-100 text-amber-700' : msg.status === 'enviada' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{msg.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <h3 className="text-lg font-bold font-heading">Agendar Mensagem</h3>
+              <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Destinatario (telefone)</label>
+                <input value={form.recipient} onChange={e => setForm({...form, recipient: e.target.value})} placeholder="(62) 99999-0000" className="input-field" data-testid="msg-recipient" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Canal</label>
+                <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field">
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="sms">SMS</option>
+                  <option value="email">Email</option>
+                </select></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Mensagem</label>
+                <textarea value={form.message} onChange={e => setForm({...form, message: e.target.value})} rows={3} className="input-field" placeholder="Digite a mensagem..." data-testid="msg-content" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Data/Hora do Envio</label>
+                <input type="datetime-local" value={form.scheduled_at} onChange={e => setForm({...form, scheduled_at: e.target.value})} className="input-field" data-testid="msg-schedule-date" /></div>
+            </div>
+            <div className="flex justify-end gap-2 p-5 border-t border-slate-200">
+              <button onClick={() => setShowModal(false)} className="btn-secondary text-sm">Cancelar</button>
+              <button onClick={handleSave} className="btn-primary text-sm" data-testid="save-msg-schedule-btn">Agendar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

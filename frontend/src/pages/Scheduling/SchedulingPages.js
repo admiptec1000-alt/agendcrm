@@ -560,11 +560,12 @@ export const SubscriptionsPageFull = () => {
   );
 };
 
-/* ========== CALENDAR PAGE (Calendar + List views) ========== */
+/* ========== CALENDAR PAGE (Modern Calendar + Agenda List) ========== */
 export const CalendarPageFull = () => {
   const [appointments, setAppointments] = useState([]);
-  const [view, setView] = useState('calendar'); // 'calendar' | 'list'
+  const [view, setView] = useState('calendar');
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDay, setSelectedDay] = useState(null);
 
   useEffect(() => { load(); }, []);
   const load = async () => { const r = await schedulingAPI.getAppointments(); setAppointments(r.data); };
@@ -582,72 +583,134 @@ export const CalendarPageFull = () => {
 
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-  const todayApts = useMemo(() => appointments.filter(a => a.date === todayStr), [appointments, todayStr]);
+  const todayApts = useMemo(() => appointments.filter(a => a.date === todayStr).sort((a,b) => a.time.localeCompare(b.time)), [appointments, todayStr]);
+
+  const selectedDayApts = useMemo(() => {
+    if (!selectedDay) return [];
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(selectedDay).padStart(2,'0')}`;
+    return appointments.filter(a => a.date === dateStr).sort((a,b) => a.time.localeCompare(b.time));
+  }, [selectedDay, appointments, year, month]);
+
+  const upcomingApts = useMemo(() => appointments.filter(a => a.date >= todayStr).sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time)), [appointments, todayStr]);
+
+  const handleStatusChange = async (id, newStatus) => {
+    try {
+      await schedulingAPI.updateAppointment(id, { status: newStatus });
+      toast.success('Status atualizado!');
+      load();
+    } catch (e) { toast.error('Erro ao atualizar'); }
+  };
+
+  const STATUS_MAP = { confirmado: { bg: 'bg-emerald-500', text: 'Confirmado' }, pendente: { bg: 'bg-amber-500', text: 'Pendente' }, concluido: { bg: 'bg-blue-500', text: 'Concluido' }, cancelado: { bg: 'bg-red-500', text: 'Cancelado' } };
+
+  const AppointmentCard = ({ a, compact = false }) => (
+    <div className="group relative flex items-stretch gap-3 p-3 bg-white rounded-xl border border-slate-100 hover:border-slate-200 hover:shadow-sm transition-all" data-testid={`apt-card-${a.id}`}>
+      <div className={`w-1 rounded-full flex-shrink-0 ${STATUS_MAP[a.status]?.bg || 'bg-slate-300'}`} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-bold text-primary tabular-nums">{a.time}</span>
+          {!compact && <span className="text-xs text-slate-400">{a.date?.split('-').reverse().join('/')}</span>}
+        </div>
+        <p className="text-sm font-semibold text-slate-900 truncate">{a.customer_name}</p>
+        <p className="text-xs text-slate-500 truncate">{a.service_name} {a.professional_name ? `• ${a.professional_name}` : ''}</p>
+        {a.customer_phone && <p className="text-xs text-slate-400 mt-0.5">{a.customer_phone}</p>}
+      </div>
+      <div className="flex flex-col items-end justify-between flex-shrink-0">
+        <span className={`text-[10px] px-2 py-0.5 rounded-full text-white font-medium ${STATUS_MAP[a.status]?.bg || 'bg-slate-400'}`}>{STATUS_MAP[a.status]?.text || a.status}</span>
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {a.status === 'pendente' && <button onClick={() => handleStatusChange(a.id, 'confirmado')} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200" data-testid={`confirm-apt-${a.id}`}>Confirmar</button>}
+          {a.status === 'confirmado' && <button onClick={() => handleStatusChange(a.id, 'concluido')} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200">Concluir</button>}
+          {a.status !== 'cancelado' && a.status !== 'concluido' && <button onClick={() => handleStatusChange(a.id, 'cancelado')} className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200">Cancelar</button>}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="animate-fade-in" data-testid="calendar-full-page">
       <div className="flex items-center justify-between mb-6">
-        <div><h2 className="text-2xl font-bold font-heading text-slate-900">Agenda</h2><p className="text-sm text-slate-600">{appointments.length} agendamentos total</p></div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setView('calendar')} className={`p-2 rounded-lg ${view==='calendar'?'bg-primary text-white':'bg-slate-100 text-slate-600'}`} data-testid="view-calendar"><Grid3X3 className="w-4 h-4" /></button>
-          <button onClick={() => setView('list')} className={`p-2 rounded-lg ${view==='list'?'bg-primary text-white':'bg-slate-100 text-slate-600'}`} data-testid="view-list"><List className="w-4 h-4" /></button>
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Calendario</h2>
+          <p className="text-sm text-slate-600">{appointments.length} agendamentos • {todayApts.length} hoje</p>
+        </div>
+        <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1">
+          <button onClick={() => setView('calendar')} className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view==='calendar'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="view-calendar">
+            <Grid3X3 className="w-4 h-4 inline mr-1" />Calendario
+          </button>
+          <button onClick={() => setView('list')} className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view==='list'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="view-list">
+            <List className="w-4 h-4 inline mr-1" />Agenda
+          </button>
         </div>
       </div>
 
       {view === 'calendar' ? (
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <button onClick={() => setCurrentDate(new Date(year, month-1, 1))} className="p-2 rounded-lg hover:bg-slate-100"><ChevronLeft className="w-5 h-5" /></button>
-            <h3 className="text-lg font-semibold font-heading capitalize">{monthName}</h3>
-            <button onClick={() => setCurrentDate(new Date(year, month+1, 1))} className="p-2 rounded-lg hover:bg-slate-100"><ChevronRight className="w-5 h-5" /></button>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 card">
+            <div className="flex items-center justify-between mb-5">
+              <button onClick={() => setCurrentDate(new Date(year, month-1, 1))} className="p-2 rounded-lg hover:bg-slate-100"><ChevronLeft className="w-5 h-5" /></button>
+              <h3 className="text-lg font-semibold font-heading capitalize">{monthName}</h3>
+              <button onClick={() => setCurrentDate(new Date(year, month+1, 1))} className="p-2 rounded-lg hover:bg-slate-100"><ChevronRight className="w-5 h-5" /></button>
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {['Dom','Seg','Ter','Qua','Qui','Sex','Sab'].map(d => <div key={d} className="text-center text-[11px] font-bold text-slate-400 py-2 uppercase">{d}</div>)}
+              {Array.from({length: firstDay}).map((_,i) => <div key={`e-${i}`} />)}
+              {Array.from({length: daysInMonth}).map((_,i) => {
+                const day = i + 1;
+                const apts = getAptsForDay(day);
+                const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+                const isSelected = day === selectedDay;
+                return (
+                  <button key={day} onClick={() => setSelectedDay(day === selectedDay ? null : day)}
+                    className={`min-h-[72px] p-1.5 rounded-lg border text-xs transition-all text-left ${isSelected ? 'border-primary bg-primary/10 ring-1 ring-primary' : isToday ? 'border-primary/50 bg-primary/5' : 'border-slate-100 hover:bg-slate-50'}`}>
+                    <p className={`font-bold mb-1 ${isToday ? 'text-primary' : isSelected ? 'text-primary' : 'text-slate-700'}`}>{day}</p>
+                    {apts.slice(0,2).map(a => (
+                      <div key={a.id} className={`px-1 py-0.5 rounded text-[10px] mb-0.5 truncate font-medium ${a.status==='confirmado'?'bg-emerald-100 text-emerald-700':a.status==='pendente'?'bg-amber-100 text-amber-700':'bg-blue-100 text-blue-700'}`}>
+                        {a.time} {a.customer_name?.split(' ')[0]}
+                      </div>
+                    ))}
+                    {apts.length > 2 && <p className="text-[10px] text-primary font-medium">+{apts.length-2}</p>}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <div className="grid grid-cols-7 gap-1">
-            {['Dom','Seg','Ter','Qua','Qui','Sex','Sab'].map(d => <div key={d} className="text-center text-xs font-bold text-slate-400 py-2">{d}</div>)}
-            {Array.from({length: firstDay}).map((_,i) => <div key={`e-${i}`} />)}
-            {Array.from({length: daysInMonth}).map((_,i) => {
-              const day = i + 1;
-              const apts = getAptsForDay(day);
-              const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-              return (
-                <div key={day} className={`min-h-[80px] p-1.5 rounded-lg border text-xs transition-all ${isToday ? 'border-primary bg-primary/5' : 'border-slate-100 hover:bg-slate-50'}`}>
-                  <p className={`font-bold mb-1 ${isToday ? 'text-primary' : 'text-slate-700'}`}>{day}</p>
-                  {apts.slice(0,2).map(a => (
-                    <div key={a.id} className={`px-1 py-0.5 rounded text-[10px] mb-0.5 truncate ${a.status==='confirmado'?'bg-emerald-100 text-emerald-700':'bg-blue-100 text-blue-700'}`}>
-                      {a.time} {a.customer_name?.split(' ')[0]}
-                    </div>
-                  ))}
-                  {apts.length > 2 && <p className="text-[10px] text-slate-400">+{apts.length-2} mais</p>}
-                </div>
-              );
-            })}
+
+          {/* Sidebar - selected day or today */}
+          <div className="card">
+            <h3 className="font-semibold text-slate-900 mb-1">
+              {selectedDay ? `Dia ${selectedDay}` : 'Hoje'}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">{selectedDay ? selectedDayApts.length : todayApts.length} agendamentos</p>
+            <div className="space-y-2">
+              {(selectedDay ? selectedDayApts : todayApts).length === 0 && <p className="text-sm text-slate-400 py-8 text-center">Nenhum agendamento</p>}
+              {(selectedDay ? selectedDayApts : todayApts).map(a => <AppointmentCard key={a.id} a={a} compact />)}
+            </div>
           </div>
         </div>
       ) : (
-        <div className="card">
-          <h3 className="font-semibold text-slate-900 mb-4">Hoje ({todayStr})</h3>
-          <div className="space-y-2">
-            {todayApts.length === 0 && <p className="text-sm text-slate-500 py-4 text-center">Nenhum agendamento hoje</p>}
-            {todayApts.sort((a,b) => a.time.localeCompare(b.time)).map(a => (
-              <div key={a.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <span className="text-lg font-bold text-primary tabular-nums w-14">{a.time}</span>
-                  <div><p className="font-medium text-sm">{a.customer_name}</p><p className="text-xs text-slate-500">{a.service_name} - {a.professional_name}</p></div>
-                </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${a.status==='confirmado'?'bg-emerald-100 text-emerald-700':a.status==='pendente'?'bg-amber-100 text-amber-700':'bg-slate-100 text-slate-600'}`}>{a.status}</span>
-              </div>
-            ))}
+        <div className="space-y-6">
+          {/* Today section */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+              <h3 className="font-semibold text-slate-900">Hoje • {todayStr.split('-').reverse().join('/')}</h3>
+              <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{todayApts.length}</span>
+            </div>
+            {todayApts.length === 0 ? (
+              <div className="card text-center py-8"><p className="text-sm text-slate-400">Nenhum agendamento para hoje</p></div>
+            ) : (
+              <div className="space-y-2">{todayApts.map(a => <AppointmentCard key={a.id} a={a} compact />)}</div>
+            )}
           </div>
-          <h3 className="font-semibold text-slate-900 mt-6 mb-4">Todos os Agendamentos</h3>
-          <div className="space-y-2">
-            {appointments.sort((a,b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time)).map(a => (
-              <div key={a.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <div className="text-center w-14"><p className="text-xs text-slate-400">{a.date?.split('-').reverse().join('/')}</p><p className="text-sm font-bold text-primary">{a.time}</p></div>
-                  <div><p className="font-medium text-sm">{a.customer_name}</p><p className="text-xs text-slate-500">{a.service_name}</p></div>
-                </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${a.status==='confirmado'?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-600'}`}>{a.status}</span>
-              </div>
-            ))}
+
+          {/* Upcoming */}
+          <div>
+            <h3 className="font-semibold text-slate-900 mb-3">Proximos agendamentos</h3>
+            {upcomingApts.length === 0 ? (
+              <div className="card text-center py-8"><p className="text-sm text-slate-400">Nenhum agendamento futuro</p></div>
+            ) : (
+              <div className="space-y-2">{upcomingApts.map(a => <AppointmentCard key={a.id} a={a} />)}</div>
+            )}
           </div>
         </div>
       )}
