@@ -187,7 +187,7 @@ const AtendimentosPage = () => {
                   </p>
                   <div className="flex items-center gap-1 flex-wrap">
                     {ticket.tags?.map((tag, i) => (
-                      <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">{tag}</span>
+                      <span key={`tag-${tag}-${i}`} className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">{tag}</span>
                     ))}
                     {ticket.status && STATUS_COLORS[ticket.status] && (
                       <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${STATUS_COLORS[ticket.status].bg} ${STATUS_COLORS[ticket.status].text}`}>
@@ -246,7 +246,7 @@ const AtendimentosPage = () => {
               <Tag className="w-3 h-3 text-slate-400" />
               <span className="text-[10px] text-slate-400">Tags:</span>
               {(selectedTicket.tags?.length > 0 ? selectedTicket.tags : ['Sem tags']).map((t, i) => (
-                <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-white/80 text-slate-600">{t}</span>
+                <span key={`tag-${t}-${i}`} className="text-[10px] px-2 py-0.5 rounded-full bg-white/80 text-slate-600">{t}</span>
               ))}
             </div>
 
@@ -355,7 +355,7 @@ const AtendimentosPage = () => {
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Tags</p>
               <div className="flex flex-wrap gap-1.5">
                 {(selectedTicket.tags?.length > 0 ? selectedTicket.tags : []).map((t, i) => (
-                  <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">{t}</span>
+                  <span key={`dtag-${t}-${i}`} className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">{t}</span>
                 ))}
                 <button className="text-xs px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-slate-400 hover:border-primary hover:text-primary transition-colors">+ Tag</button>
               </div>

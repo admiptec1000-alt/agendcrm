@@ -227,7 +227,7 @@ const PublicBooking = () => {
                         <span className="text-xs text-slate-500">{prof.rating || 5.0}</span>
                       </div>
                       {prof.specialties?.length > 0 && (
-                        <div className="flex gap-1 mt-1 flex-wrap">{prof.specialties.slice(0, 3).map((s, i) => <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{s}</span>)}</div>
+                        <div className="flex gap-1 mt-1 flex-wrap">{prof.specialties.slice(0, 3).map((s, i) => <span key={`spec-${s}-${i}`} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{s}</span>)}</div>
                       )}
                     </div>
                   </button>

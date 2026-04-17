@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { schedulingAPI, uploadAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
@@ -76,7 +76,7 @@ export const ProfessionalsPageFull = () => {
                 </button>
               </div>
               <div className="flex flex-wrap gap-1.5 mb-3">
-                {(prof.specialties || []).slice(0, 3).map((s, i) => <span key={i} className="text-xs px-2 py-0.5 rounded-full border border-primary/30 text-primary">{s}</span>)}
+                {(prof.specialties || []).slice(0, 3).map((s, i) => <span key={`spec-${s}-${i}`} className="text-xs px-2 py-0.5 rounded-full border border-primary/30 text-primary">{s}</span>)}
               </div>
               <div className="space-y-1 mb-3 text-sm text-slate-600">
                 <div className="flex items-center gap-2"><Phone className="w-3.5 h-3.5" />{prof.phone || '-'}</div>
@@ -237,7 +237,7 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {form.specialties.map((s,i) => (
-                    <span key={i} className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary flex items-center gap-1">
+                    <span key={`spec-${s}-${i}`} className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary flex items-center gap-1">
                       {s} <button onClick={() => setForm({...form, specialties: form.specialties.filter((_,j)=>j!==i)})}><X className="w-3 h-3" /></button>
                     </span>
                   ))}
@@ -323,10 +323,10 @@ export const ServicesPageFull = () => {
     setServices(s.data); setCategories(c.data);
   };
 
-  const stats = { total: services.length, active: services.filter(s=>s.is_active).length,
+  const stats = useMemo(() => ({ total: services.length, active: services.filter(s=>s.is_active).length,
     avg_price: services.length ? services.reduce((a,s)=>a+(s.price||0),0)/services.length : 0,
-    avg_duration: services.length ? Math.round(services.reduce((a,s)=>a+(s.duration||0),0)/services.length) : 0 };
-  const filtered = services.filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
+    avg_duration: services.length ? Math.round(services.reduce((a,s)=>a+(s.duration||0),0)/services.length) : 0 }), [services]);
+  const filtered = useMemo(() => services.filter(s => s.name.toLowerCase().includes(search.toLowerCase())), [services, search]);
 
   return (
     <div className="animate-fade-in" data-testid="services-full-page">
@@ -575,14 +575,14 @@ export const CalendarPageFull = () => {
   const firstDay = new Date(year, month, 1).getDay();
   const monthName = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
-  const getAptsForDay = (day) => {
+  const getAptsForDay = useCallback((day) => {
     const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     return appointments.filter(a => a.date === dateStr);
-  };
+  }, [appointments, year, month]);
 
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-  const todayApts = appointments.filter(a => a.date === todayStr);
+  const todayApts = useMemo(() => appointments.filter(a => a.date === todayStr), [appointments, todayStr]);
 
   return (
     <div className="animate-fade-in" data-testid="calendar-full-page">

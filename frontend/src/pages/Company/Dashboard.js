@@ -631,7 +631,7 @@ const AIAgentPage = () => {
       <div className="flex-1 overflow-y-auto space-y-3 mb-4">
         {messages.length === 0 && <p className="text-center text-sm text-slate-400 mt-20">Envie uma mensagem para conversar com o Agente IA</p>}
         {messages.map((m, i) => (
-          <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={`msg-${i}-${m.role}`} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[70%] rounded-xl px-4 py-2.5 text-sm ${m.role === 'user' ? 'bg-primary text-white' : 'bg-slate-100 text-slate-800'}`}>{m.content}</div>
           </div>
         ))}
@@ -703,7 +703,7 @@ const WhatsAppPage = () => {
                 {/* Simulated QR pattern */}
                 <div className="grid grid-cols-8 gap-0.5 p-4">
                   {Array.from({length: 64}).map((_, i) => (
-                    <div key={i} className={`w-4 h-4 rounded-sm ${Math.random() > 0.5 ? 'bg-slate-800' : 'bg-white'}`} />
+                    <div key={`qr-${i}`} className={`w-4 h-4 rounded-sm ${Math.random() > 0.5 ? 'bg-slate-800' : 'bg-white'}`} />
                   ))}
                 </div>
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -1472,7 +1472,7 @@ const IndoorSettingsPage = () => {
           </div>
           <div className="space-y-2">
             {(settings?.media_links || []).map((link, i) => (
-              <div key={i} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+              <div key={`media-${i}-${link.substring(0, 20)}`} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
                 <span className="text-xs text-slate-600 truncate flex-1">{link}</span>
                 <button onClick={() => removeMedia(i)} className="text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button>
               </div>
@@ -1620,7 +1620,7 @@ const OnboardingWizard = ({ onClose }) => {
           {/* Step indicator */}
           <div className="flex items-center justify-center mb-6">
             {steps.map((_, i) => (
-              <React.Fragment key={i}>
+              <React.Fragment key={`step-${i}`}>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all ${
                   i <= step ? 'bg-primary text-white' : 'bg-slate-200 text-slate-400'
                 }`}>

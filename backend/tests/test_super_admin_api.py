@@ -9,11 +9,11 @@ import uuid
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
-# Test credentials
-SUPER_ADMIN_EMAIL = "admin@agentcrm.com"
-SUPER_ADMIN_PASSWORD = "admin123"
-REGULAR_USER_EMAIL = "maria@teste.com"
-REGULAR_USER_PASSWORD = "senha123"
+# Test credentials - loaded from test_credentials.md or fallback
+SUPER_ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@agentcrm.com")
+SUPER_ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "admin123")
+REGULAR_USER_EMAIL = os.environ.get("TEST_USER_EMAIL", "maria@teste.com")
+REGULAR_USER_PASSWORD = os.environ.get("TEST_USER_PASSWORD", "senha123")
 
 
 class TestAdminLogin:

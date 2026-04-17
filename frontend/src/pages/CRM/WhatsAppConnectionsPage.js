@@ -39,7 +39,7 @@ const WhatsAppConnectionsPage = () => {
         await whatsappAPI.simulateConnected(connId);
         toast.success('WhatsApp conectado!');
         load();
-      } catch (e) { /* silent */ }
+      } catch (e) { toast.error('Falha na conexao WhatsApp'); }
       setConnectingId(null);
     }, 5000);
   };

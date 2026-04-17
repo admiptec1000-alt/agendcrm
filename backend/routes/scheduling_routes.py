@@ -39,15 +39,15 @@ async def list_appointments(
     db: AsyncIOMotorDatabase = Depends(get_database),
     date: str = None,
     professional_id: str = None,
-    status: str = None
+    status_filter: str = None
 ):
     query = {"company_id": user["company_id"]}
     if date:
         query["date"] = date
     if professional_id:
         query["professional_id"] = professional_id
-    if status:
-        query["status"] = status
+    if status_filter:
+        query["status"] = status_filter
     appointments = await db.appointments.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
     return appointments
 
@@ -710,7 +710,66 @@ async def update_indoor_settings(
         })
     return await db.indoor_settings.find_one({"company_id": company_id}, {"_id": 0})
 
-# === SMART AVAILABILITY (considering business hours, professional hours, suspensions, duration) ===
+# === SMART AVAILABILITY HELPERS ===
+def parse_date_to_day_key(date_str: str) -> str:
+    """Convert date string to Portuguese day key."""
+    day_map = {0: "seg", 1: "ter", 2: "qua", 3: "qui", 4: "sex", 5: "sab", 6: "dom"}
+    from datetime import date as date_type
+    parts = date_str.split("-")
+    d = date_type(int(parts[0]), int(parts[1]), int(parts[2]))
+    return day_map[d.weekday()]
+
+
+def is_professional_suspended(prof: dict, date_str: str) -> bool:
+    """Check if a professional is suspended on given date."""
+    return any(sus["start_date"] <= date_str <= sus["end_date"] for sus in prof.get("suspensions", []))
+
+
+def get_working_hours(prof: dict, day_key: str, biz_start: str, biz_end: str):
+    """Get professional working hours, falling back to business hours."""
+    prof_hours = (prof.get("working_hours") or {}).get(day_key)
+    if prof_hours:
+        if not prof_hours.get("active", True):
+            return None
+        return prof_hours["start"], prof_hours["end"]
+    return biz_start, biz_end
+
+
+def calculate_available_slots(start: str, end: str, duration: int, booked: list) -> set:
+    """Generate available time slots given start/end hours, duration and booked intervals."""
+    start_h, start_m = map(int, start.split(":"))
+    end_h, end_m = map(int, end.split(":"))
+    start_min = start_h * 60 + start_m
+    end_min = end_h * 60 + end_m
+    slots = set()
+    current = start_min
+    while current + duration <= end_min:
+        slot_end = current + duration
+        conflict = any(not (slot_end <= bs or current >= be) for bs, be in booked)
+        if not conflict:
+            h, m = divmod(current, 60)
+            slots.add(f"{h:02d}:{m:02d}")
+        current += 30
+    return slots
+
+
+async def get_booked_intervals(db, company_id: str, professional_id: str, date_str: str) -> list:
+    """Get booked time intervals for a professional on a date."""
+    existing = await db.appointments.find({
+        "company_id": company_id,
+        "professional_id": professional_id,
+        "date": date_str,
+        "status": {"$nin": ["cancelado"]}
+    }, {"_id": 0}).to_list(1000)
+    booked = []
+    for apt in existing:
+        apt_h, apt_m = map(int, apt["time"].split(":"))
+        apt_start = apt_h * 60 + apt_m
+        booked.append((apt_start, apt_start + apt.get("duration", 30)))
+    return booked
+
+
+# === SMART AVAILABILITY ===
 @router.get("/smart-availability")
 async def get_smart_availability(
     user: dict = Depends(get_current_user),
@@ -724,31 +783,18 @@ async def get_smart_availability(
 
     company_id = user["company_id"]
     company = await db.companies.find_one({"id": company_id}, {"_id": 0})
+    day_key = parse_date_to_day_key(date)
 
-    # Day of week mapping
-    day_map = {0: "seg", 1: "ter", 2: "qua", 3: "qui", 4: "sex", 5: "sab", 6: "dom"}
-    from datetime import date as date_type
-    parts = date.split("-")
-    d = date_type(int(parts[0]), int(parts[1]), int(parts[2]))
-    day_key = day_map[d.weekday()]
-
-    # Get business hours
     biz_hours = company.get("business_hours", {}).get(day_key, {"start": "08:00", "end": "18:00", "active": True})
     if not biz_hours.get("active", True):
         return {"date": date, "available_slots": [], "reason": "Estabelecimento fechado"}
 
-    biz_start = biz_hours["start"]
-    biz_end = biz_hours["end"]
-
-    # Service duration
     duration = 30
     if service_id:
         service = await db.services.find_one({"id": service_id, "company_id": company_id})
         if service:
             duration = service.get("duration", 30)
 
-    # Get professionals to check
-    prof_ids = []
     if professional_id and professional_id != "all":
         prof_ids = [professional_id]
     else:
@@ -760,55 +806,14 @@ async def get_smart_availability(
         prof = await db.professionals.find_one({"id": pid}, {"_id": 0})
         if not prof or not prof.get("is_active", True):
             continue
-
-        # Check suspensions
-        is_suspended = False
-        for sus in prof.get("suspensions", []):
-            if sus["start_date"] <= date <= sus["end_date"]:
-                is_suspended = True
-                break
-        if is_suspended:
+        if is_professional_suspended(prof, date):
             continue
 
-        # Professional hours override business hours
-        prof_hours = (prof.get("working_hours") or {}).get(day_key)
-        if prof_hours:
-            if not prof_hours.get("active", True):
-                continue
-            start = prof_hours["start"]
-            end = prof_hours["end"]
-        else:
-            start = biz_start
-            end = biz_end
+        hours = get_working_hours(prof, day_key, biz_hours["start"], biz_hours["end"])
+        if not hours:
+            continue
 
-        # Generate slots considering duration
-        start_h, start_m = map(int, start.split(":"))
-        end_h, end_m = map(int, end.split(":"))
-        start_min = start_h * 60 + start_m
-        end_min = end_h * 60 + end_m
+        booked = await get_booked_intervals(db, company_id, pid, date)
+        all_slots |= calculate_available_slots(hours[0], hours[1], duration, booked)
 
-        # Get existing appointments
-        existing = await db.appointments.find({
-            "company_id": company_id,
-            "professional_id": pid,
-            "date": date,
-            "status": {"$nin": ["cancelado"]}
-        }, {"_id": 0}).to_list(1000)
-        booked = []
-        for apt in existing:
-            apt_h, apt_m = map(int, apt["time"].split(":"))
-            apt_start = apt_h * 60 + apt_m
-            apt_dur = apt.get("duration", 30)
-            booked.append((apt_start, apt_start + apt_dur))
-
-        current = start_min
-        while current + duration <= end_min:
-            slot_end = current + duration
-            conflict = any(not (slot_end <= bs or current >= be) for bs, be in booked)
-            if not conflict:
-                h, m = divmod(current, 60)
-                all_slots.add(f"{h:02d}:{m:02d}")
-            current += 30  # 30min intervals
-
-    sorted_slots = sorted(all_slots)
-    return {"date": date, "available_slots": sorted_slots, "duration": duration}
+    return {"date": date, "available_slots": sorted(all_slots), "duration": duration}
