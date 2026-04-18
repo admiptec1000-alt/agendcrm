@@ -5,7 +5,6 @@ import { Toaster } from './components/ui/sonner';
 
 // Pages
 import AdminLoginPage from './pages/AdminLoginPage';
-import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import LandingPage from './pages/Public/LandingPage';
 import SuperAdminDashboard from './pages/SuperAdmin/Dashboard';
@@ -27,11 +26,11 @@ const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" />;
+    return <Navigate to="/landing" />;
   }
 
   if (requireSuperAdmin && !isSuperAdmin) {
-    return <Navigate to="/app" />;
+    return <Navigate to="/landing" />;
   }
 
   return children;
@@ -43,10 +42,9 @@ const AppRoutes = () => {
 
   return (
     <Routes>
-      {/* System pages */}
+      {/* Public pages */}
       <Route path="/landing" element={<LandingPage />} />
       <Route path="/admin-login" element={<AdminLoginPage />} />
-      <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
       {/* Protected */}
@@ -58,24 +56,23 @@ const AppRoutes = () => {
       } />
 
       {/* Legacy redirects */}
-      <Route path="/crm/*" element={<Navigate to="/app" />} />
-      <Route path="/scheduling/*" element={<Navigate to="/app" />} />
+      <Route path="/login" element={<Navigate to="/landing" />} />
+      <Route path="/crm/*" element={<Navigate to="/landing" />} />
+      <Route path="/scheduling/*" element={<Navigate to="/landing" />} />
       <Route path="/booking/:slug" element={<PublicBooking />} />
       <Route path="/indoor/:slug" element={<IndoorDisplay />} />
 
       {/* Default */}
       <Route path="/" element={
         isAuthenticated
-          ? <Navigate to={isSuperAdmin ? "/super-admin" : (companySlug ? `/${companySlug}/painel` : "/app")} />
+          ? <Navigate to={isSuperAdmin ? "/super-admin" : (companySlug ? `/${companySlug}/painel` : "/landing")} />
           : <Navigate to="/landing" />
       } />
 
-      {/* Company public routes */}
+      {/* Company routes: /:slug/login, /:slug/agenda, /:slug/indoor, /:slug/painel */}
       <Route path="/:slug/login" element={<CompanyLoginPage />} />
       <Route path="/:slug/agenda" element={<PublicBooking />} />
       <Route path="/:slug/indoor" element={<IndoorDisplay />} />
-
-      {/* Company dashboard routes - /:slug/painel/* */}
       <Route path="/:slug/painel/*" element={<PrivateRoute><CompanyDashboard /></PrivateRoute>} />
     </Routes>
   );
