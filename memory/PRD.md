@@ -3,32 +3,26 @@
 ## Current State
 - Super Admin: admin@agentcrm.com / admin123 → /admin-login
 - Boss Company: admin@boss.com.br / boss123 → /boss/login → /boss/painel
-- Public: /boss/agenda | Indoor: /boss/indoor
 
-## Implemented Features (All Phases)
-- [x] JWT Auth, Landing Page, PWA
-- [x] Super Admin: Dashboard, Companies CRUD, Business Types, Subdomain config
-- [x] Dynamic Company Dashboard with feature-flagged sidebar
-- [x] CRM: Atendimentos, FlowBuilder, Kanban, AI Agent (GPT-5.2)
-- [x] Scheduling: Services, Professionals, Subscriptions, Calendar modernizado
-- [x] CalendarPageFull (calendar+sidebar, status management)
-- [x] Company-branded login (/:slug/login), URLs com subdominio
-- [x] Meus Agendamentos na pagina publica (busca por telefone + cancelamento)
-- [x] **Conexoes (P0)**: WhatsApp/Instagram connections persistidas no MongoDB
-- [x] **Message Templates (P0)**: 6 templates com variaveis ({nome},{servico},{data},{hora},{profissional},{empresa},{valor}) persistidos no MongoDB
-- [x] **Scheduled Messages (P1)**: Agendamento de mensagens WhatsApp/SMS/Email com CRUD completo, persistido no MongoDB
-- [x] **Chat Interno (P1)**: Chat em tempo real com canais, polling 5s, persistido no MongoDB
-- [x] Indoor TV, Mobile responsive, Badge Emergent oculta
-
-## Mocked (Awaiting Real Integration)
-- WhatsApp message delivery (QR code simulado)
-- Instagram connection
-- Stripe payments
+## Implemented Features
+- [x] Multi-tenant SaaS com JWT Auth, Landing Page, PWA
+- [x] Super Admin: Dashboard, Companies CRUD, Business Types, Subdomain
+- [x] CRM: Atendimentos, FlowBuilder, Kanban, AI Agent, Quick Responses
+- [x] Scheduling: Services, Professionals, Subscriptions, Calendar
+- [x] **ClientsPage moderna**: Card-based, busca, sidebar detalhe, booking direto, editar/excluir
+- [x] **Concluir com Pagamento**: Modal 4 formas (Dinheiro/PIX/Credito/Debito), registra transacao financeira
+- [x] **Financeiro moderno**: Breakdown por forma de pagamento com barras, lista transacoes, resumo
+- [x] **Perfis de Permissao**: CRUD (ver_proprios_atendimentos, concluir_atendimento, registrar_pagamento)
+- [x] Conexoes (WhatsApp/Instagram), Message Templates, Scheduled Messages
+- [x] Chat Interno com canais e polling
+- [x] Meus Agendamentos (público por telefone)
+- [x] URLs com subdomínio, Login por empresa, Indoor TV
 
 ## Backlog
 ### P0
-- [ ] WhatsApp real integration (Baileys - send/receive messages)
+- [ ] WhatsApp real integration (Baileys)
 ### P1
-- [ ] Actual message delivery engine (process scheduled messages)
+- [ ] Aplicar permissões no login do profissional (filtrar dados por permissão)
+- [ ] Message delivery engine
 ### P2
-- [ ] Notificacoes push, Relatorios avancados, Stripe
+- [ ] Stripe, Notificações push, Relatórios avançados
