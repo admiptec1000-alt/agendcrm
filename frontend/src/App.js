@@ -17,6 +17,9 @@ import './index.css';
 const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
   const { isAuthenticated, isSuperAdmin, loading, user } = useAuth();
 
+  // Also check localStorage as fallback during state hydration
+  const hasToken = !!localStorage.getItem('token');
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -25,8 +28,8 @@ const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
     );
   }
 
-  if (!isAuthenticated) {
-    // Try to get slug from URL for redirect
+  // Allow if authenticated via state OR localStorage token exists (hydrating)
+  if (!isAuthenticated && !hasToken) {
     const pathSlug = window.location.pathname.split('/')[1];
     if (pathSlug && pathSlug !== 'super-admin' && pathSlug !== 'app' && pathSlug !== 'landing') {
       return <Navigate to={`/${pathSlug}/login`} />;
@@ -34,7 +37,15 @@ const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
     return <Navigate to="/landing" />;
   }
 
-  if (requireSuperAdmin && !isSuperAdmin) {
+  if (requireSuperAdmin && !isSuperAdmin && !loading) {
+    // Wait a bit - user might still be loading
+    if (hasToken && !user) {
+      return (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        </div>
+      );
+    }
     const slug = user?.company?.subdomain;
     return <Navigate to={slug ? `/${slug}/painel` : "/landing"} />;
   }
