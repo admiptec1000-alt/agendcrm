@@ -1,0 +1,107 @@
+{
+  "summary": "Completed comprehensive testing of iteration 17 features: WhatsApp Baileys integration with REAL QR codes, backend channels API, and frontend ConexoesPage with QR polling. All 11 backend tests passed. Frontend features verified working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Backend: WhatsApp Node.js service GET /health returns ok",
+    "Backend: WhatsApp Node.js service GET /instances lists active instances",
+    "Backend: POST /api/channels/connections creates WhatsApp connection",
+    "Backend: POST /api/channels/connections/{id}/connect triggers Baileys connection",
+    "Backend: GET /api/channels/connections/{id}/qr returns REAL QR code from Baileys (qr_base64 field)",
+    "Backend: POST /api/channels/connections/{id}/disconnect disconnects WhatsApp",
+    "Backend: POST /api/channels/connections/{id}/send returns 400 error when not connected (expected)",
+    "Backend: POST /api/channels/webhook/connected updates connection status",
+    "Backend: POST /api/channels/webhook/message logs incoming message",
+    "Frontend: Login with Boss company credentials works",
+    "Frontend: User menu button in header shows dropdown with 'Suspender Minha Agenda' and 'Sair'",
+    "Frontend: ConexoesPage loads with data-testid='conexoes-page'",
+    "Frontend: ConexoesPage has tabs: Canais, Mensagens Modelo",
+    "Frontend: ConexoesPage has '+ WhatsApp' and '+ Instagram' buttons",
+    "Frontend: ConnectionCard shows 'Conectar' button for disconnected status",
+    "Frontend: ConnectionCard shows loading spinner when connecting",
+    "Frontend: ConnectionCard shows REAL QR code image when status is waiting_qr",
+    "Frontend: QR code is base64 PNG from Baileys (verified in screenshot)",
+    "Frontend: QR polling works - status updates automatically",
+    "Frontend: Agenda page loads with 5 status filters (Hoje/Pendentes/Confirmados/Concluidos/Todos)",
+    "Frontend: Calendar page loads with Month/Week/Day view toggles"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_17.py",
+    "/app/test_reports/pytest/pytest_results_iter17.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_17.py"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11 tests passed)",
+    "frontend": "100% (all features working)"
+  },
+  "test_credentials": {
+    "boss_company": "admin@boss.com.br / boss123 (use /boss/login)"
+  },
+  "seed_data_creation": "Used existing WhatsApp connections from previous iterations. No new seed data created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 17 WhatsApp Baileys integration fully working. WhatsApp Node.js service runs on port 3002 (supervised). Backend proxies via httpx to localhost:3002. QR codes are REAL from Baileys library - they appear as base64 PNG images that can be scanned with WhatsApp mobile app. ConnectionCard component polls /api/channels/connections/{id}/qr every 3 seconds when status is waiting_qr. ConexoesPage is under 'CONFIG EMPRESA' section in sidebar. Instagram connection is MOCKED.",
+  "mocked_apis": {
+    "Instagram connection": "MOCKED - no actual Instagram integration",
+    "Stripe Payment": "MOCKED - no real payment processing"
+  },
+  "features_verified": {
+    "WhatsApp_Baileys_Integration": {
+      "service_port": 3002,
+      "service_status": "RUNNING (supervised)",
+      "qr_code_type": "REAL - base64 PNG from Baileys library",
+      "endpoints_tested": [
+        "GET /health",
+        "GET /instances",
+        "POST /instances/{id}/connect",
+        "GET /instances/{id}/qr",
+        "POST /instances/{id}/disconnect",
+        "POST /instances/{id}/send"
+      ]
+    },
+    "Backend_Channels_API": {
+      "endpoints_tested": [
+        "GET /api/channels/connections",
+        "POST /api/channels/connections",
+        "POST /api/channels/connections/{id}/connect",
+        "GET /api/channels/connections/{id}/qr",
+        "POST /api/channels/connections/{id}/disconnect",
+        "POST /api/channels/connections/{id}/send",
+        "POST /api/channels/webhook/connected",
+        "POST /api/channels/webhook/message"
+      ]
+    },
+    "ConexoesPage": {
+      "location": "Sidebar under CONFIG EMPRESA",
+      "tabs": ["Canais", "Mensagens Modelo"],
+      "add_buttons": ["+ WhatsApp", "+ Instagram"],
+      "connection_card_states": {
+        "disconnected": "Shows 'Conectar' button",
+        "connecting": "Shows loading spinner with 'Gerando QR Code...'",
+        "waiting_qr": "Shows REAL QR code image with instructions",
+        "connected": "Shows 'Desconectar' button"
+      },
+      "qr_polling": "Every 3 seconds when status is waiting_qr or connecting"
+    },
+    "UserHeaderMenu": {
+      "dropdown_options": ["Suspender Minha Agenda", "Sair"]
+    },
+    "AgendaPage": {
+      "status_filters": ["Hoje", "Pendentes", "Confirmados", "Concluidos", "Todos"]
+    },
+    "CalendarPage": {
+      "view_toggles": ["Mes", "Semana", "Dia"]
+    }
+  }
+}

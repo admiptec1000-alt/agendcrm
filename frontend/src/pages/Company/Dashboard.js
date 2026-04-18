@@ -1353,9 +1353,6 @@ const ConexoesPage = () => {
     } catch (e) { toast.error('Erro ao salvar'); }
   };
 
-  const STATUS_LABEL = { connected: 'Conectado', disconnected: 'Desconectado', connecting: 'Conectando...', waiting_qr: 'Aguardando QR Code' };
-  const STATUS_COLOR = { connected: 'bg-emerald-500', disconnected: 'bg-slate-400', connecting: 'bg-amber-500 animate-pulse', waiting_qr: 'bg-blue-500 animate-pulse' };
-
   return (
     <div className="animate-fade-in" data-testid="conexoes-page">
       <h2 className="text-2xl font-bold font-heading text-slate-900 mb-1">Conexoes</h2>
@@ -1378,42 +1375,7 @@ const ConexoesPage = () => {
           </div>
           <div className="space-y-3">
             {connections.map(conn => (
-              <div key={conn.id} className="card !p-5" data-testid={`conn-${conn.id}`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white ${conn.type === 'whatsapp' ? 'bg-emerald-500' : 'bg-gradient-to-br from-purple-500 to-pink-500'}`}>
-                      <Phone className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">{conn.name}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <div className={`w-2 h-2 rounded-full ${STATUS_COLOR[conn.status]}`} />
-                        <span className="text-xs text-slate-500">{STATUS_LABEL[conn.status]}</span>
-                      </div>
-                      {conn.number && <p className="text-xs text-slate-400 mt-0.5">{conn.number}</p>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {conn.status === 'disconnected' && (
-                      <button onClick={() => handleConnect(conn.id)} className="btn-primary text-sm" data-testid={`connect-${conn.id}`}>Conectar</button>
-                    )}
-                    {conn.status === 'waiting_qr' && (
-                      <div className="p-4 bg-white rounded-xl border-2 border-slate-200">
-                        <div className="grid grid-cols-8 gap-0.5 w-24 h-24 mx-auto">
-                          {Array.from({length: 64}).map((_,i) => <div key={`qr-${conn.id}-${i}`} className={`w-full h-full rounded-[1px] ${Math.random() > 0.5 ? 'bg-slate-800' : 'bg-white'}`} />)}
-                        </div>
-                        <p className="text-xs text-center text-slate-500 mt-2">Escaneie com seu celular</p>
-                      </div>
-                    )}
-                    {(conn.status === 'connected' || conn.status === 'connecting') && (
-                      <button onClick={() => handleDisconnect(conn.id)} className="text-sm text-red-500 hover:text-red-700 font-medium">Desconectar</button>
-                    )}
-                    <button onClick={() => removeConnection(conn.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <ConnectionCard key={conn.id} conn={conn} onConnect={handleConnect} onDisconnect={handleDisconnect} onRemove={removeConnection} onRefresh={loadData} />
             ))}
           </div>
         </div>
@@ -1454,6 +1416,81 @@ const ConexoesPage = () => {
     </div>
   );
 };
+
+
+const STATUS_LABEL = { connected: 'Conectado', disconnected: 'Desconectado', connecting: 'Conectando...', waiting_qr: 'Aguardando QR Code' };
+const STATUS_COLOR = { connected: 'bg-emerald-500', disconnected: 'bg-slate-400', connecting: 'bg-amber-500 animate-pulse', waiting_qr: 'bg-blue-500 animate-pulse' };
+
+const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) => {
+  const [qrData, setQrData] = useState(null);
+  const [polling, setPolling] = useState(false);
+
+  useEffect(() => {
+    if (conn.status === 'waiting_qr' || conn.status === 'connecting') {
+      setPolling(true);
+      const interval = setInterval(async () => {
+        try {
+          const res = await channelsAPI.getConnectionQR(conn.id);
+          if (res.data.status === 'connected') {
+            setPolling(false); setQrData(null); onRefresh();
+            clearInterval(interval);
+          } else if (res.data.qr_base64) {
+            setQrData(res.data.qr_base64);
+          }
+        } catch (e) {}
+      }, 3000);
+      return () => clearInterval(interval);
+    } else {
+      setPolling(false); setQrData(null);
+    }
+  }, [conn.status, conn.id]);
+
+  return (
+    <div className="card !p-5" data-testid={`conn-${conn.id}`}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white flex-shrink-0 ${conn.type === 'whatsapp' ? 'bg-emerald-500' : 'bg-gradient-to-br from-purple-500 to-pink-500'}`}>
+            <Phone className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-900">{conn.name}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <div className={`w-2 h-2 rounded-full ${STATUS_COLOR[conn.status] || 'bg-slate-400'}`} />
+              <span className="text-xs text-slate-500">{STATUS_LABEL[conn.status] || conn.status}</span>
+            </div>
+            {conn.phone && <p className="text-xs text-slate-400 mt-0.5">{conn.phone}</p>}
+            {conn.connected_name && <p className="text-xs text-emerald-600 mt-0.5">{conn.connected_name}</p>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {conn.status === 'disconnected' && (
+            <button onClick={() => onConnect(conn.id)} className="btn-primary text-sm" data-testid={`connect-${conn.id}`}>Conectar</button>
+          )}
+          {(conn.status === 'connected' || conn.status === 'connecting') && (
+            <button onClick={() => onDisconnect(conn.id)} className="text-sm text-red-500 hover:text-red-700 font-medium">Desconectar</button>
+          )}
+          <button onClick={() => onRemove(conn.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-400"><Trash2 className="w-4 h-4" /></button>
+        </div>
+      </div>
+      {(conn.status === 'waiting_qr' || conn.status === 'connecting') && (
+        <div className="mt-4 p-4 bg-slate-50 rounded-xl text-center">
+          {qrData ? (
+            <div>
+              <img src={qrData} alt="QR Code" className="w-48 h-48 mx-auto rounded-lg" />
+              <p className="text-xs text-slate-500 mt-2">Abra o WhatsApp &gt; Aparelhos conectados &gt; Conectar</p>
+            </div>
+          ) : (
+            <div className="py-6">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2" />
+              <p className="text-xs text-slate-500">Gerando QR Code...</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 const TemplateEditor = ({ tmpl, onSave, onCancel }) => {
   const [message, setMessage] = useState(tmpl.message || '');

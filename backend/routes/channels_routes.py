@@ -1,13 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
 from auth import get_current_user
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
+import httpx
+import os
+import logging
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/channels", tags=["channels"])
+logger = logging.getLogger(__name__)
+
+WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
 
 
 # === MODELS ===
@@ -84,11 +90,41 @@ async def connect_channel(
     conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
     if not conn:
         raise HTTPException(status_code=404, detail="Conexao nao encontrada")
-    qr_data = f"connect-{conn_id}-{uuid.uuid4().hex[:8]}"
-    await db.channel_connections.update_one(
-        {"id": conn_id}, {"$set": {"status": "waiting_qr", "qr_code": qr_data}}
-    )
+
+    if conn["type"] == "whatsapp":
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/connect")
+                resp.json()  # validate response
+            await db.channel_connections.update_one({"id": conn_id}, {"$set": {"status": "connecting"}})
+        except Exception as e:
+            logger.error(f"WhatsApp connect error: {e}")
+            await db.channel_connections.update_one({"id": conn_id}, {"$set": {"status": "waiting_qr"}})
+    else:
+        await db.channel_connections.update_one({"id": conn_id}, {"$set": {"status": "waiting_qr"}})
+
     return await db.channel_connections.find_one({"id": conn_id}, {"_id": 0})
+
+
+@router.get("/connections/{conn_id}/qr")
+async def get_connection_qr(
+    conn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+
+    if conn["type"] == "whatsapp":
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{WA_SERVICE_URL}/instances/{conn_id}/qr")
+                data = resp.json()
+            return {"qr": data.get("qr"), "qr_base64": data.get("qr_base64"), "status": data.get("status", "disconnected")}
+        except Exception:
+            return {"qr": None, "qr_base64": None, "status": "error"}
+    return {"qr": None, "qr_base64": None, "status": conn.get("status")}
 
 
 @router.post("/connections/{conn_id}/disconnect")
@@ -97,11 +133,88 @@ async def disconnect_channel(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+
+    if conn["type"] == "whatsapp":
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/disconnect")
+        except Exception as e:
+            logger.error(f"Disconnect error: {e}")
+
     await db.channel_connections.update_one(
-        {"id": conn_id, "company_id": user["company_id"]},
-        {"$set": {"status": "disconnected", "qr_code": None}}
+        {"id": conn_id}, {"$set": {"status": "disconnected", "qr_code": None}}
     )
     return await db.channel_connections.find_one({"id": conn_id}, {"_id": 0})
+
+
+# === SEND MESSAGE VIA WHATSAPP ===
+class SendMessageRequest(BaseModel):
+    phone: str
+    message: str
+
+@router.post("/connections/{conn_id}/send")
+async def send_whatsapp_message(
+    conn_id: str,
+    data: SendMessageRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    if conn.get("status") != "connected":
+        raise HTTPException(status_code=400, detail="Conexao nao ativa")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/send", json={"phone": data.phone, "message": data.message})
+            result = resp.json()
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Erro ao enviar"))
+        # Log message
+        await db.message_log.insert_one({
+            "id": str(uuid.uuid4()), "company_id": user["company_id"], "connection_id": conn_id,
+            "direction": "outgoing", "phone": data.phone, "message": data.message,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+        return {"success": True}
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# === WEBHOOKS FROM WHATSAPP SERVICE ===
+@router.post("/webhook/connected")
+async def webhook_connected(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
+    data = await request.json()
+    instance_id = data.get("instance_id")
+    phone = data.get("phone", "")
+    name = data.get("name", "")
+    await db.channel_connections.update_one(
+        {"id": instance_id},
+        {"$set": {"status": "connected", "phone": phone, "connected_name": name, "last_connected": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"ok": True}
+
+
+@router.post("/webhook/message")
+async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
+    data = await request.json()
+    instance_id = data.get("instance_id")
+    conn = await db.channel_connections.find_one({"id": instance_id})
+    if not conn:
+        return {"ok": False}
+
+    # Log incoming message
+    await db.message_log.insert_one({
+        "id": str(uuid.uuid4()), "company_id": conn["company_id"], "connection_id": instance_id,
+        "direction": "incoming", "phone": data.get("phone"), "sender_name": data.get("name"),
+        "message": data.get("message"), "message_id": data.get("message_id"),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    return {"ok": True}
 
 
 @router.delete("/connections/{conn_id}")
