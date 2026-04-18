@@ -1838,6 +1838,7 @@ const FinanceiroPage = () => {
   const [filterProf, setFilterProf] = useState('');
   const [filterMethod, setFilterMethod] = useState('');
   const [view, setView] = useState('resumo');
+  const [showFilters, setShowFilters] = useState(false);
   const [professionals, setProfessionals] = useState([]);
 
   useEffect(() => { schedulingAPI.getProfessionals().then(r => setProfessionals(r.data)).catch(() => {}); }, []);
@@ -1852,123 +1853,139 @@ const FinanceiroPage = () => {
     });
   }, [startDate, endDate, filterMethod]);
 
-  const PAYMENT_LABELS = { dinheiro: 'Dinheiro', pix: 'PIX', cartao_credito: 'Cartao Credito', cartao_debito: 'Cartao Debito', outros: 'Outros' };
-  const PAYMENT_COLORS = { dinheiro: 'bg-emerald-500', pix: 'bg-cyan-500', cartao_credito: 'bg-violet-500', cartao_debito: 'bg-blue-500', outros: 'bg-slate-400' };
+  const PAY_LABEL = { dinheiro: 'Dinheiro', pix: 'PIX', cartao_credito: 'Credito', cartao_debito: 'Debito', outros: 'Outros' };
+  const PAY_COLOR = { dinheiro: 'bg-emerald-500', pix: 'bg-cyan-500', cartao_credito: 'bg-violet-500', cartao_debito: 'bg-blue-500', outros: 'bg-slate-400' };
+  const PAY_BG = { dinheiro: 'bg-emerald-50 text-emerald-700', pix: 'bg-cyan-50 text-cyan-700', cartao_credito: 'bg-violet-50 text-violet-700', cartao_debito: 'bg-blue-50 text-blue-700' };
   const byMethod = summary?.by_payment_method || {};
   const totalRevenue = summary?.total_revenue || 0;
+  const activeFilters = [startDate, endDate, filterProf, filterMethod].filter(Boolean).length;
 
   let txns = summary?.transactions || [];
   if (filterProf) txns = txns.filter(t => t.professional_id === filterProf);
 
   return (
     <div className="animate-fade-in" data-testid="financeiro-page">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Financeiro</h2>
-          <p className="text-sm text-slate-600">Controle de receitas e formas de pagamento</p>
-        </div>
+      {/* Toggle + View */}
+      <div className="flex items-center justify-between mb-4">
         <div className="flex bg-slate-100 rounded-lg p-0.5">
-          <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='resumo'?'bg-white shadow-sm':'text-slate-500'}`}>Resumo</button>
-          <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='transacoes'?'bg-white shadow-sm':'text-slate-500'}`}>Transacoes</button>
+          <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='resumo'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`}>Resumo</button>
+          <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='transacoes'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`}>Transacoes</button>
         </div>
+        <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeFilters > 0 ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-600'}`}>
+          <Settings className="w-3.5 h-3.5" /> Filtros {activeFilters > 0 && <span className="w-4 h-4 rounded-full bg-primary text-white text-[10px] flex items-center justify-center">{activeFilters}</span>}
+        </button>
       </div>
 
-      {/* Filters */}
-      <div className="card !p-3 mb-6">
-        <div className="flex flex-wrap gap-3 items-end">
-          <div><label className="text-[10px] font-bold uppercase text-slate-400">Data Inicio</label>
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-start-date" /></div>
-          <div><label className="text-[10px] font-bold uppercase text-slate-400">Data Fim</label>
-            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-end-date" /></div>
-          <div><label className="text-[10px] font-bold uppercase text-slate-400">Profissional</label>
-            <select value={filterProf} onChange={e => setFilterProf(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-prof-filter">
-              <option value="">Todos</option>
-              {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select></div>
-          <div><label className="text-[10px] font-bold uppercase text-slate-400">Forma Pgto</label>
-            <select value={filterMethod} onChange={e => setFilterMethod(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-method-filter">
-              <option value="">Todas</option>
-              <option value="dinheiro">Dinheiro</option>
-              <option value="pix">PIX</option>
-              <option value="cartao_credito">Credito</option>
-              <option value="cartao_debito">Debito</option>
-            </select></div>
-          {(startDate || endDate || filterProf || filterMethod) && (
-            <button onClick={() => { setStartDate(''); setEndDate(''); setFilterProf(''); setFilterMethod(''); }} className="text-xs text-red-500 hover:text-red-700 font-medium pb-2">Limpar</button>
+      {/* Collapsible filters */}
+      {showFilters && (
+        <div className="rounded-xl border border-slate-200 bg-white p-3 mb-4 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[10px] font-bold uppercase text-slate-400">Inicio</label>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-start-date" /></div>
+            <div><label className="text-[10px] font-bold uppercase text-slate-400">Fim</label>
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-end-date" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[10px] font-bold uppercase text-slate-400">Profissional</label>
+              <select value={filterProf} onChange={e => setFilterProf(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-prof-filter">
+                <option value="">Todos</option>
+                {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select></div>
+            <div><label className="text-[10px] font-bold uppercase text-slate-400">Forma Pgto</label>
+              <select value={filterMethod} onChange={e => setFilterMethod(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-method-filter">
+                <option value="">Todas</option>
+                <option value="dinheiro">Dinheiro</option><option value="pix">PIX</option>
+                <option value="cartao_credito">Credito</option><option value="cartao_debito">Debito</option>
+              </select></div>
+          </div>
+          {activeFilters > 0 && (
+            <button onClick={() => { setStartDate(''); setEndDate(''); setFilterProf(''); setFilterMethod(''); }} className="text-xs text-red-500 font-semibold">Limpar filtros</button>
           )}
         </div>
-      </div>
+      )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Receita Total" value={`R$ ${totalRevenue.toFixed(2)}`} icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
-        <StatCard label="Transacoes" value={summary?.transaction_count || 0} icon={<CheckCircle2 className="w-5 h-5" />} color="bg-blue-500" />
-        <StatCard label="Ticket Medio" value={`R$ ${summary?.transaction_count ? (totalRevenue / summary.transaction_count).toFixed(2) : '0.00'}`} icon={<BarChart3 className="w-5 h-5" />} color="bg-amber-500" />
-        <StatCard label="Formas Pgto" value={Object.keys(byMethod).length} icon={<CreditCard className="w-5 h-5" />} color="bg-violet-500" />
+      {/* Revenue hero */}
+      <div className="rounded-xl bg-gradient-to-r from-primary to-indigo-600 text-white p-4 mb-4">
+        <p className="text-xs font-medium opacity-80">Receita Total</p>
+        <p className="text-3xl font-bold font-heading mt-0.5">R$ {totalRevenue.toFixed(2)}</p>
+        <div className="flex gap-4 mt-2 text-xs opacity-80">
+          <span>{summary?.transaction_count || 0} transacoes</span>
+          <span>Ticket: R$ {summary?.transaction_count ? (totalRevenue / summary.transaction_count).toFixed(2) : '0.00'}</span>
+        </div>
       </div>
 
       {view === 'resumo' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="card">
-            <h3 className="font-semibold text-slate-900 mb-4">Por Forma de Pagamento</h3>
-            <div className="space-y-3">
-              {Object.entries(byMethod).length === 0 && <p className="text-sm text-slate-400 py-4 text-center">Nenhuma transacao registrada</p>}
-              {Object.entries(byMethod).map(([method, amount]) => (
-                <div key={method} className="flex items-center gap-3">
-                  <div className={`w-3 h-3 rounded-full flex-shrink-0 ${PAYMENT_COLORS[method] || 'bg-slate-400'}`} />
-                  <div className="flex-1">
+        <>
+          {/* Payment methods breakdown */}
+          <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
+            <p className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-3">Por Forma de Pagamento</p>
+            {Object.entries(byMethod).length === 0 ? (
+              <p className="text-xs text-slate-400 text-center py-4">Nenhuma transacao registrada</p>
+            ) : (
+              <div className="space-y-2.5">
+                {Object.entries(byMethod).map(([method, amount]) => (
+                  <div key={method}>
                     <div className="flex justify-between mb-1">
-                      <span className="text-sm font-medium text-slate-700">{PAYMENT_LABELS[method] || method}</span>
-                      <span className="text-sm font-bold text-slate-900">R$ {amount.toFixed(2)}</span>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2.5 h-2.5 rounded-full ${PAY_COLOR[method] || 'bg-slate-400'}`} />
+                        <span className="text-xs font-medium text-slate-700">{PAY_LABEL[method] || method}</span>
+                      </div>
+                      <span className="text-xs font-bold text-slate-900">R$ {amount.toFixed(2)}</span>
                     </div>
-                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full ${PAYMENT_COLORS[method] || 'bg-slate-400'}`} style={{ width: `${totalRevenue ? (amount / totalRevenue * 100) : 0}%` }} />
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${PAY_COLOR[method] || 'bg-slate-400'}`} style={{ width: `${totalRevenue ? (amount / totalRevenue * 100) : 0}%` }} />
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="card">
-            <h3 className="font-semibold text-slate-900 mb-4">Ultimas Transacoes</h3>
-            <div className="space-y-2 max-h-72 overflow-y-auto">
-              {txns.slice(0, 20).map(t => (
-                <div key={t.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-900 truncate">{t.description}</p>
-                    <p className="text-xs text-slate-500">{t.date} • {PAYMENT_LABELS[t.payment_method] || t.payment_method}</p>
-                  </div>
-                  <span className="text-sm font-bold text-emerald-600 flex-shrink-0 ml-2">R$ {(t.amount || 0).toFixed(2)}</span>
-                </div>
-              ))}
-              {txns.length === 0 && <p className="text-sm text-slate-400 text-center py-6">Nenhuma transacao</p>}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="card">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead><tr className="border-b border-slate-200">
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Data</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Descricao</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Profissional</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Forma Pgto</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor</th>
-              </tr></thead>
-              <tbody>
-                {txns.map(t => (
-                  <tr key={t.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
-                    <td className="py-3 px-4 text-slate-600">{t.date}</td>
-                    <td className="py-3 px-4 font-medium text-slate-900">{t.description}</td>
-                    <td className="py-3 px-4 text-slate-600">{t.professional_name || '-'}</td>
-                    <td className="py-3 px-4"><span className={`text-xs px-2 py-0.5 rounded-full text-white font-medium ${PAYMENT_COLORS[t.payment_method] || 'bg-slate-400'}`}>{PAYMENT_LABELS[t.payment_method] || t.payment_method}</span></td>
-                    <td className="py-3 px-4 font-bold text-emerald-600">R$ {(t.amount || 0).toFixed(2)}</td>
-                  </tr>
                 ))}
-              </tbody>
-            </table>
-            {txns.length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhuma transacao</p>}
+              </div>
+            )}
           </div>
+
+          {/* Recent transactions */}
+          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <p className="text-xs font-bold uppercase text-slate-400 tracking-wider px-4 pt-3 pb-2">Ultimas Transacoes</p>
+            <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+              {txns.slice(0, 20).map(t => (
+                <div key={t.id} className="flex items-center justify-between px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-medium text-slate-900 truncate">{t.description}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-[11px] text-slate-400">{t.date?.split('-').reverse().join('/')}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PAY_BG[t.payment_method] || 'bg-slate-100 text-slate-600'}`}>{PAY_LABEL[t.payment_method] || t.payment_method}</span>
+                    </div>
+                  </div>
+                  <span className="text-sm font-bold text-emerald-600 flex-shrink-0 ml-3">R$ {(t.amount || 0).toFixed(2)}</span>
+                </div>
+              ))}
+              {txns.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Nenhuma transacao</p>}
+            </div>
+          </div>
+        </>
+      ) : (
+        /* Transaction list view - cards instead of table for mobile */
+        <div className="space-y-2">
+          {txns.map(t => (
+            <div key={t.id} className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3" data-testid={`txn-${t.id}`}>
+              <div className={`w-1 h-10 rounded-full flex-shrink-0 ${PAY_COLOR[t.payment_method] || 'bg-slate-300'}`} />
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-semibold text-slate-900 truncate">{t.description}</p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-[11px] text-slate-400">{t.date?.split('-').reverse().join('/')}</span>
+                  <span className="text-[11px] text-slate-500">{t.professional_name || ''}</span>
+                </div>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="text-sm font-bold text-emerald-600">R$ {(t.amount || 0).toFixed(2)}</p>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PAY_BG[t.payment_method] || 'bg-slate-100 text-slate-600'}`}>{PAY_LABEL[t.payment_method] || t.payment_method}</span>
+              </div>
+            </div>
+          ))}
+          {txns.length === 0 && (
+            <div className="text-center py-16">
+              <DollarSign className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm text-slate-500">Nenhuma transacao</p>
+            </div>
+          )}
         </div>
       )}
     </div>
