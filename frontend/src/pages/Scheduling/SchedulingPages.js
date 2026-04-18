@@ -560,10 +560,10 @@ export const SubscriptionsPageFull = () => {
   );
 };
 
-/* ========== CALENDAR PAGE (Modern Calendar + Agenda List) ========== */
+/* ========== CALENDAR PAGE (Monthly/Weekly/Daily views) ========== */
 export const CalendarPageFull = () => {
   const [appointments, setAppointments] = useState([]);
-  const [view, setView] = useState('calendar');
+  const [view, setView] = useState('month');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState(null);
 
@@ -591,72 +591,48 @@ export const CalendarPageFull = () => {
     return appointments.filter(a => a.date === dateStr).sort((a,b) => a.time.localeCompare(b.time));
   }, [selectedDay, appointments, year, month]);
 
-  const upcomingApts = useMemo(() => appointments.filter(a => a.date >= todayStr).sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time)), [appointments, todayStr]);
+  // Weekly view helpers
+  const getWeekDates = useCallback(() => {
+    const d = new Date(currentDate);
+    const day = d.getDay();
+    const start = new Date(d);
+    start.setDate(d.getDate() - day);
+    return Array.from({length: 7}, (_, i) => {
+      const dt = new Date(start);
+      dt.setDate(start.getDate() + i);
+      return dt;
+    });
+  }, [currentDate]);
 
-  const handleStatusChange = async (id, newStatus) => {
-    try {
-      await schedulingAPI.updateAppointment(id, { status: newStatus });
-      toast.success('Status atualizado!');
-      load();
-    } catch (e) { toast.error('Erro ao atualizar'); }
-  };
+  const weekDates = getWeekDates();
+  const HOURS = Array.from({length: 12}, (_, i) => i + 7); // 7-18
 
-  const [concludeApt, setConcludeApt] = useState(null);
-  const [paymentMethod, setPaymentMethod] = useState('');
+  const formatDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
-  const handleConclude = async () => {
-    if (!paymentMethod) { toast.error('Selecione a forma de pagamento'); return; }
-    try {
-      await schedulingAPI.concludeAppointment(concludeApt.id, { payment_method: paymentMethod });
-      toast.success('Atendimento concluido!');
-      setConcludeApt(null); setPaymentMethod('');
-      load();
-    } catch (e) { toast.error('Erro ao concluir'); }
-  };
+  const getAptsForDateStr = useCallback((dateStr) => appointments.filter(a => a.date === dateStr), [appointments]);
 
   const STATUS_MAP = { confirmado: { bg: 'bg-emerald-500', text: 'Confirmado' }, pendente: { bg: 'bg-amber-500', text: 'Pendente' }, concluido: { bg: 'bg-blue-500', text: 'Concluido' }, cancelado: { bg: 'bg-red-500', text: 'Cancelado' } };
 
-  const AppointmentCard = ({ a, compact = false }) => (
-    <div className="group relative flex items-stretch gap-3 p-3 bg-white rounded-xl border border-slate-100 hover:border-slate-200 hover:shadow-sm transition-all" data-testid={`apt-card-${a.id}`}>
-      <div className={`w-1 rounded-full flex-shrink-0 ${STATUS_MAP[a.status]?.bg || 'bg-slate-300'}`} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-sm font-bold text-primary tabular-nums">{a.time}</span>
-          {!compact && <span className="text-xs text-slate-400">{a.date?.split('-').reverse().join('/')}</span>}
-        </div>
-        <p className="text-sm font-semibold text-slate-900 truncate">{a.customer_name}</p>
-        <p className="text-xs text-slate-500 truncate">{a.service_name} {a.professional_name ? `• ${a.professional_name}` : ''}</p>
-        {a.customer_phone && <p className="text-xs text-slate-400 mt-0.5">{a.customer_phone}</p>}
-      </div>
-      <div className="flex flex-col items-end justify-between flex-shrink-0">
-        <span className={`text-[10px] px-2 py-0.5 rounded-full text-white font-medium ${STATUS_MAP[a.status]?.bg || 'bg-slate-400'}`}>{STATUS_MAP[a.status]?.text || a.status}</span>
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {a.status === 'pendente' && <button onClick={() => handleStatusChange(a.id, 'confirmado')} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200" data-testid={`confirm-apt-${a.id}`}>Confirmar</button>}
-          {a.status === 'confirmado' && <button onClick={() => setConcludeApt(a)} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200">Concluir</button>}
-          {a.status !== 'cancelado' && a.status !== 'concluido' && <button onClick={() => handleStatusChange(a.id, 'cancelado')} className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200">Cancelar</button>}
-        </div>
-      </div>
-    </div>
-  );
+  const DayLabels = ['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
 
   return (
     <div className="animate-fade-in" data-testid="calendar-full-page">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold font-heading text-slate-900">Calendario</h2>
-          <p className="text-sm text-slate-600">{appointments.length} agendamentos • {todayApts.length} hoje</p>
+          <p className="text-sm text-slate-600">{appointments.length} agendamentos</p>
         </div>
         <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1">
-          <button onClick={() => setView('calendar')} className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view==='calendar'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="view-calendar">
-            <Grid3X3 className="w-4 h-4 inline mr-1" />Calendario
-          </button>
-          <button onClick={() => setView('list')} className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view==='list'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="view-list">
-            <List className="w-4 h-4 inline mr-1" />Agenda
-          </button>
+          {[{key:'month',label:'Mes'},{key:'week',label:'Semana'},{key:'day',label:'Dia'}].map(v => (
+            <button key={v.key} onClick={() => setView(v.key)} className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view===v.key?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid={`view-${v.key}`}>
+              {v.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {view === 'calendar' ? (
+      {/* === MONTH VIEW === */}
+      {view === 'month' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 card">
             <div className="flex items-center justify-between mb-5">
@@ -665,7 +641,7 @@ export const CalendarPageFull = () => {
               <button onClick={() => setCurrentDate(new Date(year, month+1, 1))} className="p-2 rounded-lg hover:bg-slate-100"><ChevronRight className="w-5 h-5" /></button>
             </div>
             <div className="grid grid-cols-7 gap-1">
-              {['Dom','Seg','Ter','Qua','Qui','Sex','Sab'].map(d => <div key={d} className="text-center text-[11px] font-bold text-slate-400 py-2 uppercase">{d}</div>)}
+              {DayLabels.map(d => <div key={d} className="text-center text-[11px] font-bold text-slate-400 py-2 uppercase">{d}</div>)}
               {Array.from({length: firstDay}).map((_,i) => <div key={`e-${i}`} />)}
               {Array.from({length: daysInMonth}).map((_,i) => {
                 const day = i + 1;
@@ -675,7 +651,7 @@ export const CalendarPageFull = () => {
                 return (
                   <button key={day} onClick={() => setSelectedDay(day === selectedDay ? null : day)}
                     className={`min-h-[72px] p-1.5 rounded-lg border text-xs transition-all text-left ${isSelected ? 'border-primary bg-primary/10 ring-1 ring-primary' : isToday ? 'border-primary/50 bg-primary/5' : 'border-slate-100 hover:bg-slate-50'}`}>
-                    <p className={`font-bold mb-1 ${isToday ? 'text-primary' : isSelected ? 'text-primary' : 'text-slate-700'}`}>{day}</p>
+                    <p className={`font-bold mb-1 ${isToday||isSelected ? 'text-primary' : 'text-slate-700'}`}>{day}</p>
                     {apts.slice(0,2).map(a => (
                       <div key={a.id} className={`px-1 py-0.5 rounded text-[10px] mb-0.5 truncate font-medium ${a.status==='confirmado'?'bg-emerald-100 text-emerald-700':a.status==='pendente'?'bg-amber-100 text-amber-700':'bg-blue-100 text-blue-700'}`}>
                         {a.time} {a.customer_name?.split(' ')[0]}
@@ -687,77 +663,102 @@ export const CalendarPageFull = () => {
               })}
             </div>
           </div>
-
-          {/* Sidebar - selected day or today */}
           <div className="card">
-            <h3 className="font-semibold text-slate-900 mb-1">
-              {selectedDay ? `Dia ${selectedDay}` : 'Hoje'}
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">{selectedDay ? selectedDayApts.length : todayApts.length} agendamentos</p>
+            <h3 className="font-semibold text-slate-900 mb-1">{selectedDay ? `Dia ${selectedDay}` : 'Hoje'}</h3>
+            <p className="text-xs text-slate-500 mb-4">{(selectedDay ? selectedDayApts : todayApts).length} agendamentos</p>
             <div className="space-y-2">
               {(selectedDay ? selectedDayApts : todayApts).length === 0 && <p className="text-sm text-slate-400 py-8 text-center">Nenhum agendamento</p>}
-              {(selectedDay ? selectedDayApts : todayApts).map(a => <AppointmentCard key={a.id} a={a} compact />)}
+              {(selectedDay ? selectedDayApts : todayApts).map(a => (
+                <div key={a.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-lg">
+                  <div className={`w-1 h-8 rounded-full ${STATUS_MAP[a.status]?.bg || 'bg-slate-300'}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-primary">{a.time}</p>
+                    <p className="text-xs font-medium text-slate-900 truncate">{a.customer_name}</p>
+                    <p className="text-[10px] text-slate-500 truncate">{a.service_name}</p>
+                  </div>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full text-white ${STATUS_MAP[a.status]?.bg}`}>{STATUS_MAP[a.status]?.text}</span>
+                </div>
+              ))}
             </div>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {/* Today section */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-              <h3 className="font-semibold text-slate-900">Hoje • {todayStr.split('-').reverse().join('/')}</h3>
-              <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">{todayApts.length}</span>
-            </div>
-            {todayApts.length === 0 ? (
-              <div className="card text-center py-8"><p className="text-sm text-slate-400">Nenhum agendamento para hoje</p></div>
-            ) : (
-              <div className="space-y-2">{todayApts.map(a => <AppointmentCard key={a.id} a={a} compact />)}</div>
-            )}
-          </div>
-
-          {/* Upcoming */}
-          <div>
-            <h3 className="font-semibold text-slate-900 mb-3">Proximos agendamentos</h3>
-            {upcomingApts.length === 0 ? (
-              <div className="card text-center py-8"><p className="text-sm text-slate-400">Nenhum agendamento futuro</p></div>
-            ) : (
-              <div className="space-y-2">{upcomingApts.map(a => <AppointmentCard key={a.id} a={a} />)}</div>
-            )}
           </div>
         </div>
       )}
 
-      {/* Conclude with Payment Modal */}
-      {concludeApt && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setConcludeApt(null)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
-            <div className="p-5 border-b border-slate-200">
-              <h3 className="text-lg font-bold font-heading">Concluir Atendimento</h3>
-              <p className="text-sm text-slate-500">{concludeApt.customer_name} - {concludeApt.service_name}</p>
+      {/* === WEEK VIEW === */}
+      {view === 'week' && (
+        <div className="card overflow-x-auto">
+          <div className="flex items-center justify-between mb-4">
+            <button onClick={() => { const d = new Date(currentDate); d.setDate(d.getDate()-7); setCurrentDate(d); }} className="p-2 rounded-lg hover:bg-slate-100"><ChevronLeft className="w-5 h-5" /></button>
+            <h3 className="text-sm font-semibold">
+              {weekDates[0].toLocaleDateString('pt-BR',{day:'numeric',month:'short'})} - {weekDates[6].toLocaleDateString('pt-BR',{day:'numeric',month:'short',year:'numeric'})}
+            </h3>
+            <button onClick={() => { const d = new Date(currentDate); d.setDate(d.getDate()+7); setCurrentDate(d); }} className="p-2 rounded-lg hover:bg-slate-100"><ChevronRight className="w-5 h-5" /></button>
+          </div>
+          <div className="min-w-[700px]">
+            <div className="grid grid-cols-8 gap-0 border-b border-slate-200">
+              <div className="py-2 px-1 text-[10px] text-slate-400 font-bold">Hora</div>
+              {weekDates.map((d,i) => {
+                const ds = formatDateStr(d);
+                const isToday = ds === todayStr;
+                return <div key={i} className={`py-2 px-1 text-center ${isToday ? 'bg-primary/5' : ''}`}>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">{DayLabels[d.getDay()]}</p>
+                  <p className={`text-sm font-bold ${isToday ? 'text-primary' : 'text-slate-700'}`}>{d.getDate()}</p>
+                </div>;
+              })}
             </div>
-            <div className="p-5 space-y-4">
-              <div className="text-center">
-                <p className="text-3xl font-bold text-primary">R$ {(concludeApt.price || 0).toFixed(2)}</p>
-                <p className="text-xs text-slate-500 mt-1">Valor do servico</p>
+            {HOURS.map(hour => (
+              <div key={hour} className="grid grid-cols-8 gap-0 border-b border-slate-50 min-h-[48px]">
+                <div className="py-1 px-1 text-[10px] text-slate-400 font-mono">{String(hour).padStart(2,'0')}:00</div>
+                {weekDates.map((d,i) => {
+                  const ds = formatDateStr(d);
+                  const hourApts = getAptsForDateStr(ds).filter(a => parseInt(a.time?.split(':')[0]) === hour);
+                  return <div key={i} className="py-0.5 px-0.5 border-l border-slate-50">
+                    {hourApts.map(a => (
+                      <div key={a.id} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 truncate ${a.status==='confirmado'?'bg-emerald-100 text-emerald-700':a.status==='pendente'?'bg-amber-100 text-amber-700':'bg-blue-100 text-blue-700'}`}>
+                        {a.time} {a.customer_name?.split(' ')[0]}
+                      </div>
+                    ))}
+                  </div>;
+                })}
               </div>
-              <div>
-                <label className="text-sm font-medium text-slate-700 mb-2 block">Forma de Pagamento</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {[{key:'dinheiro',label:'Dinheiro'},{key:'pix',label:'PIX'},{key:'cartao_credito',label:'Credito'},{key:'cartao_debito',label:'Debito'}].map(m => (
-                    <button key={m.key} onClick={() => setPaymentMethod(m.key)}
-                      className={`p-3 rounded-xl border-2 text-sm font-medium transition-all ${paymentMethod === m.key ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}
-                      data-testid={`payment-${m.key}`}>
-                      {m.label}
-                    </button>
-                  ))}
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* === DAY VIEW === */}
+      {view === 'day' && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <button onClick={() => { const d = new Date(currentDate); d.setDate(d.getDate()-1); setCurrentDate(d); }} className="p-2 rounded-lg hover:bg-slate-100"><ChevronLeft className="w-5 h-5" /></button>
+            <h3 className="text-base font-semibold capitalize">
+              {currentDate.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </h3>
+            <button onClick={() => { const d = new Date(currentDate); d.setDate(d.getDate()+1); setCurrentDate(d); }} className="p-2 rounded-lg hover:bg-slate-100"><ChevronRight className="w-5 h-5" /></button>
+          </div>
+          <div className="space-y-0">
+            {HOURS.map(hour => {
+              const ds = formatDateStr(currentDate);
+              const hourApts = getAptsForDateStr(ds).filter(a => parseInt(a.time?.split(':')[0]) === hour);
+              return (
+                <div key={hour} className="flex gap-3 border-b border-slate-50 min-h-[56px] py-1">
+                  <div className="w-14 flex-shrink-0 text-right pr-2 pt-1">
+                    <span className="text-xs font-mono text-slate-400">{String(hour).padStart(2,'0')}:00</span>
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    {hourApts.map(a => (
+                      <div key={a.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg ${a.status==='confirmado'?'bg-emerald-50 border border-emerald-200':a.status==='pendente'?'bg-amber-50 border border-amber-200':'bg-blue-50 border border-blue-200'}`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-slate-900">{a.customer_name}</p>
+                          <p className="text-xs text-slate-500">{a.service_name} • {a.professional_name}</p>
+                        </div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full text-white ${STATUS_MAP[a.status]?.bg}`}>{a.time}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            </div>
-            <div className="flex gap-2 p-5 border-t border-slate-200">
-              <button onClick={() => setConcludeApt(null)} className="btn-secondary flex-1 text-sm">Cancelar</button>
-              <button onClick={handleConclude} disabled={!paymentMethod} className="btn-primary flex-1 text-sm" data-testid="confirm-conclude-btn">Concluir</button>
-            </div>
+              );
+            })}
           </div>
         </div>
       )}

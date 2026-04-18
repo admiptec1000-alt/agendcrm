@@ -103,7 +103,7 @@ async def seed_business_types(db):
     ]
     sched_features = [
         {"feature_key": k, "enabled": True}
-        for k in ["calendario", "agendamentos", "clientes", "categorias", "servicos_produtos",
+        for k in ["calendario", "agenda", "agendamentos", "clientes", "categorias", "servicos_produtos",
                    "assinaturas", "profissionais", "financeiro", "comissoes", "meu_site",
                    "conexoes", "chat_interno", "notificacoes", "configuracoes", "relatorios"]
     ]

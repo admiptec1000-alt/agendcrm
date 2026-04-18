@@ -40,7 +40,8 @@ const FEATURE_META = {
   conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'Config Empresa' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
-  agendamentos:       { icon: 'CalendarCheck',    label: 'Agendamento', group: 'Operacional' },
+  agenda:             { icon: 'CalendarCheck',    label: 'Agenda', group: 'Operacional' },
+  agendamentos:       { icon: 'Clock',            label: 'Agendamento Msg', group: 'Operacional' },
   clientes:           { icon: 'UserCheck',        label: 'Clientes / Leads', group: 'Operacional' },
   categorias:         { icon: 'FolderOpen',       label: 'Categorias', group: 'Catalogo' },
   servicos_produtos:  { icon: 'Scissors',         label: 'Servicos e Produtos', group: 'Catalogo' },
@@ -162,7 +163,7 @@ const CompanyDashboard = () => {
 
       {/* Main Content */}
       <main className={`flex-1 ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-60'} transition-all duration-200`}>
-        <header className="glass border-b border-slate-200 sticky top-0 z-30 px-6 py-3 flex items-center justify-between">
+        <header className="glass border-b border-slate-200 sticky top-0 z-30 px-4 lg:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100" data-testid="mobile-menu-btn">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
@@ -171,9 +172,7 @@ const CompanyDashboard = () => {
               {FEATURE_META[activePage]?.label || 'Dashboard'}
             </h2>
           </div>
-          <div className="text-right">
-            <p className="text-xs text-slate-500">{user?.company?.name}</p>
-          </div>
+          <UserHeaderMenu user={user} logout={logout} />
         </header>
 
         <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-6'}>
@@ -204,6 +203,7 @@ const PageContent = ({ page, hasFeature }) => {
     case 'conexoes': return <ConexoesPage />;
     case 'chat_interno': return <ChatInternoPage />;
     case 'calendario': return <CalendarPageFull />;
+    case 'agenda': return <AgendaPage />;
     case 'agendamentos': return <MessageSchedulingPage />;
     case 'clientes': return <ClientsPage />;
     case 'servicos_produtos': return <ServicesPageFull />;
@@ -219,6 +219,90 @@ const PageContent = ({ page, hasFeature }) => {
     case 'indoor': return <IndoorSettingsPage />;
     default: return <PlaceholderPage title={FEATURE_META[page]?.label || page} />;
   }
+};
+
+/* ========== USER HEADER MENU ========== */
+const UserHeaderMenu = ({ user, logout }) => {
+  const [open, setOpen] = useState(false);
+  const [showSuspend, setShowSuspend] = useState(false);
+  const [suspendForm, setSuspendForm] = useState({ start_date: '', end_date: '', reason: '' });
+
+  const handleSuspend = async () => {
+    if (!suspendForm.start_date || !suspendForm.end_date) { toast.error('Informe as datas'); return; }
+    try {
+      // If the user is a professional, suspend their agenda
+      const profs = await schedulingAPI.getProfessionals();
+      const myProf = profs.data.find(p => p.email === user?.email || p.name === user?.name);
+      if (myProf) {
+        await schedulingAPI.addSuspension(myProf.id, suspendForm);
+        toast.success('Agenda suspensa!');
+      } else {
+        toast.error('Profissional nao encontrado');
+      }
+      setShowSuspend(false);
+      setSuspendForm({ start_date: '', end_date: '', reason: '' });
+    } catch (e) { toast.error('Erro ao suspender'); }
+  };
+
+  return (
+    <>
+      <div className="relative">
+        <button onClick={() => setOpen(!open)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-colors" data-testid="user-menu-btn">
+          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm">
+            {user?.name?.[0]?.toUpperCase() || 'U'}
+          </div>
+          <div className="text-left hidden sm:block">
+            <p className="text-sm font-medium text-slate-900 leading-tight">{user?.name}</p>
+            <p className="text-[10px] text-slate-500">{user?.company?.name}</p>
+          </div>
+          <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${open ? 'rotate-90' : ''}`} />
+        </button>
+
+        {open && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50" data-testid="user-dropdown">
+              <div className="px-4 py-2 border-b border-slate-100">
+                <p className="text-sm font-medium text-slate-900">{user?.name}</p>
+                <p className="text-xs text-slate-500">{user?.email}</p>
+              </div>
+              <button onClick={() => { setShowSuspend(true); setOpen(false); }} className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2" data-testid="suspend-agenda-btn">
+                <Calendar className="w-4 h-4 text-amber-500" /> Suspender Minha Agenda
+              </button>
+              <button onClick={() => { logout(); setOpen(false); }} className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2" data-testid="header-logout-btn">
+                <LogOut className="w-4 h-4" /> Sair
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {showSuspend && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowSuspend(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-200">
+              <h3 className="text-lg font-bold font-heading">Suspender Agenda</h3>
+              <p className="text-xs text-slate-500">Informe o periodo de folga ou ausencia</p>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-medium text-slate-700">Inicio</label>
+                  <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-sm" data-testid="suspend-start" /></div>
+                <div><label className="text-xs font-medium text-slate-700">Fim</label>
+                  <input type="date" value={suspendForm.end_date} onChange={e => setSuspendForm({...suspendForm, end_date: e.target.value})} className="input-field text-sm" data-testid="suspend-end" /></div>
+              </div>
+              <div><label className="text-xs font-medium text-slate-700">Motivo</label>
+                <input value={suspendForm.reason} onChange={e => setSuspendForm({...suspendForm, reason: e.target.value})} placeholder="Ex: Ferias" className="input-field text-sm" /></div>
+            </div>
+            <div className="flex gap-2 p-5 border-t border-slate-200">
+              <button onClick={() => setShowSuspend(false)} className="btn-secondary flex-1 text-sm">Cancelar</button>
+              <button onClick={handleSuspend} className="btn-primary flex-1 text-sm" data-testid="confirm-suspend-btn">Suspender</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 };
 
 /* ========== DASHBOARD ========== */
@@ -827,6 +911,138 @@ const WhatsAppPage = () => {
 };
 
 /* ========== APPOINTMENTS ========== */
+
+/* ========== AGENDA PAGE (Appointment List with Conclude/Payment) ========== */
+const PAYMENT_METHODS = [{key:'dinheiro',label:'Dinheiro'},{key:'pix',label:'PIX'},{key:'cartao_credito',label:'Credito'},{key:'cartao_debito',label:'Debito'}];
+const APT_STATUS_COLORS = { confirmado: 'bg-emerald-100 text-emerald-700', pendente: 'bg-amber-100 text-amber-700', cancelado: 'bg-red-100 text-red-700', concluido: 'bg-blue-100 text-blue-700' };
+const APT_STATUS_DOT = { confirmado: 'bg-emerald-500', pendente: 'bg-amber-500', cancelado: 'bg-red-500', concluido: 'bg-blue-500' };
+
+const AgendaPage = () => {
+  const [appointments, setAppointments] = useState([]);
+  const [filter, setFilter] = useState('hoje');
+  const [concludeApt, setConcludeApt] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState('');
+
+  const today = new Date().toISOString().split('T')[0];
+
+  useEffect(() => { load(); }, []);
+  const load = async () => { const r = await schedulingAPI.getAppointments(); setAppointments(r.data); };
+
+  const filtered = appointments.filter(a => {
+    if (filter === 'hoje') return a.date === today;
+    if (filter === 'pendentes') return a.status === 'pendente';
+    if (filter === 'confirmados') return a.status === 'confirmado';
+    if (filter === 'concluidos') return a.status === 'concluido';
+    return true;
+  }).sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+  const handleStatusChange = async (id, status) => {
+    try { await schedulingAPI.updateAppointment(id, { status }); toast.success('Status atualizado!'); load(); }
+    catch (e) { toast.error('Erro'); }
+  };
+
+  const handleConclude = async () => {
+    if (!paymentMethod) { toast.error('Selecione pagamento'); return; }
+    try {
+      await schedulingAPI.concludeAppointment(concludeApt.id, { payment_method: paymentMethod });
+      toast.success('Concluido!');
+      setConcludeApt(null); setPaymentMethod(''); load();
+    } catch (e) { toast.error('Erro ao concluir'); }
+  };
+
+  const todayCount = appointments.filter(a => a.date === today).length;
+  const pendingCount = appointments.filter(a => a.status === 'pendente').length;
+
+  return (
+    <div className="animate-fade-in" data-testid="agenda-page">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Agenda</h2>
+          <p className="text-sm text-slate-600">{todayCount} hoje • {pendingCount} pendentes</p>
+        </div>
+      </div>
+
+      <div className="flex gap-2 mb-5 overflow-x-auto pb-1">
+        {[{key:'hoje',label:'Hoje'},{key:'pendentes',label:'Pendentes'},{key:'confirmados',label:'Confirmados'},{key:'concluidos',label:'Concluidos'},{key:'todos',label:'Todos'}].map(f => (
+          <button key={f.key} onClick={() => setFilter(f.key)}
+            className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${filter===f.key ? 'bg-primary text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+            data-testid={`filter-${f.key}`}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="space-y-2">
+        {filtered.map(a => (
+          <div key={a.id} className="card !p-4" data-testid={`agenda-item-${a.id}`}>
+            <div className="flex items-center gap-4">
+              <div className={`w-1.5 h-12 rounded-full flex-shrink-0 ${APT_STATUS_DOT[a.status] || 'bg-slate-300'}`} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-sm font-bold text-primary tabular-nums">{a.time}</span>
+                  <span className="text-xs text-slate-400">{a.date?.split('-').reverse().join('/')}</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${APT_STATUS_COLORS[a.status] || 'bg-slate-100 text-slate-600'}`}>{a.status}</span>
+                </div>
+                <p className="text-sm font-semibold text-slate-900 truncate">{a.customer_name}</p>
+                <p className="text-xs text-slate-500">{a.service_name} • {a.professional_name} • R$ {(a.price||0).toFixed(2)}</p>
+                {a.payment_method && <p className="text-[10px] text-slate-400 mt-0.5">Pago: {a.payment_method}</p>}
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                {a.status === 'pendente' && (
+                  <button onClick={() => handleStatusChange(a.id, 'confirmado')} className="px-3 py-1.5 rounded-lg bg-emerald-100 text-emerald-700 text-xs font-medium hover:bg-emerald-200" data-testid={`agenda-confirm-${a.id}`}>Confirmar</button>
+                )}
+                {a.status === 'confirmado' && (
+                  <button onClick={() => setConcludeApt(a)} className="px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 text-xs font-medium hover:bg-blue-200" data-testid={`agenda-conclude-${a.id}`}>Concluir</button>
+                )}
+                {a.status !== 'cancelado' && a.status !== 'concluido' && (
+                  <button onClick={() => handleStatusChange(a.id, 'cancelado')} className="px-2 py-1.5 rounded-lg text-red-500 hover:bg-red-50" data-testid={`agenda-cancel-${a.id}`}>
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && <div className="card text-center py-12"><CalendarCheck className="w-12 h-12 text-slate-300 mx-auto mb-3" /><p className="text-sm text-slate-500">Nenhum agendamento</p></div>}
+      </div>
+
+      {/* Conclude Payment Modal */}
+      {concludeApt && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setConcludeApt(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-200">
+              <h3 className="text-lg font-bold font-heading">Concluir Atendimento</h3>
+              <p className="text-sm text-slate-500">{concludeApt.customer_name} - {concludeApt.service_name}</p>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="text-center">
+                <p className="text-3xl font-bold text-primary">R$ {(concludeApt.price || 0).toFixed(2)}</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-700 mb-2 block">Forma de Pagamento</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {PAYMENT_METHODS.map(m => (
+                    <button key={m.key} onClick={() => setPaymentMethod(m.key)}
+                      className={`p-3 rounded-xl border-2 text-sm font-medium transition-all ${paymentMethod === m.key ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600'}`}
+                      data-testid={`agenda-payment-${m.key}`}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 p-5 border-t border-slate-200">
+              <button onClick={() => setConcludeApt(null)} className="btn-secondary flex-1 text-sm">Cancelar</button>
+              <button onClick={handleConclude} disabled={!paymentMethod} className="btn-primary flex-1 text-sm" data-testid="agenda-confirm-conclude-btn">Concluir</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
 const MessageSchedulingPage = () => {
   const [messages, setMessages] = useState([]);
   const [showModal, setShowModal] = useState(false);
@@ -1548,19 +1764,32 @@ const MySitePage = () => {
 /* ========== FINANCEIRO (REAL) ========== */
 const FinanceiroPage = () => {
   const [summary, setSummary] = useState(null);
-  const [period, setPeriod] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [filterProf, setFilterProf] = useState('');
+  const [filterMethod, setFilterMethod] = useState('');
   const [view, setView] = useState('resumo');
+  const [professionals, setProfessionals] = useState([]);
+
+  useEffect(() => { schedulingAPI.getProfessionals().then(r => setProfessionals(r.data)).catch(() => {}); }, []);
 
   useEffect(() => {
-    schedulingAPI.getFinancialSummary(period ? { start_date: period } : {}).then(r => setSummary(r.data)).catch(() => {
-      reportsAPI.getFinancial(period ? { start_date: period } : {}).then(r => setSummary(r.data)).catch(() => {});
+    const params = {};
+    if (startDate) params.start_date = startDate;
+    if (endDate) params.end_date = endDate;
+    if (filterMethod) params.payment_method = filterMethod;
+    schedulingAPI.getFinancialSummary(params).then(r => setSummary(r.data)).catch(() => {
+      reportsAPI.getFinancial(params).then(r => setSummary(r.data)).catch(() => {});
     });
-  }, [period]);
+  }, [startDate, endDate, filterMethod]);
 
   const PAYMENT_LABELS = { dinheiro: 'Dinheiro', pix: 'PIX', cartao_credito: 'Cartao Credito', cartao_debito: 'Cartao Debito', outros: 'Outros' };
   const PAYMENT_COLORS = { dinheiro: 'bg-emerald-500', pix: 'bg-cyan-500', cartao_credito: 'bg-violet-500', cartao_debito: 'bg-blue-500', outros: 'bg-slate-400' };
   const byMethod = summary?.by_payment_method || {};
   const totalRevenue = summary?.total_revenue || 0;
+
+  let txns = summary?.transactions || [];
+  if (filterProf) txns = txns.filter(t => t.professional_id === filterProf);
 
   return (
     <div className="animate-fade-in" data-testid="financeiro-page">
@@ -1569,12 +1798,35 @@ const FinanceiroPage = () => {
           <h2 className="text-2xl font-bold font-heading text-slate-900">Financeiro</h2>
           <p className="text-sm text-slate-600">Controle de receitas e formas de pagamento</p>
         </div>
-        <div className="flex items-center gap-2">
-          <input type="month" value={period} onChange={e => setPeriod(e.target.value)} className="input-field text-sm" />
-          <div className="flex bg-slate-100 rounded-lg p-0.5">
-            <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='resumo'?'bg-white shadow-sm':'text-slate-500'}`}>Resumo</button>
-            <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='transacoes'?'bg-white shadow-sm':'text-slate-500'}`}>Transacoes</button>
-          </div>
+        <div className="flex bg-slate-100 rounded-lg p-0.5">
+          <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='resumo'?'bg-white shadow-sm':'text-slate-500'}`}>Resumo</button>
+          <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='transacoes'?'bg-white shadow-sm':'text-slate-500'}`}>Transacoes</button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="card !p-3 mb-6">
+        <div className="flex flex-wrap gap-3 items-end">
+          <div><label className="text-[10px] font-bold uppercase text-slate-400">Data Inicio</label>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-start-date" /></div>
+          <div><label className="text-[10px] font-bold uppercase text-slate-400">Data Fim</label>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-end-date" /></div>
+          <div><label className="text-[10px] font-bold uppercase text-slate-400">Profissional</label>
+            <select value={filterProf} onChange={e => setFilterProf(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-prof-filter">
+              <option value="">Todos</option>
+              {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select></div>
+          <div><label className="text-[10px] font-bold uppercase text-slate-400">Forma Pgto</label>
+            <select value={filterMethod} onChange={e => setFilterMethod(e.target.value)} className="input-field text-sm !py-1.5" data-testid="fin-method-filter">
+              <option value="">Todas</option>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="pix">PIX</option>
+              <option value="cartao_credito">Credito</option>
+              <option value="cartao_debito">Debito</option>
+            </select></div>
+          {(startDate || endDate || filterProf || filterMethod) && (
+            <button onClick={() => { setStartDate(''); setEndDate(''); setFilterProf(''); setFilterMethod(''); }} className="text-xs text-red-500 hover:text-red-700 font-medium pb-2">Limpar</button>
+          )}
         </div>
       </div>
 
@@ -1610,7 +1862,7 @@ const FinanceiroPage = () => {
           <div className="card">
             <h3 className="font-semibold text-slate-900 mb-4">Ultimas Transacoes</h3>
             <div className="space-y-2 max-h-72 overflow-y-auto">
-              {(summary?.transactions || []).slice(0, 15).map(t => (
+              {txns.slice(0, 20).map(t => (
                 <div key={t.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-slate-900 truncate">{t.description}</p>
@@ -1619,7 +1871,7 @@ const FinanceiroPage = () => {
                   <span className="text-sm font-bold text-emerald-600 flex-shrink-0 ml-2">R$ {(t.amount || 0).toFixed(2)}</span>
                 </div>
               ))}
-              {(summary?.transactions || []).length === 0 && <p className="text-sm text-slate-400 text-center py-6">Nenhuma transacao</p>}
+              {txns.length === 0 && <p className="text-sm text-slate-400 text-center py-6">Nenhuma transacao</p>}
             </div>
           </div>
         </div>
@@ -1635,7 +1887,7 @@ const FinanceiroPage = () => {
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor</th>
               </tr></thead>
               <tbody>
-                {(summary?.transactions || []).map(t => (
+                {txns.map(t => (
                   <tr key={t.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
                     <td className="py-3 px-4 text-slate-600">{t.date}</td>
                     <td className="py-3 px-4 font-medium text-slate-900">{t.description}</td>
@@ -1646,7 +1898,7 @@ const FinanceiroPage = () => {
                 ))}
               </tbody>
             </table>
-            {(summary?.transactions || []).length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhuma transacao</p>}
+            {txns.length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhuma transacao</p>}
           </div>
         </div>
       )}
