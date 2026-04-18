@@ -15,7 +15,7 @@ import CompanyLoginPage from './pages/Public/CompanyLoginPage';
 import './index.css';
 
 const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
-  const { isAuthenticated, isSuperAdmin, loading } = useAuth();
+  const { isAuthenticated, isSuperAdmin, loading, user } = useAuth();
 
   if (loading) {
     return (
@@ -26,11 +26,17 @@ const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
   }
 
   if (!isAuthenticated) {
+    // Try to get slug from URL for redirect
+    const pathSlug = window.location.pathname.split('/')[1];
+    if (pathSlug && pathSlug !== 'super-admin' && pathSlug !== 'app' && pathSlug !== 'landing') {
+      return <Navigate to={`/${pathSlug}/login`} />;
+    }
     return <Navigate to="/landing" />;
   }
 
   if (requireSuperAdmin && !isSuperAdmin) {
-    return <Navigate to="/landing" />;
+    const slug = user?.company?.subdomain;
+    return <Navigate to={slug ? `/${slug}/painel` : "/landing"} />;
   }
 
   return children;
