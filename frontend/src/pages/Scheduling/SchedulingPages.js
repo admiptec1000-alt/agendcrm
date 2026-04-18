@@ -601,6 +601,19 @@ export const CalendarPageFull = () => {
     } catch (e) { toast.error('Erro ao atualizar'); }
   };
 
+  const [concludeApt, setConcludeApt] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState('');
+
+  const handleConclude = async () => {
+    if (!paymentMethod) { toast.error('Selecione a forma de pagamento'); return; }
+    try {
+      await schedulingAPI.concludeAppointment(concludeApt.id, { payment_method: paymentMethod });
+      toast.success('Atendimento concluido!');
+      setConcludeApt(null); setPaymentMethod('');
+      load();
+    } catch (e) { toast.error('Erro ao concluir'); }
+  };
+
   const STATUS_MAP = { confirmado: { bg: 'bg-emerald-500', text: 'Confirmado' }, pendente: { bg: 'bg-amber-500', text: 'Pendente' }, concluido: { bg: 'bg-blue-500', text: 'Concluido' }, cancelado: { bg: 'bg-red-500', text: 'Cancelado' } };
 
   const AppointmentCard = ({ a, compact = false }) => (
@@ -619,7 +632,7 @@ export const CalendarPageFull = () => {
         <span className={`text-[10px] px-2 py-0.5 rounded-full text-white font-medium ${STATUS_MAP[a.status]?.bg || 'bg-slate-400'}`}>{STATUS_MAP[a.status]?.text || a.status}</span>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           {a.status === 'pendente' && <button onClick={() => handleStatusChange(a.id, 'confirmado')} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200" data-testid={`confirm-apt-${a.id}`}>Confirmar</button>}
-          {a.status === 'confirmado' && <button onClick={() => handleStatusChange(a.id, 'concluido')} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200">Concluir</button>}
+          {a.status === 'confirmado' && <button onClick={() => setConcludeApt(a)} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200">Concluir</button>}
           {a.status !== 'cancelado' && a.status !== 'concluido' && <button onClick={() => handleStatusChange(a.id, 'cancelado')} className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200">Cancelar</button>}
         </div>
       </div>
@@ -711,6 +724,40 @@ export const CalendarPageFull = () => {
             ) : (
               <div className="space-y-2">{upcomingApts.map(a => <AppointmentCard key={a.id} a={a} />)}</div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Conclude with Payment Modal */}
+      {concludeApt && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setConcludeApt(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-200">
+              <h3 className="text-lg font-bold font-heading">Concluir Atendimento</h3>
+              <p className="text-sm text-slate-500">{concludeApt.customer_name} - {concludeApt.service_name}</p>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="text-center">
+                <p className="text-3xl font-bold text-primary">R$ {(concludeApt.price || 0).toFixed(2)}</p>
+                <p className="text-xs text-slate-500 mt-1">Valor do servico</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-700 mb-2 block">Forma de Pagamento</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[{key:'dinheiro',label:'Dinheiro'},{key:'pix',label:'PIX'},{key:'cartao_credito',label:'Credito'},{key:'cartao_debito',label:'Debito'}].map(m => (
+                    <button key={m.key} onClick={() => setPaymentMethod(m.key)}
+                      className={`p-3 rounded-xl border-2 text-sm font-medium transition-all ${paymentMethod === m.key ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}
+                      data-testid={`payment-${m.key}`}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 p-5 border-t border-slate-200">
+              <button onClick={() => setConcludeApt(null)} className="btn-secondary flex-1 text-sm">Cancelar</button>
+              <button onClick={handleConclude} disabled={!paymentMethod} className="btn-primary flex-1 text-sm" data-testid="confirm-conclude-btn">Concluir</button>
+            </div>
           </div>
         </div>
       )}

@@ -156,6 +156,8 @@ class AppointmentUpdate(BaseModel):
     date: Optional[str] = None
     time: Optional[str] = None
     notes: Optional[str] = None
+    payment_method: Optional[str] = None  # dinheiro, pix, cartao_debito, cartao_credito
+    payment_status: Optional[str] = None  # pendente, pago
 
 # Service Models
 class ServiceCreate(BaseModel):

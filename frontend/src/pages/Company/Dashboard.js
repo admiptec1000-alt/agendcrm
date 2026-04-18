@@ -384,46 +384,74 @@ const ClientsPage = () => {
   const [clients, setClients] = useState([]);
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [editingClient, setEditingClient] = useState(null);
   const [selectedClient, setSelectedClient] = useState(null);
   const [clientHistory, setClientHistory] = useState([]);
+  const [showBooking, setShowBooking] = useState(false);
+  const [services, setServices] = useState([]);
+  const [professionals, setProfessionals] = useState([]);
 
   useEffect(() => { load(); }, [search]);
+  useEffect(() => {
+    schedulingAPI.getServices().then(r => setServices(r.data)).catch(() => {});
+    schedulingAPI.getProfessionals().then(r => setProfessionals(r.data)).catch(() => {});
+  }, []);
+
   const load = async () => {
     const res = await schedulingAPI.getClients({ search: search || undefined });
     setClients(res.data);
   };
 
   const loadHistory = async (phone) => {
-    const res = await schedulingAPI.getAppointments({ search: phone });
-    // filter by phone
-    const filtered = res.data.filter(a => a.customer_phone === phone);
-    setClientHistory(filtered);
+    const res = await schedulingAPI.getAppointments();
+    setClientHistory(res.data.filter(a => a.customer_phone === phone).sort((a,b) => b.date.localeCompare(a.date)));
   };
 
-  const handleSelectClient = (client) => {
-    setSelectedClient(client);
-    loadHistory(client.phone);
-  };
+  const handleSelectClient = (client) => { setSelectedClient(client); loadHistory(client.phone); };
 
-  const handleAddClient = async (form) => {
+  const handleSaveClient = async (form) => {
     try {
-      await schedulingAPI.createClient(form);
-      toast.success('Cliente criado!');
-      setShowAdd(false);
-      load();
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Erro');
-    }
+      if (editingClient) {
+        await schedulingAPI.updateClient(editingClient.id, form);
+        toast.success('Cliente atualizado!');
+      } else {
+        await schedulingAPI.createClient(form);
+        toast.success('Cliente criado!');
+      }
+      setShowAdd(false); setEditingClient(null); load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
   };
+
+  const handleDeleteClient = async (id) => {
+    if (!window.confirm('Excluir este cliente?')) return;
+    try { await schedulingAPI.deleteClient(id); toast.success('Excluido!'); setSelectedClient(null); load(); }
+    catch (e) { toast.error('Erro ao excluir'); }
+  };
+
+  const handleBookFromClient = async (bookForm) => {
+    try {
+      await schedulingAPI.createAppointment({
+        customer_name: selectedClient.name,
+        customer_phone: selectedClient.phone,
+        customer_email: selectedClient.email || undefined,
+        ...bookForm
+      });
+      toast.success('Agendamento criado!');
+      setShowBooking(false);
+      loadHistory(selectedClient.phone);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao agendar'); }
+  };
+
+  const STATUS_COLORS = { confirmado: 'bg-emerald-100 text-emerald-700', pendente: 'bg-amber-100 text-amber-700', cancelado: 'bg-red-100 text-red-700', concluido: 'bg-blue-100 text-blue-700' };
 
   return (
     <div className="animate-fade-in" data-testid="clients-page">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6">
         <div>
           <h2 className="text-2xl font-bold font-heading text-slate-900">Clientes</h2>
           <p className="text-sm text-slate-600">{clients.length} clientes cadastrados</p>
         </div>
-        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2" data-testid="add-client-btn">
+        <button onClick={() => { setEditingClient(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2" data-testid="add-client-btn">
           <Plus className="w-4 h-4" /> Novo Cliente
         </button>
       </div>
@@ -434,96 +462,137 @@ const ClientsPage = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Client List */}
-        <div className="lg:col-span-2">
-          <div className="card">
-            <table className="w-full">
-              <thead><tr className="border-b border-slate-200">
-                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Cliente</th>
-                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Telefone</th>
-                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Assinatura</th>
-                <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Agend.</th>
-              </tr></thead>
-              <tbody>
-                {clients.map(c => (
-                  <tr key={c.id} onClick={() => handleSelectClient(c)}
-                    className={`border-b border-slate-100 hover:bg-slate-50 cursor-pointer text-sm transition-colors ${selectedClient?.id === c.id ? 'bg-primary/5' : ''}`}
-                    data-testid={`client-row-${c.id}`}>
-                    <td className="py-2 px-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold">{c.name?.substring(0,2).toUpperCase()}</div>
-                        <div><p className="font-medium">{c.name}</p><p className="text-xs text-slate-400">{c.email || ''}</p></div>
-                      </div>
-                    </td>
-                    <td className="py-2 px-3 text-slate-600">{c.phone}</td>
-                    <td className="py-2 px-3">
-                      {c.active_subscription ? (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Plano Ativo</span>
-                      ) : (
-                        <span className="text-xs text-slate-400">-</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-3 font-medium">{c.total_appointments || 0}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {clients.length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhum cliente</p>}
-          </div>
+        <div className="lg:col-span-2 space-y-2">
+          {clients.map(c => (
+            <div key={c.id} onClick={() => handleSelectClient(c)}
+              className={`card !p-4 cursor-pointer transition-all hover:shadow-sm ${selectedClient?.id === c.id ? 'ring-2 ring-primary/50 bg-primary/5' : ''}`}
+              data-testid={`client-row-${c.id}`}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-primary font-bold text-sm flex-shrink-0">
+                  {c.name?.substring(0,2).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-900 truncate">{c.name}</p>
+                  <p className="text-xs text-slate-500">{c.phone} {c.email ? `• ${c.email}` : ''}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-xs text-slate-500">{c.total_appointments || 0} agend.</p>
+                  {c.active_subscription && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Assinante</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+          {clients.length === 0 && <div className="card text-center py-12"><Users className="w-12 h-12 text-slate-300 mx-auto mb-3" /><p className="text-sm text-slate-500">Nenhum cliente encontrado</p></div>}
         </div>
 
-        {/* Client Detail */}
         <div>
           {selectedClient ? (
-            <div className="card" data-testid="client-detail">
+            <div className="card sticky top-20" data-testid="client-detail">
               <div className="text-center mb-4">
-                <div className="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center text-lg font-bold mx-auto mb-2">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-primary text-xl font-bold mx-auto mb-3">
                   {selectedClient.name?.substring(0,2).toUpperCase()}
                 </div>
-                <p className="font-bold text-slate-900">{selectedClient.name}</p>
+                <p className="font-bold text-slate-900 text-lg">{selectedClient.name}</p>
                 <p className="text-sm text-slate-500">{selectedClient.phone}</p>
+                {selectedClient.email && <p className="text-xs text-slate-400">{selectedClient.email}</p>}
               </div>
-              {selectedClient.active_subscription && (
-                <div className="p-3 bg-emerald-50 rounded-lg mb-4 text-center">
-                  <p className="text-xs font-bold text-emerald-700">Assinante</p>
-                  <p className="text-sm text-emerald-600">{selectedClient.active_subscription.credits_remaining} creditos restantes</p>
-                </div>
-              )}
-              <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Historico</h4>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+
+              <div className="flex gap-2 mb-4">
+                <button onClick={() => setShowBooking(true)} className="btn-primary flex-1 text-sm flex items-center justify-center gap-1" data-testid="book-from-client-btn">
+                  <Calendar className="w-4 h-4" /> Agendar
+                </button>
+                <button onClick={() => { setEditingClient(selectedClient); setShowAdd(true); }} className="btn-secondary text-sm p-2" data-testid="edit-client-btn">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => handleDeleteClient(selectedClient.id)} className="p-2 rounded-lg border border-red-200 text-red-500 hover:bg-red-50" data-testid="delete-client-btn">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+
+              {selectedClient.notes && <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg mb-4">{selectedClient.notes}</p>}
+
+              <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Historico de Agendamentos</h4>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
                 {clientHistory.map(a => (
-                  <div key={a.id} className="p-2 bg-slate-50 rounded text-xs">
-                    <div className="flex justify-between"><span className="font-medium">{a.service_name}</span><span className="text-slate-400">{a.date}</span></div>
-                    <div className="flex justify-between mt-1"><span className="text-slate-500">{a.professional_name}</span><span className="font-medium">R$ {(a.price || 0).toFixed(2)}</span></div>
+                  <div key={a.id} className="p-3 bg-slate-50 rounded-lg">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-bold text-primary">{a.date?.split('-').reverse().join('/')} {a.time}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[a.status] || 'bg-slate-100 text-slate-600'}`}>{a.status}</span>
+                    </div>
+                    <p className="text-xs font-medium text-slate-900">{a.service_name}</p>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-[11px] text-slate-500">{a.professional_name}</span>
+                      <span className="text-xs font-medium">R$ {(a.price || 0).toFixed(2)}</span>
+                    </div>
+                    {a.payment_method && <span className="text-[10px] text-slate-400 mt-0.5 block">Pago: {a.payment_method}</span>}
                   </div>
                 ))}
-                {clientHistory.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Sem historico</p>}
+                {clientHistory.length === 0 && <p className="text-xs text-slate-400 text-center py-6">Sem historico</p>}
               </div>
             </div>
           ) : (
-            <div className="card text-center py-8"><p className="text-sm text-slate-500">Selecione um cliente</p></div>
+            <div className="card text-center py-12"><UserCheck className="w-10 h-10 text-slate-300 mx-auto mb-2" /><p className="text-sm text-slate-500">Selecione um cliente</p></div>
           )}
         </div>
       </div>
 
+      {/* Add/Edit Client Modal */}
       {showAdd && (
-        <Modal title="Novo Cliente" onClose={() => setShowAdd(false)}>
-          <ClientForm onSave={handleAddClient} />
+        <Modal title={editingClient ? 'Editar Cliente' : 'Novo Cliente'} onClose={() => { setShowAdd(false); setEditingClient(null); }}>
+          <ClientForm client={editingClient} onSave={handleSaveClient} />
+        </Modal>
+      )}
+
+      {/* Book from Client Modal */}
+      {showBooking && selectedClient && (
+        <Modal title={`Agendar para ${selectedClient.name}`} onClose={() => setShowBooking(false)}>
+          <BookFromClientForm services={services} professionals={professionals} onSave={handleBookFromClient} />
         </Modal>
       )}
     </div>
   );
 };
 
-const ClientForm = ({ onSave }) => {
-  const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '' });
+const ClientForm = ({ client, onSave }) => {
+  const [form, setForm] = useState({ name: client?.name || '', phone: client?.phone || '', email: client?.email || '', notes: client?.notes || '' });
   return (
     <div className="space-y-3">
       <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Nome completo" className="input-field" data-testid="client-name-input" />
       <input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} placeholder="Telefone" className="input-field" data-testid="client-phone-input" />
       <input value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="Email (opcional)" className="input-field" type="email" />
       <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} placeholder="Observacoes" className="input-field" rows={2} />
-      <div className="flex justify-end gap-2"><button onClick={() => form.name && form.phone && onSave(form)} className="btn-primary text-sm" data-testid="save-client-btn">Salvar</button></div>
+      <div className="flex justify-end"><button onClick={() => form.name && form.phone && onSave(form)} className="btn-primary text-sm" data-testid="save-client-btn">Salvar</button></div>
+    </div>
+  );
+};
+
+const BookFromClientForm = ({ services, professionals, onSave }) => {
+  const [form, setForm] = useState({ service_id: '', professional_id: '', date: '', time: '' });
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-sm font-medium text-slate-700 mb-1 block">Servico</label>
+        <select value={form.service_id} onChange={e => setForm({...form, service_id: e.target.value})} className="input-field" data-testid="book-service-select">
+          <option value="">Selecione...</option>
+          {services.filter(s => s.is_active).map(s => <option key={s.id} value={s.id}>{s.name} - R$ {s.price?.toFixed(2)}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="text-sm font-medium text-slate-700 mb-1 block">Profissional</label>
+        <select value={form.professional_id} onChange={e => setForm({...form, professional_id: e.target.value})} className="input-field" data-testid="book-prof-select">
+          <option value="">Selecione...</option>
+          {professionals.filter(p => p.is_active).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div><label className="text-sm font-medium text-slate-700 mb-1 block">Data</label>
+          <input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} className="input-field" data-testid="book-date-input" /></div>
+        <div><label className="text-sm font-medium text-slate-700 mb-1 block">Hora</label>
+          <input type="time" value={form.time} onChange={e => setForm({...form, time: e.target.value})} className="input-field" data-testid="book-time-input" /></div>
+      </div>
+      <div className="flex justify-end">
+        <button onClick={() => form.service_id && form.professional_id && form.date && form.time && onSave(form)} className="btn-primary text-sm" data-testid="confirm-book-btn">Confirmar Agendamento</button>
+      </div>
     </div>
   );
 };
@@ -1478,25 +1547,109 @@ const MySitePage = () => {
 
 /* ========== FINANCEIRO (REAL) ========== */
 const FinanceiroPage = () => {
-  const [data, setData] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [period, setPeriod] = useState('');
-  useEffect(() => { reportsAPI.getFinancial(period ? { start_date: period } : {}).then(r => setData(r.data)).catch(() => {}); }, [period]);
+  const [view, setView] = useState('resumo');
+
+  useEffect(() => {
+    schedulingAPI.getFinancialSummary(period ? { start_date: period } : {}).then(r => setSummary(r.data)).catch(() => {
+      reportsAPI.getFinancial(period ? { start_date: period } : {}).then(r => setSummary(r.data)).catch(() => {});
+    });
+  }, [period]);
+
+  const PAYMENT_LABELS = { dinheiro: 'Dinheiro', pix: 'PIX', cartao_credito: 'Cartao Credito', cartao_debito: 'Cartao Debito', outros: 'Outros' };
+  const PAYMENT_COLORS = { dinheiro: 'bg-emerald-500', pix: 'bg-cyan-500', cartao_credito: 'bg-violet-500', cartao_debito: 'bg-blue-500', outros: 'bg-slate-400' };
+  const byMethod = summary?.by_payment_method || {};
+  const totalRevenue = summary?.total_revenue || 0;
+
   return (
     <div className="animate-fade-in" data-testid="financeiro-page">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-6">
-        <StatCard label="Receita Total" value={`R$ ${(data?.total_revenue || 0).toFixed(2)}`} icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
-        <StatCard label="Concluidos" value={data?.completed_count || 0} icon={<CheckCircle2 className="w-5 h-5" />} color="bg-blue-500" />
-        <StatCard label="Pendentes" value={data?.pending_count || 0} icon={<Clock className="w-5 h-5" />} color="bg-amber-500" />
-        <StatCard label="Cancelados" value={data?.cancelled_count || 0} icon={<X className="w-5 h-5" />} color="bg-red-500" />
-      </div>
-      <div className="card">
-        <h3 className="font-semibold text-slate-900 mb-4">Resumo Financeiro</h3>
-        <div className="space-y-3">
-          <div className="flex justify-between p-3 bg-emerald-50 rounded-lg"><span className="text-sm text-slate-700">Receita Concluida</span><span className="font-bold text-emerald-700">R$ {(data?.completed_revenue || 0).toFixed(2)}</span></div>
-          <div className="flex justify-between p-3 bg-amber-50 rounded-lg"><span className="text-sm text-slate-700">Receita Pendente</span><span className="font-bold text-amber-700">R$ {(data?.pending_revenue || 0).toFixed(2)}</span></div>
-          <div className="flex justify-between p-3 bg-slate-50 rounded-lg"><span className="text-sm font-medium text-slate-900">Total</span><span className="font-bold text-lg text-slate-900">R$ {(data?.total_revenue || 0).toFixed(2)}</span></div>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold font-heading text-slate-900">Financeiro</h2>
+          <p className="text-sm text-slate-600">Controle de receitas e formas de pagamento</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="month" value={period} onChange={e => setPeriod(e.target.value)} className="input-field text-sm" />
+          <div className="flex bg-slate-100 rounded-lg p-0.5">
+            <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='resumo'?'bg-white shadow-sm':'text-slate-500'}`}>Resumo</button>
+            <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view==='transacoes'?'bg-white shadow-sm':'text-slate-500'}`}>Transacoes</button>
+          </div>
         </div>
       </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Receita Total" value={`R$ ${totalRevenue.toFixed(2)}`} icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
+        <StatCard label="Transacoes" value={summary?.transaction_count || 0} icon={<CheckCircle2 className="w-5 h-5" />} color="bg-blue-500" />
+        <StatCard label="Ticket Medio" value={`R$ ${summary?.transaction_count ? (totalRevenue / summary.transaction_count).toFixed(2) : '0.00'}`} icon={<BarChart3 className="w-5 h-5" />} color="bg-amber-500" />
+        <StatCard label="Formas Pgto" value={Object.keys(byMethod).length} icon={<CreditCard className="w-5 h-5" />} color="bg-violet-500" />
+      </div>
+
+      {view === 'resumo' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card">
+            <h3 className="font-semibold text-slate-900 mb-4">Por Forma de Pagamento</h3>
+            <div className="space-y-3">
+              {Object.entries(byMethod).length === 0 && <p className="text-sm text-slate-400 py-4 text-center">Nenhuma transacao registrada</p>}
+              {Object.entries(byMethod).map(([method, amount]) => (
+                <div key={method} className="flex items-center gap-3">
+                  <div className={`w-3 h-3 rounded-full flex-shrink-0 ${PAYMENT_COLORS[method] || 'bg-slate-400'}`} />
+                  <div className="flex-1">
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm font-medium text-slate-700">{PAYMENT_LABELS[method] || method}</span>
+                      <span className="text-sm font-bold text-slate-900">R$ {amount.toFixed(2)}</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${PAYMENT_COLORS[method] || 'bg-slate-400'}`} style={{ width: `${totalRevenue ? (amount / totalRevenue * 100) : 0}%` }} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <h3 className="font-semibold text-slate-900 mb-4">Ultimas Transacoes</h3>
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {(summary?.transactions || []).slice(0, 15).map(t => (
+                <div key={t.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">{t.description}</p>
+                    <p className="text-xs text-slate-500">{t.date} • {PAYMENT_LABELS[t.payment_method] || t.payment_method}</p>
+                  </div>
+                  <span className="text-sm font-bold text-emerald-600 flex-shrink-0 ml-2">R$ {(t.amount || 0).toFixed(2)}</span>
+                </div>
+              ))}
+              {(summary?.transactions || []).length === 0 && <p className="text-sm text-slate-400 text-center py-6">Nenhuma transacao</p>}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead><tr className="border-b border-slate-200">
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Data</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Descricao</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Profissional</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Forma Pgto</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor</th>
+              </tr></thead>
+              <tbody>
+                {(summary?.transactions || []).map(t => (
+                  <tr key={t.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
+                    <td className="py-3 px-4 text-slate-600">{t.date}</td>
+                    <td className="py-3 px-4 font-medium text-slate-900">{t.description}</td>
+                    <td className="py-3 px-4 text-slate-600">{t.professional_name || '-'}</td>
+                    <td className="py-3 px-4"><span className={`text-xs px-2 py-0.5 rounded-full text-white font-medium ${PAYMENT_COLORS[t.payment_method] || 'bg-slate-400'}`}>{PAYMENT_LABELS[t.payment_method] || t.payment_method}</span></td>
+                    <td className="py-3 px-4 font-bold text-emerald-600">R$ {(t.amount || 0).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {(summary?.transactions || []).length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhuma transacao</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

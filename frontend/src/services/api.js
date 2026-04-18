@@ -119,6 +119,15 @@ export const schedulingAPI = {
   getSmartAvailability: (params) => api.get('/scheduling/smart-availability', { params }),
   getOnboardingStatus: () => api.get('/scheduling/onboarding-status'),
   completeOnboarding: () => api.post('/scheduling/onboarding-complete'),
+  concludeAppointment: (id, data) => api.put(`/scheduling/appointments/${id}/conclude`, data),
+  getFinancialTransactions: (params) => api.get('/scheduling/financial/transactions', { params }),
+  getFinancialSummary: (params) => api.get('/scheduling/financial/summary', { params }),
+  getPermissionProfiles: () => api.get('/scheduling/permission-profiles'),
+  createPermissionProfile: (data) => api.post('/scheduling/permission-profiles', data),
+  updatePermissionProfile: (id, data) => api.put(`/scheduling/permission-profiles/${id}`, data),
+  deletePermissionProfile: (id) => api.delete(`/scheduling/permission-profiles/${id}`),
+  updateClient: (id, data) => api.put(`/scheduling/clients/${id}`, data),
+  deleteClient: (id) => api.delete(`/scheduling/clients/${id}`),
 };
 
 // Public API

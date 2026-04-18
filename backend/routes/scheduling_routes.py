@@ -153,6 +153,154 @@ async def delete_appointment(
         raise HTTPException(status_code=404, detail="Agendamento nao encontrado")
     return {"message": "Agendamento deletado"}
 
+
+
+# === CONCLUDE APPOINTMENT WITH PAYMENT ===
+class ConcludeAppointment(BaseModel):
+    payment_method: str  # dinheiro, pix, cartao_debito, cartao_credito
+    notes: Optional[str] = None
+
+@router.put("/appointments/{appointment_id}/conclude")
+async def conclude_appointment(
+    appointment_id: str,
+    data: ConcludeAppointment,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    apt = await db.appointments.find_one({"id": appointment_id, "company_id": user["company_id"]})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Agendamento nao encontrado")
+    if apt.get("status") in ["cancelado", "concluido"]:
+        raise HTTPException(status_code=400, detail="Agendamento ja finalizado")
+    
+    update = {
+        "status": "concluido",
+        "payment_method": data.payment_method,
+        "payment_status": "pago",
+        "concluded_at": datetime.now(timezone.utc).isoformat(),
+        "concluded_by": user["id"]
+    }
+    if data.notes:
+        update["notes"] = data.notes
+    await db.appointments.update_one({"id": appointment_id}, {"$set": update})
+
+    # Record financial transaction
+    transaction = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "appointment_id": appointment_id,
+        "type": "receita",
+        "amount": apt.get("price", 0),
+        "payment_method": data.payment_method,
+        "description": f"{apt.get('service_name','')} - {apt.get('customer_name','')}",
+        "professional_id": apt.get("professional_id"),
+        "professional_name": apt.get("professional_name"),
+        "date": apt.get("date"),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.financial_transactions.insert_one(transaction)
+
+    return await db.appointments.find_one({"id": appointment_id}, {"_id": 0})
+
+
+# === FINANCIAL TRANSACTIONS ===
+@router.get("/financial/transactions")
+async def list_transactions(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    start_date: str = None, end_date: str = None,
+    payment_method: str = None
+):
+    query = {"company_id": user["company_id"]}
+    if start_date:
+        query["date"] = {"$gte": start_date}
+    if end_date:
+        query.setdefault("date", {})["$lte"] = end_date
+    if payment_method:
+        query["payment_method"] = payment_method
+    txns = await db.financial_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return txns
+
+
+@router.get("/financial/summary")
+async def financial_summary(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    start_date: str = None, end_date: str = None
+):
+    query = {"company_id": user["company_id"]}
+    if start_date:
+        query["date"] = {"$gte": start_date}
+    if end_date:
+        query.setdefault("date", {})["$lte"] = end_date
+    
+    txns = await db.financial_transactions.find(query, {"_id": 0}).to_list(5000)
+    total = sum(t.get("amount", 0) for t in txns)
+    by_method = {}
+    for t in txns:
+        m = t.get("payment_method", "outros")
+        by_method[m] = by_method.get(m, 0) + t.get("amount", 0)
+    
+    return {
+        "total_revenue": total,
+        "transaction_count": len(txns),
+        "by_payment_method": by_method,
+        "transactions": txns[:50]
+    }
+
+
+# === PERMISSION PROFILES ===
+class PermissionProfileCreate(BaseModel):
+    name: str
+    permissions: list  # list of permission keys
+
+@router.get("/permission-profiles")
+async def list_permission_profiles(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    profiles = await db.permission_profiles.find({"company_id": user["company_id"]}, {"_id": 0}).to_list(100)
+    return profiles
+
+@router.post("/permission-profiles")
+async def create_permission_profile(
+    data: PermissionProfileCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    profile = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": data.name,
+        "permissions": data.permissions,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.permission_profiles.insert_one(profile)
+    return {k: v for k, v in profile.items() if k != "_id"}
+
+@router.put("/permission-profiles/{profile_id}")
+async def update_permission_profile(
+    profile_id: str,
+    data: PermissionProfileCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    await db.permission_profiles.update_one(
+        {"id": profile_id, "company_id": user["company_id"]},
+        {"$set": {"name": data.name, "permissions": data.permissions}}
+    )
+    return await db.permission_profiles.find_one({"id": profile_id}, {"_id": 0})
+
+@router.delete("/permission-profiles/{profile_id}")
+async def delete_permission_profile(
+    profile_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    await db.permission_profiles.delete_one({"id": profile_id, "company_id": user["company_id"]})
+    return {"message": "Perfil deletado"}
+
+
 @router.get("/calendar")
 async def get_calendar(
     user: dict = Depends(get_current_user),
@@ -404,6 +552,30 @@ async def create_client(
     }
     await db.clients.insert_one(client)
     return {k: v for k, v in client.items() if k != "_id"}
+
+@router.put("/clients/{client_id}")
+async def update_client(
+    client_id: str,
+    data: ClientCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    await db.clients.update_one({"id": client_id, "company_id": user["company_id"]}, {"$set": update_data})
+    return await db.clients.find_one({"id": client_id}, {"_id": 0})
+
+@router.delete("/clients/{client_id}")
+async def delete_client(
+    client_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    result = await db.clients.delete_one({"id": client_id, "company_id": user["company_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Cliente nao encontrado")
+    return {"message": "Cliente deletado"}
+
+
 
 @router.get("/clients/lookup/{phone}")
 async def lookup_client_by_phone(
