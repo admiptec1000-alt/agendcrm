@@ -321,3 +321,32 @@ async def delete_company(
     await db.booking_pages.delete_many({"company_id": company_id})
 
     return {"message": "Empresa deletada com sucesso"}
+
+
+from pydantic import BaseModel as PydanticBaseModel
+
+# === RESET COMPANY ADMIN PASSWORD ===
+class ResetPasswordRequest(PydanticBaseModel):
+    new_password: str
+
+@router.put("/companies/{company_id}/reset-password")
+async def reset_company_admin_password(
+    company_id: str,
+    data: ResetPasswordRequest,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    company = await db.companies.find_one({"id": company_id})
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+    
+    admin_user = await db.company_users.find_one({"company_id": company_id, "role": "company_admin"})
+    if not admin_user:
+        raise HTTPException(status_code=404, detail="Admin da empresa nao encontrado")
+    
+    await db.company_users.update_one(
+        {"id": admin_user["id"]},
+        {"$set": {"password": get_password_hash(data.new_password)}}
+    )
+    return {"message": f"Senha resetada para {admin_user.get('email', 'admin')}", "email": admin_user.get("email")}
+
