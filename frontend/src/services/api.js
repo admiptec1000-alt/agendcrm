@@ -28,9 +28,21 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      // Don't redirect on login endpoints - let the component handle the error
+      const url = error.config?.url || '';
+      if (!url.includes('/auth/login') && !url.includes('/auth/super-admin/login')) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        // Redirect to the company login based on current URL
+        const slug = window.location.pathname.split('/')[1];
+        if (slug && slug !== 'super-admin' && slug !== 'admin-login' && slug !== 'landing') {
+          window.location.href = `/${slug}/login`;
+        } else if (window.location.pathname.includes('super-admin')) {
+          window.location.href = '/admin-login';
+        } else {
+          window.location.href = '/landing';
+        }
+      }
     }
     return Promise.reject(error);
   }
