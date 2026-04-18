@@ -21,6 +21,13 @@ a#emergent-badge { display: none !important; visibility: hidden !important; opac
   box-sizing: border-box;
 }
 
+/* Fix date inputs on iOS */
+input[type="date"], input[type="datetime-local"], input[type="time"] {
+  max-width: 100%;
+  min-width: 0;
+  -webkit-appearance: none;
+}
+
 body {
   font-family: 'Manrope', sans-serif;
   background: #F8FAFC;

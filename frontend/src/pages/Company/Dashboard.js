@@ -1878,21 +1878,21 @@ const FinanceiroPage = () => {
 
       {/* Collapsible filters */}
       {showFilters && (
-        <div className="rounded-xl border border-slate-200 bg-white p-3 mb-4 space-y-2">
+        <div className="rounded-xl border border-slate-200 bg-white p-3 mb-4 space-y-2 overflow-hidden">
           <div className="grid grid-cols-2 gap-2">
-            <div><label className="text-[10px] font-bold uppercase text-slate-400">Inicio</label>
-              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-start-date" /></div>
-            <div><label className="text-[10px] font-bold uppercase text-slate-400">Fim</label>
-              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-end-date" /></div>
+            <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Inicio</label>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="input-field text-xs !py-1.5 w-full min-w-0" data-testid="fin-start-date" /></div>
+            <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Fim</label>
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="input-field text-xs !py-1.5 w-full min-w-0" data-testid="fin-end-date" /></div>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div><label className="text-[10px] font-bold uppercase text-slate-400">Profissional</label>
-              <select value={filterProf} onChange={e => setFilterProf(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-prof-filter">
+              <select value={filterProf} onChange={e => setFilterProf(e.target.value)} className="input-field text-xs !py-1.5 w-full" data-testid="fin-prof-filter">
                 <option value="">Todos</option>
                 {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select></div>
             <div><label className="text-[10px] font-bold uppercase text-slate-400">Forma Pgto</label>
-              <select value={filterMethod} onChange={e => setFilterMethod(e.target.value)} className="input-field text-xs !py-1.5" data-testid="fin-method-filter">
+              <select value={filterMethod} onChange={e => setFilterMethod(e.target.value)} className="input-field text-xs !py-1.5 w-full" data-testid="fin-method-filter">
                 <option value="">Todas</option>
                 <option value="dinheiro">Dinheiro</option><option value="pix">PIX</option>
                 <option value="cartao_credito">Credito</option><option value="cartao_debito">Debito</option>
