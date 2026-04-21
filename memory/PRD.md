@@ -62,6 +62,12 @@
 - [x] Manifest endpoint prioriza `page.title` > `company.name`; gera ícones em múltiplos tamanhos (96/152/180/192/512 + maskable) quando logo_url existe.
 - [x] Hook `useCompanyBranding` usa URL relativa para manifest (evita CORS), atualiza todos os apple-touch-icon variants.
 - [x] Service Worker `CACHE_NAME` bumpado para `agentcrm-v2` para invalidar index.html antigo em usuários existentes.
+- [x] **Domínio**: CORS ampliado para `https://agentcrm.8ip.com.br` (novo domínio de produção).
+- [x] **Landing Page**: atalho discreto "Administracao" no rodapé -> /admin-login.
+
+## Recent Changes (Feb 2026 - iter 25)
+- [x] **Agenda — novo layout**: 4 cards de métricas no topo (Total Geral / Hoje / Concluidos / Taxa Conclusao %) com ícones coloridos; barra de filtros avançados (busca por cliente/servico/profissional, status dropdown, profissional dropdown, data inicial + final) com botão "Limpar filtros"; pills de filtro rápido mantidas (Hoje/Pendentes/Confirmados/Concluidos/Todos) com contador.
+- [x] **WhatsApp — não enviava mensagem após agendamento**: fix em `notifications.py`. Causa 1: template salvo com `{var}` (chave única) mas o renderer só trocava `{{var}}` (duplas). Agora o `render_template` aceita ambas as sintaxes + mapa de aliases (`nome`→`nome_cliente`, `profissional`→`nome_profissional`, etc.). Causa 2: antes o backend tentava enviar mesmo com a conexão marcada como `disconnected` no Baileys; agora valida status no microserviço antes e loga claramente quando pula.
 
 ## Backlog
 ### P1

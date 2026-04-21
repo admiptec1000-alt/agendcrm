@@ -1222,6 +1222,24 @@ const PAYMENT_METHODS = [{key:'dinheiro',label:'Dinheiro'},{key:'pix',label:'PIX
 const APT_STATUS_COLORS = { confirmado: 'bg-emerald-100 text-emerald-700', pendente: 'bg-amber-100 text-amber-700', cancelado: 'bg-red-100 text-red-700', concluido: 'bg-blue-100 text-blue-700' };
 const APT_STATUS_DOT = { confirmado: 'bg-emerald-500', pendente: 'bg-amber-500', cancelado: 'bg-red-500', concluido: 'bg-blue-500' };
 
+const MetricCard = ({ label, value, subtitle, icon, iconBg, iconColor, testId }) => (
+  <div
+    className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow"
+    data-testid={testId}
+  >
+    <div className="flex items-start justify-between">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-slate-500 truncate">{label}</p>
+        <p className="mt-1 text-2xl sm:text-3xl font-bold text-slate-900 tabular-nums leading-tight">{value}</p>
+        <p className="text-[11px] text-slate-400 mt-1 truncate">{subtitle}</p>
+      </div>
+      <div className={`w-10 h-10 rounded-xl ${iconBg} ${iconColor} flex items-center justify-center flex-shrink-0 ml-2`}>
+        {icon}
+      </div>
+    </div>
+  </div>
+);
+
 const AgendaPage = () => {
   const { user } = useAuth();
   const hasPerm = (key) => {
@@ -1233,24 +1251,59 @@ const AgendaPage = () => {
 
   const [appointments, setAppointments] = useState([]);
   const [services, setServices] = useState([]);
+  const [professionals, setProfessionals] = useState([]);
   const [filter, setFilter] = useState('hoje');
   const [concludeApt, setConcludeApt] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState('');
   const [finalPrice, setFinalPrice] = useState('');
   const [editApt, setEditApt] = useState(null);
 
+  // New filters
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('todos');
+  const [professionalFilter, setProfessionalFilter] = useState('todos');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
   const today = new Date().toISOString().split('T')[0];
 
-  useEffect(() => { load(); schedulingAPI.getServices().then(r => setServices(r.data)).catch(() => {}); }, []);
+  useEffect(() => {
+    load();
+    schedulingAPI.getServices().then(r => setServices(r.data)).catch(() => {});
+    schedulingAPI.getProfessionals().then(r => setProfessionals(r.data)).catch(() => {});
+  }, []);
   const load = async () => { const r = await schedulingAPI.getAppointments(); setAppointments(r.data); };
 
-  const filtered = appointments.filter(a => {
+  // Quick pill filter (Hoje / Pendentes / Confirmados / Concluidos / Todos)
+  const byPill = (a) => {
     if (filter === 'hoje') return a.date === today;
     if (filter === 'pendentes') return a.status === 'pendente';
     if (filter === 'confirmados') return a.status === 'confirmado';
     if (filter === 'concluidos') return a.status === 'concluido';
     return true;
-  }).sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+  };
+  // Advanced filters on top of pill
+  const byAdvanced = (a) => {
+    if (statusFilter !== 'todos' && a.status !== statusFilter) return false;
+    if (professionalFilter !== 'todos' && a.professional_id !== professionalFilter) return false;
+    if (dateFrom && a.date < dateFrom) return false;
+    if (dateTo && a.date > dateTo) return false;
+    if (searchTerm) {
+      const q = searchTerm.toLowerCase();
+      const hay = `${a.customer_name || ''} ${a.service_name || ''} ${a.professional_name || ''} ${a.customer_phone || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+  const filtered = appointments
+    .filter(a => byPill(a) && byAdvanced(a))
+    .sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+  const clearFilters = () => {
+    setSearchTerm(''); setStatusFilter('todos'); setProfessionalFilter('todos');
+    setDateFrom(''); setDateTo('');
+  };
+  const hasAnyAdvFilter = searchTerm || statusFilter !== 'todos' || professionalFilter !== 'todos' || dateFrom || dateTo;
 
   const handleStatusChange = async (id, status) => {
     try { await schedulingAPI.updateAppointment(id, { status }); toast.success('Status atualizado!'); load(); }
@@ -1277,9 +1330,14 @@ const AgendaPage = () => {
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao concluir'); }
   };
 
+  // Metrics (global, not affected by filters)
+  const totalCount = appointments.length;
   const todayCount = appointments.filter(a => a.date === today).length;
+  const concludedCount = appointments.filter(a => a.status === 'concluido').length;
+  const conclusionRate = totalCount > 0 ? Math.round((concludedCount / totalCount) * 100) : 0;
   const pendingCount = appointments.filter(a => a.status === 'pendente').length;
   const confirmedCount = appointments.filter(a => a.status === 'confirmado').length;
+  const todayStr = new Date().toLocaleDateString('pt-BR');
 
   const FILTERS = [
     {key:'hoje', label:'Hoje', count: todayCount},
@@ -1291,11 +1349,110 @@ const AgendaPage = () => {
 
   return (
     <div className="animate-fade-in" data-testid="agenda-page">
-      {/* Stats inline */}
-      <div className="flex items-center gap-3 mb-4 text-xs">
-        <span className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary font-bold">{todayCount} hoje</span>
-        <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 font-bold">{pendingCount} pend.</span>
-        <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-bold">{confirmedCount} conf.</span>
+      {/* 4 Metric Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <MetricCard
+          label="Total Geral"
+          value={totalCount}
+          subtitle="Todos os agendamentos"
+          icon={<Users className="w-6 h-6" />}
+          iconBg="bg-blue-50"
+          iconColor="text-blue-600"
+          testId="metric-total"
+        />
+        <MetricCard
+          label="Hoje"
+          value={todayCount}
+          subtitle={todayStr}
+          icon={<CalendarCheck className="w-6 h-6" />}
+          iconBg="bg-violet-50"
+          iconColor="text-violet-600"
+          testId="metric-today"
+        />
+        <MetricCard
+          label="Concluidos"
+          value={concludedCount}
+          subtitle="Total finalizado"
+          icon={<Check className="w-6 h-6" />}
+          iconBg="bg-emerald-50"
+          iconColor="text-emerald-600"
+          testId="metric-concluded"
+        />
+        <MetricCard
+          label="Taxa Conclusao"
+          value={`${conclusionRate}%`}
+          subtitle="Eficiencia geral"
+          icon={<Sparkles className="w-6 h-6" />}
+          iconBg="bg-orange-50"
+          iconColor="text-orange-600"
+          testId="metric-rate"
+        />
+      </div>
+
+      {/* Advanced Filters Card */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 mb-4 shadow-sm" data-testid="agenda-filters-card">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+          <div className="relative lg:col-span-2">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              placeholder="Buscar por cliente, servico ou profissional"
+              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+              data-testid="agenda-search"
+            />
+          </div>
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+            data-testid="agenda-status-filter"
+          >
+            <option value="todos">Todos os status</option>
+            <option value="pendente">Pendente</option>
+            <option value="confirmado">Confirmado</option>
+            <option value="concluido">Concluido</option>
+            <option value="cancelado">Cancelado</option>
+          </select>
+          <select
+            value={professionalFilter}
+            onChange={e => setProfessionalFilter(e.target.value)}
+            className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+            data-testid="agenda-prof-filter"
+          >
+            <option value="todos">Todos profissionais</option>
+            {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <div className="grid grid-cols-2 gap-2 lg:col-span-1">
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+              className="px-2 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+              data-testid="agenda-date-from"
+              placeholder="De"
+            />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+              className="px-2 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+              data-testid="agenda-date-to"
+              placeholder="Ate"
+            />
+          </div>
+        </div>
+        {hasAnyAdvFilter && (
+          <div className="mt-2 flex justify-end">
+            <button
+              onClick={clearFilters}
+              className="text-xs text-slate-500 hover:text-primary font-medium flex items-center gap-1"
+              data-testid="agenda-clear-filters"
+            >
+              <X className="w-3 h-3" /> Limpar filtros
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Filter pills - scrollable */}
@@ -1304,7 +1461,7 @@ const AgendaPage = () => {
           <button key={f.key} onClick={() => setFilter(f.key)}
             className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${filter===f.key ? 'bg-primary text-white shadow-sm' : 'bg-slate-100 text-slate-600'}`}
             data-testid={`filter-${f.key}`}>
-            {f.label}
+            {f.label}{typeof f.count === 'number' ? ` (${f.count})` : ''}
           </button>
         ))}
       </div>

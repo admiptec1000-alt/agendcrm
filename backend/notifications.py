@@ -6,6 +6,7 @@ once the message is dispatched (user's product decision).
 """
 import os
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -15,14 +16,45 @@ logger = logging.getLogger(__name__)
 
 WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
 
+# Aliases to make templates forgiving: users often write {nome} instead of
+# {{nome_cliente}}, {servico} instead of {{servico}}, etc.
+VAR_ALIASES = {
+    "nome": "nome_cliente",
+    "cliente": "nome_cliente",
+    "profissional": "nome_profissional",
+    "barbeiro": "nome_profissional",
+    "funcionario": "nome_profissional",
+    "servico": "servico",
+    "produto": "servico",
+    "data": "data",
+    "hora": "hora",
+    "empresa": "empresa",
+    "link_cancelar": "link_cancelar",
+    "link": "link_cancelar",
+}
+
 
 def render_template(template: str, variables: dict) -> str:
-    """Replace {{var}} placeholders with actual values."""
+    """Replace {var} and {{var}} placeholders with actual values.
+    Accepts both single and double braces (users often save templates with single
+    braces) and applies alias map so short names work too.
+    """
     if not template:
         return ""
-    out = template
-    for k, v in (variables or {}).items():
-        out = out.replace(f"{{{{{k}}}}}", str(v if v is not None else ""))
+    vars_map = dict(variables or {})
+    # Add alias-based keys so {nome} resolves to nome_cliente, etc.
+    for alias, real in VAR_ALIASES.items():
+        if alias not in vars_map and real in vars_map:
+            vars_map[alias] = vars_map[real]
+
+    def _replace(match):
+        key = match.group(1).strip()
+        return str(vars_map.get(key, match.group(0)))
+
+    # 1) Double-brace {{var}}
+    out = re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}", _replace, template)
+    # 2) Single-brace {var} (only if no braces inside)
+    out = re.sub(r"(?<!\{)\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}(?!\})", _replace, out)
     return out
 
 
@@ -33,8 +65,10 @@ async def _get_active_whatsapp_conn(db: AsyncIOMotorDatabase, company_id: str) -
     )
 
 
-async def _send_via_baileys(conn_id: str, phone: str, message: str):
-    """Send message via the Node Baileys microservice. Fire-and-forget."""
+async def _send_via_baileys(conn_id: str, phone: str, message: str) -> bool:
+    """Send message via the Node Baileys microservice. Fire-and-forget.
+    Returns True only when the microservice confirms the message was dispatched.
+    """
     if not phone or not message:
         return False
     # Normalize phone: keep digits only
@@ -42,14 +76,19 @@ async def _send_via_baileys(conn_id: str, phone: str, message: str):
     if not clean:
         return False
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
                 f"{WA_SERVICE_URL}/instances/{conn_id}/send",
                 json={"phone": clean, "message": message}
             )
-        return True
+            if r.status_code >= 400:
+                logger.warning(
+                    f"[notify] WA send HTTP {r.status_code} to {clean}: {r.text[:200]}"
+                )
+                return False
+            return True
     except Exception as e:
-        logger.warning(f"WhatsApp send failed to {clean}: {e}")
+        logger.warning(f"[notify] WA send exception to {clean}: {e}")
         return False
 
 
@@ -65,8 +104,27 @@ async def notify_appointment_created(
     """
     conn = await _get_active_whatsapp_conn(db, company_id)
     if not conn:
-        logger.info(f"[notify] No active WhatsApp for company={company_id}")
+        logger.warning(
+            f"[notify] No CONNECTED WhatsApp instance for company={company_id}. "
+            f"Appointment {appointment.get('id')} WON'T receive confirmation. "
+            f"Admin must connect WhatsApp in the Conexoes page."
+        )
         return False
+
+    # Verify the remote Baileys actually reports this instance as connected
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get(f"{WA_SERVICE_URL}/instances/{conn['id']}/status")
+            if r.status_code == 200:
+                st = r.json() or {}
+                if not st.get("connected"):
+                    logger.warning(
+                        f"[notify] DB says connected but Baileys reports status={st.get('status')} "
+                        f"for conn={conn['id']} (company={company_id}). Skipping send."
+                    )
+                    return False
+    except Exception as e:
+        logger.info(f"[notify] Could not verify remote status ({e}); will try send anyway")
 
     # Load templates
     tmpls = await db.message_templates.find(
