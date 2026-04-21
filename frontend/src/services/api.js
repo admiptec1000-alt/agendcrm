@@ -192,6 +192,7 @@ export const channelsAPI = {
   getChatChannels: () => api.get('/channels/chat/channels'),
   getChatMessages: (params) => api.get('/channels/chat/messages', { params }),
   sendChatMessage: (data) => api.post('/channels/chat/messages', data),
+  getServiceHealth: () => api.get('/channels/service-health'),
 };
 
 // Reports API

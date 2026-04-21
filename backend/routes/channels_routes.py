@@ -16,6 +16,34 @@ logger = logging.getLogger(__name__)
 WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
 
 
+@router.get("/service-health")
+async def service_health(user: dict = Depends(get_current_user)):
+    """Check if the WhatsApp microservice (Baileys) is reachable."""
+    import time
+    start = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(f"{WA_SERVICE_URL}/health")
+            data = resp.json()
+            elapsed_ms = int((time.time() - start) * 1000)
+            return {
+                "online": True,
+                "instances": data.get("instances", 0),
+                "latency_ms": elapsed_ms,
+                "url": WA_SERVICE_URL,
+            }
+    except Exception as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        logger.warning(f"WA service unreachable: {e}")
+        return {
+            "online": False,
+            "instances": 0,
+            "latency_ms": elapsed_ms,
+            "error": str(e)[:100],
+            "url": WA_SERVICE_URL,
+        }
+
+
 # === MODELS ===
 class ConnectionCreate(BaseModel):
     name: str

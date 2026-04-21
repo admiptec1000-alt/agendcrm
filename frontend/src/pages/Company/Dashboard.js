@@ -1817,8 +1817,23 @@ const ConexoesPage = () => {
   const [templates, setTemplates] = useState([]);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [serviceHealth, setServiceHealth] = useState(null);
 
   useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const checkHealth = async () => {
+      try {
+        const r = await channelsAPI.getServiceHealth();
+        if (!cancelled) setServiceHealth(r.data);
+      } catch (e) {
+        if (!cancelled) setServiceHealth({ online: false });
+      }
+    };
+    checkHealth();
+    const interval = setInterval(checkHealth, 30000); // poll every 30s
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
   const loadData = async () => {
     setLoading(true);
     try {
@@ -1866,7 +1881,25 @@ const ConexoesPage = () => {
 
   return (
     <div className="animate-fade-in" data-testid="conexoes-page">
-      <p className="text-sm text-slate-600 mb-6">Gerencie canais de comunicacao e mensagens automaticas</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+        <p className="text-sm text-slate-600">Gerencie canais de comunicacao e mensagens automaticas</p>
+        {serviceHealth && (
+          <div
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border w-fit ${
+              serviceHealth.online
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-red-50 text-red-700 border-red-200'
+            }`}
+            data-testid="wa-service-health"
+            title={serviceHealth.online ? `Latencia ${serviceHealth.latency_ms}ms` : (serviceHealth.error || 'Servico indisponivel')}
+          >
+            <span className={`w-2 h-2 rounded-full ${serviceHealth.online ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+            {serviceHealth.online
+              ? `WhatsApp Online · ${serviceHealth.latency_ms}ms`
+              : 'WhatsApp Offline'}
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1 mb-6 w-fit">
         <button onClick={() => setTab('conexoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${tab==='conexoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-conexoes">Canais</button>
