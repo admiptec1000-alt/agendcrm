@@ -1636,6 +1636,10 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
   const todayStr = new Date().toISOString().split('T')[0];
   const [book, setBook] = useState({ service_id: '', professional_id: '', date: todayStr, time: '' });
 
+  // Subscription for currently picked client
+  const [subInfo, setSubInfo] = useState(null); // { has_subscription, subscription, plan }
+  const [useSubscription, setUseSubscription] = useState(false);
+
   const formatPhone = (v) => {
     const d = v.replace(/\D/g,'').slice(0,11);
     if (d.length <= 2) return d;
@@ -1656,6 +1660,24 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
   }, [searchCli]);
+
+  // Lookup subscription whenever selected client changes
+  useEffect(() => {
+    const phone = step === 'pick' ? selectedClient?.phone : newClient.phone;
+    if (!phone || phone.replace(/\D/g,'').length < 10) {
+      setSubInfo(null); setUseSubscription(false); return;
+    }
+    let cancelled = false;
+    schedulingAPI.lookupClientSubscription(phone).then(r => {
+      if (cancelled) return;
+      setSubInfo(r.data);
+      if (r.data?.has_subscription) setUseSubscription(true);
+      else setUseSubscription(false);
+    }).catch(() => {
+      if (!cancelled) { setSubInfo(null); setUseSubscription(false); }
+    });
+    return () => { cancelled = true; };
+  }, [selectedClient, newClient.phone, step]);
 
   const pickExisting = (c) => {
     setSelectedClient({ name: c.name, phone: c.phone, email: c.email || '', id: c.id });
@@ -1681,7 +1703,7 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
     if (!book.service_id || !book.professional_id || !book.date || !book.time) {
       toast.error('Preencha servico, profissional, data e hora'); return;
     }
-    onSave({ customer, booking: book });
+    onSave({ customer, booking: { ...book, use_subscription: !!useSubscription } });
   };
 
   const ready = (step === 'new'
@@ -1806,6 +1828,42 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
                     className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
                     data-testid="new-apt-newc-email"
                   />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Subscription banner */}
+          {subInfo?.has_subscription && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3" data-testid="sub-banner">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-emerald-500 text-white flex items-center justify-center flex-shrink-0">
+                  <CreditCard className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-emerald-800">
+                    Cliente assinante: {subInfo.plan?.name || 'Plano'}
+                  </p>
+                  <p className="text-[11px] text-emerald-700 mt-0.5">
+                    Creditos restantes: <b>{subInfo.subscription?.credits_remaining ?? 0}</b>
+                    {subInfo.subscription?.end_date && (
+                      <> &middot; Valido ate {new Date(subInfo.subscription.end_date).toLocaleDateString('pt-BR')}</>
+                    )}
+                  </p>
+                  <label className="mt-2 flex items-center gap-2 cursor-pointer" data-testid="sub-toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={useSubscription}
+                      onChange={e => setUseSubscription(e.target.checked)}
+                      className="w-4 h-4 rounded border-emerald-400 text-emerald-600 focus:ring-emerald-500"
+                      data-testid="sub-use-toggle"
+                    />
+                    <span className="text-sm font-medium text-emerald-900">
+                      {useSubscription
+                        ? 'Usar creditos da assinatura (valor R$ 0,00)'
+                        : 'Cobrar valor normal do servico (sem debitar creditos)'}
+                    </span>
+                  </label>
                 </div>
               </div>
             </div>

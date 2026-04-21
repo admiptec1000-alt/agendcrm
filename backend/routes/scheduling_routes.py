@@ -126,14 +126,16 @@ async def create_appointment(
         raise HTTPException(status_code=404, detail="Profissional nao encontrado")
 
     # Check client subscription (active + not expired + has credits for this service)
+    # Only debits credits when the caller explicitly opted-in via use_subscription=True
     price = service["price"]
     subscription_applied = False
+    want_sub = bool(getattr(data, "use_subscription", False))
     client_sub = await db.client_subscriptions.find_one({
         "company_id": user["company_id"],
         "client_phone": data.customer_phone,
         "status": "active"
     })
-    if client_sub and _calc_sub_status(client_sub) == "active":
+    if want_sub and client_sub and _calc_sub_status(client_sub) == "active":
         plan = await db.subscription_plans.find_one({"id": client_sub["plan_id"]})
         if plan:
             # Find credits_per_use for this service
@@ -158,6 +160,10 @@ async def create_appointment(
                     await db.client_subscriptions.update_one(
                         {"id": client_sub["id"]}, {"$set": {"status": "expired"}}
                     )
+            elif cost is None:
+                raise HTTPException(status_code=400, detail="Servico nao coberto pela assinatura do cliente")
+            else:
+                raise HTTPException(status_code=400, detail=f"Creditos insuficientes (necessarios: {cost})")
 
     appointment_id = str(uuid.uuid4())
     appointment = {
@@ -380,6 +386,30 @@ async def list_transactions(
         query["payment_method"] = payment_method
     txns = await db.financial_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return txns
+
+@router.get("/client-subscription-lookup")
+async def lookup_client_subscription(
+    phone: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Return the active subscription of a client (by phone) for this company.
+    Used by the admin Agenda screen to decide whether to debit credits.
+    """
+    if not phone:
+        return {"has_subscription": False}
+    sub = await db.client_subscriptions.find_one(
+        {"company_id": user["company_id"], "client_phone": phone, "status": "active"},
+        {"_id": 0}
+    )
+    if not sub or _calc_sub_status(sub) != "active":
+        return {"has_subscription": False}
+    plan = await db.subscription_plans.find_one({"id": sub["plan_id"]}, {"_id": 0})
+    return {
+        "has_subscription": True,
+        "subscription": sub,
+        "plan": plan,
+    }
 
 
 @router.get("/financial/summary")

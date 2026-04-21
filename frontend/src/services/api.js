@@ -116,6 +116,7 @@ export const schedulingAPI = {
   getClients: (params) => api.get('/scheduling/clients', { params }),
   createClient: (data) => api.post('/scheduling/clients', data),
   lookupClient: (phone) => api.get(`/scheduling/clients/lookup/${phone}`),
+  lookupClientSubscription: (phone) => api.get('/scheduling/client-subscription-lookup', { params: { phone } }),
   getSubscriptionPlans: () => api.get('/scheduling/subscription-plans'),
   createSubscriptionPlan: (data) => api.post('/scheduling/subscription-plans', data),
   updateSubscriptionPlan: (id, data) => api.put(`/scheduling/subscription-plans/${id}`, data),
