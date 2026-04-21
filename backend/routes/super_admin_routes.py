@@ -38,6 +38,7 @@ ALL_FEATURES = [
     {"feature_key": "categorias", "label": "Categorias", "category": "scheduling", "icon": "FolderOpen"},
     {"feature_key": "servicos_produtos", "label": "Servicos e Produtos", "category": "scheduling", "icon": "Scissors"},
     {"feature_key": "assinaturas", "label": "Assinaturas", "category": "scheduling", "icon": "CreditCard"},
+    {"feature_key": "planos", "label": "Planos", "category": "scheduling", "icon": "Tag"},
     {"feature_key": "profissionais", "label": "Profissionais", "category": "scheduling", "icon": "Briefcase"},
     {"feature_key": "financeiro", "label": "Financeiro", "category": "scheduling", "icon": "DollarSign"},
     {"feature_key": "comissoes", "label": "Comissoes", "category": "scheduling", "icon": "PieChart"},
@@ -133,6 +134,21 @@ async def update_business_type(
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
     if update_data:
         await db.business_types.update_one({"id": type_id}, {"$set": update_data})
+
+    # Propagate features to all companies of this business type
+    if "features" in update_data:
+        bt_features = update_data["features"]
+        bt_feat_map = {f["feature_key"]: f for f in bt_features}
+        companies = await db.companies.find({"business_type_id": type_id}).to_list(1000)
+        for c in companies:
+            new_features = list(bt_features)  # fresh copy for this company
+            # Preserve company-specific toggles by respecting whatever is already there for unknown keys
+            existing_keys = {f["feature_key"] for f in new_features}
+            for ef in c.get("features", []):
+                if ef["feature_key"] not in existing_keys:
+                    new_features.append(ef)
+            # For features also present in bt, overwrite 'enabled' to bt value (admin control)
+            await db.companies.update_one({"id": c["id"]}, {"$set": {"features": new_features}})
 
     updated = await db.business_types.find_one({"id": type_id}, {"_id": 0})
     return updated
