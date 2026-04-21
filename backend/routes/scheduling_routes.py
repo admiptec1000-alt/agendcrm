@@ -56,6 +56,9 @@ async def list_appointments(
         )
         if my_prof:
             query["professional_id"] = my_prof["id"]
+        else:
+            # Fail-closed: non-admin user with no linked professional sees nothing
+            return []
     appointments = await db.appointments.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
     return appointments
 
