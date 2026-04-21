@@ -32,7 +32,6 @@ const FEATURE_META = {
   contatos:           { icon: 'Users',            label: 'Clientes / Leads', group: 'CRM' },
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   chat_interno:       { icon: 'MessageSquare',    label: 'Chat Interno', group: 'CRM' },
-  chat_interno:       { icon: 'MessageSquare',    label: 'Chat Interno', group: 'Operacional' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
   informativos:       { icon: 'Info',             label: 'Informativos', group: 'CRM' },
