@@ -200,7 +200,7 @@ const CompanyDashboard = () => {
             {logoUrl && (
               <img src={logoUrl} alt="Logo" className="w-8 h-8 rounded-lg object-cover flex-shrink-0 border border-slate-200 hidden sm:block" data-testid="header-logo" />
             )}
-            <h2 className="text-lg font-bold font-heading text-slate-900 truncate">
+            <h2 className="font-page-title text-2xl lg:text-3xl text-slate-900 truncate">
               {FEATURE_META[activePage]?.label || 'Início'}
             </h2>
           </div>
