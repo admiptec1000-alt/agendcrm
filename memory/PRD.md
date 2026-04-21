@@ -6,25 +6,25 @@
 
 ## All Implemented Features
 - Multi-tenant SaaS, JWT Auth, PWA, Landing Page
-- Super Admin: Companies, Business Types, Subdomain
+- **PWA Dinâmico**: manifest e favicon personalizados por empresa (nome+logo). Quando usuário adiciona atalho no mobile, traz nome/logo do salão
+- Super Admin: Companies, Business Types, Subdomain, features por tipo de negócio
 - CRM: Atendimentos, FlowBuilder, Kanban, AI Agent (GPT-5.2)
 - **Header**: usuário top-right + Suspender Agenda + Sair (sem título duplicado nas páginas)
-- **Início**: agora é menu clicável (grid de atalhos para todas as páginas habilitadas) + 4 stat cards
-- **Logo global (Configurações)**: upload único refletido em header, sidebar, site público e TV
-- **Agenda page**: Lista com filtros (Hoje/Pendentes/Confirmados/Concluidos/Todos), Confirmar/Concluir com pagamento/Cancelar
-- **Calendario**: Mensal/Semanal/Diario views
+- **Início**: menu clicável (grid de atalhos) + 4 stat cards
+- **Logo global (Configurações)**: reflete em header, sidebar, site público, TV, PWA manifest e favicon
+- **Agenda page**: Lista com filtros, Confirmar/Concluir com pagamento/Cancelar
+- **Calendario**: Mensal/Semanal/Diario
 - **Financeiro dinamico**: Filtros data, profissional, forma pagamento
-- **Clientes**: Accordion inline — expande para histórico + botão Agendar rápido com formulário inline. Ao criar novo cliente, auto-expande e oferece agendamento imediato
-- **Concluir com pagamento**: 4 formas (Dinheiro/PIX/Credito/Debito), registra financeiro
-- **Permissões de Profissional**: não-admin vê apenas agendamentos do próprio profissional (vinculado por email). Fail-closed
-- **Meu Site**: mobile-first, sem cortes, URLs truncadas com cópia/visualização
-- **Suspensão de Agenda do Profissional**: modal dedicado em cada card da página Profissionais
-  - Modos: Período de dias OU Período do dia (horas)
-  - Data início/fim pré-preenchidas com hoje (editáveis)
-  - Lista suspensões existentes com opção de remover
-- **Perfis de Permissao**: CRUD
-- **WhatsApp Baileys (P0)**: Microservico Node.js port 3002, QR Code REAL, send/receive, webhooks
-- **Conexoes**: WhatsApp/Instagram, QR polling real, ConnectionCard component
+- **Clientes**: Accordion inline — expande histórico + Agendar rápido. Ao criar novo cliente, auto-expande e oferece agendamento imediato
+- **Concluir com pagamento**: 4 formas, registra financeiro
+- **Permissões de Profissional**: não-admin vê apenas agendamentos do próprio. Fail-closed
+- **Meu Site**: mobile-first, URLs truncadas com cópia
+- **Suspensão de Agenda do Profissional**: modal dedicado em cada card (dias ou horas)
+- **Usuarios (Admin)**: CRUD de usuários da empresa com email/senha/perfil de acesso/profissional vinculado
+- **Perfis de Acesso**: CRUD de perfis com seleção de 29 permissões agrupadas por categoria (com "Marcar todos" por grupo)
+- **Profissional como Usuário**: ao cadastrar/editar profissional, toggle "Este profissional é também um usuário do sistema" abre campos de senha + perfil de acesso e cria/atualiza company_user linkado
+- **WhatsApp Baileys (P0)**: Microservice Node.js porta 3002, QR Code real, send/receive, webhooks
+- **Conexoes**: WhatsApp/Instagram, QR polling real
 - **Message Templates**: 6 processos com variaveis, persistido MongoDB
 - **Chat Interno**: Canais, polling 5s
 - Meus Agendamentos (publico), Indoor TV, Mobile responsive
@@ -37,24 +37,23 @@
 - All supervised
 
 ## Recent Changes (Feb 2026)
-- [x] Renamed "Dashboard" → "Início" (header + fallback + onboarding)
-- [x] Logomarca global em Configurações aplica em todas as interfaces
-- [x] MySite page mobile-responsive
-- [x] Clients page: inline accordion expansion + auto-book no novo cliente
-- [x] SuspensionCreate model extendido com start_time/end_time
-- [x] list_appointments auto-filtra non-admin (fail-closed)
-- [x] Títulos duplicados removidos de todas as páginas internas
-- [x] Tela Início transformada em menu clicável (acesso rápido para todos os módulos)
-- [x] Modal dedicado de Suspensão em cada card de Profissional
+- [x] Manifest PWA dinâmico `/api/public/manifest/{slug}` com nome+logo da empresa
+- [x] Hook `useCompanyBranding` injeta title/favicon/manifest/theme-color
+- [x] Features `usuarios` e `perfis_acesso` habilitadas para Salão (e boss)
+- [x] Backend CRUD `/api/scheduling/company-users` (bcrypt, cross-login OK)
+- [x] Backend `/api/scheduling/all-features` (29 features agrupadas)
+- [x] UsuariosPage e PerfisAcessoPage com editor visual de permissões
+- [x] ProfessionalModal: toggle "é usuário do sistema" com senha+perfil
 
 ## Backlog
 ### P1
-- [ ] Vincular `company_users` a `professionals` via UI dedicada (criar role "profissional" + select)
-- [ ] Message delivery engine (processar scheduled messages)
+- [ ] Message delivery engine (scheduled messages)
+- [ ] Validar permission_profile_id/professional_id da mesma company no POST /company-users
+- [ ] Bloquear self-delete em /company-users
 ### P2
-- [ ] Stripe payment integration (requer chave do usuário)
+- [ ] Stripe payment integration
 - [ ] Notificações push
-- [ ] Relatórios gráficos (charts)
-- [ ] Refatorar Dashboard.js (2667 linhas) em arquivos separados
-- [ ] Substituir HTML5 date/time pickers por shadcn Calendar/TimePicker
-- [ ] Corrigir React hydration warning no dropdown de serviços
+- [ ] Relatórios gráficos
+- [ ] Refatorar Dashboard.js (>3000 linhas) em arquivos separados
+- [ ] Substituir HTML5 date/time pickers por shadcn Calendar
+- [ ] Hydration warning `<span>` dentro de `<option>` no dropdown de serviços
