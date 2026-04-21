@@ -57,11 +57,18 @@
 - [x] Frontend: Modais com font-page-title (Space Grotesk 300)
 - [x] Frontend: Label "Telefone / WhatsApp" alinhada com "Data de Nascimento"
 
+## Recent Changes (Feb 2026 - iter 24)
+- [x] **PWA "Add to Home Screen" (iOS)**: script inline em index.html roda ANTES do React mount, detecta slug da URL, atualiza `<title>`, `apple-mobile-web-app-title`, `apple-touch-icon`, `theme-color` e troca `<link rel="manifest">` para `/api/public/manifest/:slug` (same-origin). Resultado: iOS "Adicionar à Tela de Início" agora mostra o nome e URL corretos da empresa.
+- [x] Manifest endpoint prioriza `page.title` > `company.name`; gera ícones em múltiplos tamanhos (96/152/180/192/512 + maskable) quando logo_url existe.
+- [x] Hook `useCompanyBranding` usa URL relativa para manifest (evita CORS), atualiza todos os apple-touch-icon variants.
+- [x] Service Worker `CACHE_NAME` bumpado para `agentcrm-v2` para invalidar index.html antigo em usuários existentes.
+
 ## Backlog
 ### P1
 - [ ] Extrair lógica de consumo de créditos duplicada (scheduling + public) para helper
 - [ ] Unit test / ESLint no-undef CI gate para pegar ReferenceError em runtime
 - [ ] Refatorar Dashboard.js (>3300 linhas) e SchedulingPages.js (>1200 linhas)
+- [ ] **Guia ao cliente**: ícone no atalho só aparece se empresa fizer upload em Config > Personalização (logo_url vazia → logo padrão)
 ### P2
 - [ ] Stripe integration
 - [ ] Notificações push

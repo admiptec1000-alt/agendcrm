@@ -9,7 +9,79 @@
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="AgentCRM" />
         <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
-        <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+        <link rel="apple-touch-icon" sizes="152x152" href="%PUBLIC_URL%/logo192.png" />
+        <link rel="apple-touch-icon" sizes="167x167" href="%PUBLIC_URL%/logo192.png" />
+        <link rel="apple-touch-icon" sizes="180x180" href="%PUBLIC_URL%/logo192.png" />
+        <link rel="manifest" href="%PUBLIC_URL%/manifest.json" crossorigin="use-credentials" />
+        <script>
+          // Early PWA branding - runs before React mounts so iOS "Add to Home Screen"
+          // reads the correct title/icon/manifest from first HTML render.
+          (function () {
+            try {
+              var path = window.location.pathname || "/";
+              var first = path.split("/").filter(Boolean)[0] || "";
+              var blocked = { "landing":1,"admin-login":1,"register":1,"super-admin":1,"app":1,"login":1,"booking":1,"indoor":1,"static":1,"api":1 };
+              if (!first || blocked[first]) return;
+              var slug = first;
+              var manifestUrl = "/api/public/manifest/" + encodeURIComponent(slug);
+              // Swap the manifest link to the company-specific one
+              var manifestLink = document.querySelector('link[rel="manifest"]');
+              if (!manifestLink) {
+                manifestLink = document.createElement("link");
+                manifestLink.rel = "manifest";
+                document.head.appendChild(manifestLink);
+              }
+              manifestLink.setAttribute("crossorigin", "use-credentials");
+              manifestLink.href = manifestUrl;
+              // Fetch the manifest and apply title/icon/theme synchronously to DOM
+              fetch(manifestUrl, { credentials: "same-origin" })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (data) {
+                  if (!data) return;
+                  if (data.name) {
+                    document.title = data.name;
+                    var at = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+                    if (!at) {
+                      at = document.createElement("meta");
+                      at.setAttribute("name", "apple-mobile-web-app-title");
+                      document.head.appendChild(at);
+                    }
+                    at.content = String(data.name).substring(0, 30);
+                  }
+                  if (data.theme_color) {
+                    var tc = document.querySelector('meta[name="theme-color"]');
+                    if (!tc) {
+                      tc = document.createElement("meta");
+                      tc.setAttribute("name", "theme-color");
+                      document.head.appendChild(tc);
+                    }
+                    tc.content = data.theme_color;
+                  }
+                  if (data.icons && data.icons.length) {
+                    var iconSrc = data.icons[0].src;
+                    // Update every apple-touch-icon variant (iOS picks the first it finds)
+                    var appleIcons = document.querySelectorAll('link[rel="apple-touch-icon"]');
+                    appleIcons.forEach(function (link) { link.href = iconSrc; });
+                    var shortcut = document.querySelector('link[rel="shortcut icon"]');
+                    if (!shortcut) {
+                      shortcut = document.createElement("link");
+                      shortcut.rel = "shortcut icon";
+                      document.head.appendChild(shortcut);
+                    }
+                    shortcut.href = iconSrc;
+                    var favicon = document.querySelector('link[rel="icon"]');
+                    if (!favicon) {
+                      favicon = document.createElement("link");
+                      favicon.rel = "icon";
+                      document.head.appendChild(favicon);
+                    }
+                    favicon.href = iconSrc;
+                  }
+                })
+                .catch(function () { /* silent */ });
+            } catch (e) { /* silent */ }
+          })();
+        </script>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@600&display=swap" rel="stylesheet" />

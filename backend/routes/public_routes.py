@@ -29,17 +29,27 @@ async def get_dynamic_manifest(
     if page:
         company = await db.companies.find_one({"id": page["company_id"]}, {"_id": 0})
 
-    company_name = (company or {}).get("name") or "AgentCRM"
-    short_name = company_name[:12]
-    logo_path = (page or {}).get("logo_url")
+    # Priority: booking page title -> company name -> default
+    company_name = (page or {}).get("title") or (company or {}).get("name") or "AgentCRM"
+    # Short name: up to 12 chars, cut at word boundary when possible
+    short_name = company_name.strip()[:12]
+    logo_path = (page or {}).get("logo_url") or ""
     backend_url = os.environ.get("BACKEND_PUBLIC_URL", "")
 
     # Use company logo when available, otherwise default PNGs
     if logo_path:
-        icon_url = f"{backend_url}{logo_path}" if backend_url else logo_path
+        if logo_path.startswith("http"):
+            icon_url = logo_path
+        else:
+            icon_url = f"{backend_url}{logo_path}" if backend_url else logo_path
         icons = [
+            {"src": icon_url, "sizes": "96x96", "type": "image/png", "purpose": "any"},
+            {"src": icon_url, "sizes": "152x152", "type": "image/png", "purpose": "any"},
+            {"src": icon_url, "sizes": "180x180", "type": "image/png", "purpose": "any"},
             {"src": icon_url, "sizes": "192x192", "type": "image/png", "purpose": "any"},
             {"src": icon_url, "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": icon_url, "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+            {"src": icon_url, "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
         ]
     else:
         icons = [
@@ -50,6 +60,7 @@ async def get_dynamic_manifest(
     primary_color = (page or {}).get("primary_color") or "#4F46E5"
 
     return JSONResponse(content={
+        "id": f"/{slug}/painel",
         "short_name": short_name,
         "name": company_name,
         "icons": icons,
