@@ -170,6 +170,75 @@ async def get_connection_qr(
     return {"qr": None, "qr_base64": None, "status": conn.get("status")}
 
 
+@router.post("/connections/{conn_id}/sync")
+async def sync_connection_with_remote(
+    conn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Reconcile DB connection with actual Baileys state on the remote service.
+
+    Handles the case where the remote (Render) lost persistence (cold start)
+    and now has a DIFFERENT instance id than what the DB expects. If the remote
+    has any connected instance for this company and the DB one isn't connected,
+    we adopt the remote id/status.
+    """
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    if conn.get("type") != "whatsapp":
+        return conn
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 1) Try our own id first
+            r = await client.get(f"{WA_SERVICE_URL}/instances/{conn_id}/status")
+            st = r.json() if r.status_code == 200 else {}
+            if st.get("connected"):
+                await db.channel_connections.update_one(
+                    {"id": conn_id},
+                    {"$set": {"status": "connected", "last_connected": datetime.now(timezone.utc).isoformat()}}
+                )
+                return await db.channel_connections.find_one({"id": conn_id}, {"_id": 0})
+
+            # 2) Walk all remote instances to find one that's connected
+            r_all = await client.get(f"{WA_SERVICE_URL}/instances")
+            remote = r_all.json() if r_all.status_code == 200 else []
+            # Ignore instances already bound to some other company connection
+            bound_ids = set()
+            async for c in db.channel_connections.find({}, {"_id": 0, "id": 1}):
+                bound_ids.add(c["id"])
+            candidate = None
+            for inst in remote:
+                if inst.get("connected") and inst.get("id") not in bound_ids:
+                    candidate = inst
+                    break
+            if candidate:
+                new_id = candidate["id"]
+                # Rebind: move DB row to the new id
+                await db.channel_connections.update_one(
+                    {"id": conn_id},
+                    {"$set": {
+                        "id": new_id,
+                        "status": "connected",
+                        "phone": (candidate.get("user") or {}).get("id", "").split(":")[0] or conn.get("phone"),
+                        "last_connected": datetime.now(timezone.utc).isoformat(),
+                        "qr_code": None,
+                    }}
+                )
+                return await db.channel_connections.find_one({"id": new_id}, {"_id": 0})
+
+            # 3) Nothing connected out there — mark disconnected
+            await db.channel_connections.update_one(
+                {"id": conn_id}, {"$set": {"status": "disconnected"}}
+            )
+    except Exception as e:
+        logger.warning(f"Sync failed for {conn_id}: {e}")
+        raise HTTPException(status_code=502, detail="Erro ao sincronizar com o servico")
+
+    return await db.channel_connections.find_one({"id": conn_id}, {"_id": 0})
+
+
 @router.post("/connections/{conn_id}/disconnect")
 async def disconnect_channel(
     conn_id: str,

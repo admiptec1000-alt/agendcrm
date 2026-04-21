@@ -183,6 +183,7 @@ export const channelsAPI = {
   connectChannel: (id) => api.post(`/channels/connections/${id}/connect`),
   getConnectionQR: (id) => api.get(`/channels/connections/${id}/qr`),
   disconnectChannel: (id) => api.post(`/channels/connections/${id}/disconnect`),
+  syncConnection: (id) => api.post(`/channels/connections/${id}/sync`),
   sendWhatsAppMessage: (connId, data) => api.post(`/channels/connections/${connId}/send`, data),
   deleteConnection: (id) => api.delete(`/channels/connections/${id}`),
   getTemplates: () => api.get('/channels/templates'),

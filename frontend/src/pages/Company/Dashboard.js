@@ -2495,6 +2495,18 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
           } else if (res.data.qr_base64) {
             setQrData(res.data.qr_base64);
           }
+          // After 5 failed attempts, auto-try sync (covers the case where Render
+          // cold-started and the current instance id no longer matches the DB).
+          if (attempts === 5 && !res.data.qr_base64) {
+            try {
+              const sync = await channelsAPI.syncConnection(conn.id);
+              if (sync.data?.status === 'connected') {
+                toast.success('Conexao recuperada do servidor!');
+                onRefresh();
+                return true;
+              }
+            } catch { /* silent */ }
+          }
         } catch (e) {}
         return false;
       };
@@ -2517,6 +2529,20 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
       toast.success('Reiniciando conexao...');
       onRefresh();
     } catch (e) { toast.error('Erro ao reconectar'); }
+  };
+
+  const handleSync = async () => {
+    try {
+      const r = await channelsAPI.syncConnection(conn.id);
+      if (r.data?.status === 'connected') {
+        toast.success('Sincronizado: WhatsApp ja esta conectado!');
+      } else {
+        toast.info('Nada para sincronizar. Tente reconectar e escanear o QR.');
+      }
+      onRefresh();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Falha ao sincronizar');
+    }
   };
 
   return (
@@ -2542,6 +2568,16 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
           )}
           {(conn.status === 'connected' || conn.status === 'connecting') && (
             <button onClick={() => onDisconnect(conn.id)} className="text-sm text-red-500 hover:text-red-700 font-medium">Desconectar</button>
+          )}
+          {(conn.status !== 'connected') && (
+            <button
+              onClick={handleSync}
+              className="text-xs text-primary hover:text-primary-dark font-semibold px-2 py-1 rounded-md hover:bg-primary/5"
+              data-testid={`sync-${conn.id}`}
+              title="Verificar se ja existe uma sessao conectada no servidor"
+            >
+              Sincronizar
+            </button>
           )}
           <button onClick={() => onRemove(conn.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-400"><Trash2 className="w-4 h-4" /></button>
         </div>
