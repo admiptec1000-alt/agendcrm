@@ -27,6 +27,7 @@ ALL_FEATURES = [
     {"feature_key": "informativos", "label": "Informativos", "category": "crm", "icon": "Info"},
     {"feature_key": "api", "label": "API", "category": "crm", "icon": "Code"},
     {"feature_key": "usuarios", "label": "Usuarios", "category": "crm", "icon": "UserCog"},
+    {"feature_key": "perfis_acesso", "label": "Perfis de Acesso", "category": "crm", "icon": "Shield"},
     {"feature_key": "filas_chatbot", "label": "Filas & Chatbot", "category": "crm", "icon": "Bot"},
     {"feature_key": "conexoes", "label": "Conexoes WhatsApp", "category": "crm", "icon": "Link"},
     {"feature_key": "agente_ia", "label": "Agente de IA", "category": "crm", "icon": "Sparkles"},

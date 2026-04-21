@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { crmAPI, schedulingAPI, uploadAPI, reportsAPI, notificationsAPI, channelsAPI } from '../../services/api';
+import { useCompanyBranding } from '../../hooks/useCompanyBranding';
 import { toast } from 'sonner';
 import {
   LogOut, LayoutDashboard, Headphones, Zap, Columns3, Users, Tag,
@@ -8,7 +9,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send
+  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -19,7 +20,7 @@ const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
   Megaphone, GitBranch, Info, Code, UserCog, Bot, Link, Sparkles, Calendar,
   CalendarCheck, UserCheck, FolderOpen, Scissors, CreditCard, Briefcase,
-  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor
+  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor, Shield
 };
 
 const FEATURE_META = {
@@ -56,6 +57,8 @@ const FEATURE_META = {
   relatorios:         { icon: 'BarChart3',        label: 'Relatorios', group: 'Analise' },
   suporte:            { icon: 'LifeBuoy',         label: 'Suporte', group: 'Config Empresa' },
   indoor:             { icon: 'Monitor',          label: 'Indoor / TV', group: 'Config Empresa' },
+  usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
+  perfis_acesso:      { icon: 'Shield',           label: 'Perfis de Acesso', group: 'Administracao' },
 };
 
 const CompanyDashboard = () => {
@@ -68,6 +71,14 @@ const CompanyDashboard = () => {
 
   const API_BASE = process.env.REACT_APP_BACKEND_URL;
   const logoUrl = bookingPage?.logo_url ? `${API_BASE}${bookingPage.logo_url}` : null;
+
+  // Dynamic PWA branding (favicon + manifest + title) based on company
+  useCompanyBranding({
+    slug: user?.company?.subdomain || bookingPage?.slug,
+    name: user?.company?.name,
+    logoUrl: bookingPage?.logo_url,
+    themeColor: bookingPage?.primary_color,
+  });
 
   const enabledFeatures = useMemo(() => {
     const feats = user?.company?.features || [];
@@ -238,6 +249,8 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'relatorios': return <FinanceiroPage />;
     case 'configuracoes': return <ConfigPage />;
     case 'indoor': return <IndoorSettingsPage />;
+    case 'usuarios': return <UsuariosPage />;
+    case 'perfis_acesso': return <PerfisAcessoPage />;
     default: return <PlaceholderPage title={FEATURE_META[page]?.label || page} />;
   }
 };
@@ -2383,6 +2396,274 @@ const PlaceholderPage = ({ title }) => (
     <p className="text-slate-500">{title} - Em breve</p>
   </div>
 );
+
+/* ========== USUARIOS PAGE (Users/Access Accounts) ========== */
+const UsuariosPage = () => {
+  const [users, setUsers] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [professionals, setProfessionals] = useState([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const load = async () => {
+    const [u, p, pr] = await Promise.all([
+      schedulingAPI.getCompanyUsers(),
+      schedulingAPI.getPermissionProfiles(),
+      schedulingAPI.getProfessionals(),
+    ]);
+    setUsers(u.data); setProfiles(p.data); setProfessionals(pr.data);
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleSave = async (form) => {
+    try {
+      if (editing) {
+        const payload = { name: form.name, email: form.email, permission_profile_id: form.permission_profile_id || null, professional_id: form.professional_id || null };
+        if (form.password) payload.password = form.password;
+        await schedulingAPI.updateCompanyUser(editing.id, payload);
+        toast.success('Usuario atualizado!');
+      } else {
+        if (!form.password) { toast.error('Informe uma senha'); return; }
+        await schedulingAPI.createCompanyUser(form);
+        toast.success('Usuario criado!');
+      }
+      setShowAdd(false); setEditing(null); load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Excluir este usuario?')) return;
+    try { await schedulingAPI.deleteCompanyUser(id); toast.success('Excluido'); load(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
+  };
+
+  const getProfileName = (id) => profiles.find(p => p.id === id)?.name || '-';
+  const getProfessionalName = (id) => professionals.find(p => p.id === id)?.name || '-';
+
+  return (
+    <div className="animate-fade-in" data-testid="usuarios-page">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
+        <p className="text-sm text-slate-600">{users.length} usuarios</p>
+        <button onClick={() => { setEditing(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2 justify-center" data-testid="add-user-btn">
+          <Plus className="w-4 h-4" /> Novo Usuario
+        </button>
+      </div>
+      <div className="space-y-2">
+        {users.map(u => (
+          <div key={u.id} className="card !p-4 flex items-center gap-3" data-testid={`user-row-${u.id}`}>
+            <div className="w-10 h-10 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center">{u.name?.[0]?.toUpperCase()}</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-slate-900 truncate">{u.name}</p>
+              <p className="text-xs text-slate-500 truncate">{u.email}</p>
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {u.role === 'company_admin' && <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium">Admin</span>}
+                {u.permission_profile_id && <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{getProfileName(u.permission_profile_id)}</span>}
+                {u.professional_id && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">{getProfessionalName(u.professional_id)}</span>}
+              </div>
+            </div>
+            {u.role !== 'company_admin' && (
+              <div className="flex items-center gap-1">
+                <button onClick={() => { setEditing(u); setShowAdd(true); }} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400" data-testid={`edit-user-${u.id}`}><Pencil className="w-4 h-4" /></button>
+                <button onClick={() => handleDelete(u.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-500" data-testid={`delete-user-${u.id}`}><Trash2 className="w-4 h-4" /></button>
+              </div>
+            )}
+          </div>
+        ))}
+        {users.length === 0 && <div className="card text-center py-12"><UserCog className="w-10 h-10 text-slate-300 mx-auto mb-2" /><p className="text-sm text-slate-500">Nenhum usuario cadastrado</p></div>}
+      </div>
+
+      {showAdd && (
+        <Modal title={editing ? 'Editar Usuario' : 'Novo Usuario'} onClose={() => { setShowAdd(false); setEditing(null); }}>
+          <UsuarioForm user={editing} profiles={profiles} professionals={professionals} onSave={handleSave} />
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
+  const [form, setForm] = useState({
+    name: user?.name || '',
+    email: user?.email || '',
+    password: '',
+    permission_profile_id: user?.permission_profile_id || '',
+    professional_id: user?.professional_id || '',
+  });
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400">Nome</label>
+        <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="input-field" data-testid="user-name-input" />
+      </div>
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400">Email</label>
+        <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="input-field" data-testid="user-email-input" />
+      </div>
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400">Senha {user ? '(deixe em branco para manter)' : ''}</label>
+        <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} className="input-field" data-testid="user-password-input" />
+      </div>
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400">Perfil de Acesso</label>
+        <select value={form.permission_profile_id} onChange={e => setForm({...form, permission_profile_id: e.target.value})} className="input-field" data-testid="user-profile-select">
+          <option value="">Sem perfil (acesso limitado)</option>
+          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400">Vincular a Profissional (opcional)</label>
+        <select value={form.professional_id} onChange={e => setForm({...form, professional_id: e.target.value})} className="input-field" data-testid="user-prof-select">
+          <option value="">Nao vinculado</option>
+          {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      <div className="flex justify-end">
+        <button onClick={() => form.name && form.email && onSave(form)} className="btn-primary text-sm" data-testid="save-user-btn">Salvar</button>
+      </div>
+    </div>
+  );
+};
+
+/* ========== PERFIS DE ACESSO PAGE ========== */
+const PerfisAcessoPage = () => {
+  const [profiles, setProfiles] = useState([]);
+  const [features, setFeatures] = useState([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const load = async () => {
+    const [p, f] = await Promise.all([
+      schedulingAPI.getPermissionProfiles(),
+      schedulingAPI.getAllFeatures(),
+    ]);
+    setProfiles(p.data); setFeatures(f.data);
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleSave = async (form) => {
+    try {
+      if (editing) {
+        await schedulingAPI.updatePermissionProfile(editing.id, form);
+        toast.success('Perfil atualizado!');
+      } else {
+        await schedulingAPI.createPermissionProfile(form);
+        toast.success('Perfil criado!');
+      }
+      setShowAdd(false); setEditing(null); load();
+    } catch (e) { toast.error('Erro ao salvar'); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Excluir este perfil?')) return;
+    try { await schedulingAPI.deletePermissionProfile(id); toast.success('Excluido'); load(); }
+    catch (e) { toast.error('Erro'); }
+  };
+
+  return (
+    <div className="animate-fade-in" data-testid="perfis-acesso-page">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
+        <p className="text-sm text-slate-600">{profiles.length} perfis de acesso</p>
+        <button onClick={() => { setEditing(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2 justify-center" data-testid="add-profile-btn">
+          <Plus className="w-4 h-4" /> Novo Perfil
+        </button>
+      </div>
+      <div className="space-y-2">
+        {profiles.map(p => (
+          <div key={p.id} className="card !p-4 flex items-center gap-3" data-testid={`profile-row-${p.id}`}>
+            <div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center"><Shield className="w-5 h-5" /></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-slate-900 truncate">{p.name}</p>
+              <p className="text-xs text-slate-500">{(p.permissions || []).length} permissoes</p>
+            </div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => { setEditing(p); setShowAdd(true); }} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400" data-testid={`edit-profile-${p.id}`}><Pencil className="w-4 h-4" /></button>
+              <button onClick={() => handleDelete(p.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-500" data-testid={`delete-profile-${p.id}`}><Trash2 className="w-4 h-4" /></button>
+            </div>
+          </div>
+        ))}
+        {profiles.length === 0 && <div className="card text-center py-12"><Shield className="w-10 h-10 text-slate-300 mx-auto mb-2" /><p className="text-sm text-slate-500">Nenhum perfil cadastrado</p></div>}
+      </div>
+
+      {showAdd && (
+        <Modal title={editing ? 'Editar Perfil' : 'Novo Perfil'} onClose={() => { setShowAdd(false); setEditing(null); }}>
+          <PerfilAcessoForm profile={editing} features={features} onSave={handleSave} />
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+const PerfilAcessoForm = ({ profile, features, onSave }) => {
+  const [form, setForm] = useState({
+    name: profile?.name || '',
+    permissions: profile?.permissions || [],
+  });
+  const grouped = useMemo(() => {
+    const g = {};
+    features.forEach(f => {
+      if (!g[f.category]) g[f.category] = [];
+      g[f.category].push(f);
+    });
+    return g;
+  }, [features]);
+
+  const toggle = (key) => {
+    setForm(f => ({
+      ...f,
+      permissions: f.permissions.includes(key)
+        ? f.permissions.filter(k => k !== key)
+        : [...f.permissions, key]
+    }));
+  };
+
+  const toggleAll = (categoryKeys, checked) => {
+    setForm(f => {
+      const set = new Set(f.permissions);
+      categoryKeys.forEach(k => checked ? set.add(k) : set.delete(k));
+      return { ...f, permissions: Array.from(set) };
+    });
+  };
+
+  return (
+    <div className="space-y-4 max-h-[60vh] overflow-y-auto">
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400">Nome do Perfil</label>
+        <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Ex: Recepcionista, Profissional..." className="input-field" data-testid="profile-name-input" />
+      </div>
+      <div>
+        <p className="text-xs font-bold uppercase text-slate-400 mb-2">Permissoes ({form.permissions.length} de {features.length})</p>
+        <div className="space-y-3">
+          {Object.entries(grouped).map(([cat, items]) => {
+            const catKeys = items.map(i => i.feature_key);
+            const allChecked = catKeys.every(k => form.permissions.includes(k));
+            return (
+              <div key={cat} className="border border-slate-200 rounded-xl p-3" data-testid={`permission-group-${cat}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-bold uppercase text-slate-500">{cat}</p>
+                  <button onClick={() => toggleAll(catKeys, !allChecked)} className="text-xs text-primary font-medium" data-testid={`toggle-all-${cat}`}>
+                    {allChecked ? 'Desmarcar todos' : 'Marcar todos'}
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {items.map(f => (
+                    <label key={f.feature_key} className="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 cursor-pointer" data-testid={`permission-toggle-${f.feature_key}`}>
+                      <input type="checkbox" checked={form.permissions.includes(f.feature_key)} onChange={() => toggle(f.feature_key)} className="w-4 h-4 rounded text-primary" />
+                      <span className="text-sm text-slate-700">{f.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex justify-end sticky bottom-0 bg-white pt-3 border-t border-slate-100">
+        <button onClick={() => form.name && onSave(form)} className="btn-primary text-sm" data-testid="save-profile-btn">Salvar</button>
+      </div>
+    </div>
+  );
+};
+
 
 /* ========== INDOOR SETTINGS ========== */
 const IndoorSettingsPage = () => {

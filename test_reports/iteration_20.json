@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 20 full-stack testing for (1) dynamic PWA manifest + favicon, (2) company_users CRUD + login, (3) permission profiles UI with all-features grouping, (4) ProfessionalModal isUser toggle. Backend: 13/13 pytest tests passed. Frontend: login + manifest + home shortcuts + UsuariosPage + PerfisAcessoPage + ProfessionalModal all verified end-to-end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home 'Acesso Rapido' grid", "issues": ["home-shortcut-usuarios and home-shortcut-perfis_acesso render below the 'CONFIG EMPRESA' labelled group but the home grid itself has no visible section headers separating 'Administracao' cards from others. Sidebar groups correctly. Minor/non-blocking."]}
+    ]
+  },
+  "passed_tests": [
+    "Backend: GET /api/public/manifest/boss -> name=Boss, short_name='Boss' (<=12), icons>=2, start_url=/boss/painel, scope=/boss/, display=standalone",
+    "Backend: GET /api/public/manifest/<unknown> -> name='AgentCRM' default fallback with default icons",
+    "Backend: GET /api/scheduling/all-features w/o token -> 401/403; with auth -> 29 features each with feature_key/label/category, 'usuarios'/'perfis_acesso' present, 'Administracao' category exists",
+    "Backend: GET /api/scheduling/company-users -> 200, no 'password' field leaked, no '_id'",
+    "Backend: POST /api/scheduling/company-users -> 200, password hashed, role='user', returns no password",
+    "Backend: Duplicate email -> 400",
+    "Backend: Created company_user can POST /api/auth/login then GET /api/auth/me (role=user, correct email)",
+    "Backend: PUT company-users/{id} name-only -> password NOT re-hashed (old login still works)",
+    "Backend: PUT company-users/{id} password -> old password fails, new works",
+    "Backend: DELETE company-users/{id} for role=company_admin -> 400 (blocked)",
+    "Backend: DELETE company-users/{id} for normal user -> 200 and removed from list",
+    "Frontend: /boss/login -> /boss/painel; document.title='Boss' (custom, not 'AgentCRM')",
+    "Frontend: link[rel=manifest].href = https://agentcrm-book.preview.emergentagent.com/api/public/manifest/boss",
+    "Frontend: home-shortcut-usuarios and home-shortcut-perfis_acesso present on home grid",
+    "Frontend: Sidebar renders 'ADMINISTRACAO' section with Perfis de Acesso + Usuarios links (visible in screenshot)",
+    "Frontend: UsuariosPage (usuarios-page) shows admin; add-user-btn opens modal with user-name-input/user-email-input/user-password-input/user-profile-select; save creates user visible in list",
+    "Frontend: PerfisAcessoPage (perfis-acesso-page): add-profile-btn opens modal with 29 feature checkboxes and 'Marcar todos' per group",
+    "Frontend: ProfessionalModal Edit: is-user-checkbox present (in user-toggle-section); toggling reveals user-fields-section with user-password-input + user-profile-select"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_20.py",
+    "/app/test_reports/pytest/iteration_20.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "public_routes.py manifest icons: when logo_path is set and BACKEND_PUBLIC_URL env is empty, icons use the relative path directly (may break on installed PWA if cache prefers absolute). Consider hardcoding REACT_APP_BACKEND_URL fallback or serving via /api/public/logo.",
+    "scheduling_routes.ALL_SYSTEM_FEATURES is a module-level constant duplicated from feature toggles elsewhere; future maintenance risk if feature list changes in two places.",
+    "company_users create endpoint does not validate permission_profile_id or professional_id exist in the same company (silent dangling FK). Low risk because UI controls values, but API could be abused.",
+    "DELETE /api/scheduling/company-users does not check if user is deleting themselves (self-deletion allowed for non-admin roles). Consider blocking self-delete."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_20.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all requested flows verified)"},
+  "test_credentials": {"boss_company": "admin@boss.com.br / boss123 (/boss/login)"},
+  "seed_data_creation": "Created and cleaned up test company_user TEST_cu_<random>@boss.com.br via backend pytest (test_delete_created_user_cleanup) and via frontend UI flow (deleted via DELETE /api/scheduling/company-users/{id} at end of playwright run). No residual test data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 20 validates dynamic PWA manifest (title 'Boss', manifest /api/public/manifest/boss), all company_users CRUD with proper password hashing + cross-login, permission profile modal with 29 features grouped by category and 'Marcar todos' controls, and ProfessionalModal isUser toggle revealing password+perfil fields. Backend test file /app/backend/tests/test_iteration_20.py cleans up its own TEST_ data. Known design carryover (iter 18-19): native HTML5 date/time inputs in inline booking + SuspensionModal (not blocking)."
+}

@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
 from models import AppointmentCreate, AppointmentStatus
 import uuid
+import os
 from datetime import datetime, timezone, timedelta
 from typing import List
 
@@ -14,6 +16,52 @@ async def find_booking_page(db, slug, projection=None):
     if not page:
         page = await db.booking_pages.find_one({"custom_domain": slug, "is_active": True}, projection)
     return page
+
+# === DYNAMIC PWA MANIFEST (per company) ===
+@router.get("/manifest/{slug}")
+async def get_dynamic_manifest(
+    slug: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Return a PWA manifest customized for this company (name + logo)."""
+    page = await find_booking_page(db, slug)
+    company = None
+    if page:
+        company = await db.companies.find_one({"id": page["company_id"]}, {"_id": 0})
+
+    company_name = (company or {}).get("name") or "AgentCRM"
+    short_name = company_name[:12]
+    logo_path = (page or {}).get("logo_url")
+    backend_url = os.environ.get("BACKEND_PUBLIC_URL", "")
+
+    # Use company logo when available, otherwise default PNGs
+    if logo_path:
+        icon_url = f"{backend_url}{logo_path}" if backend_url else logo_path
+        icons = [
+            {"src": icon_url, "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": icon_url, "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        ]
+    else:
+        icons = [
+            {"src": "/logo192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/logo512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ]
+
+    primary_color = (page or {}).get("primary_color") or "#4F46E5"
+
+    return JSONResponse(content={
+        "short_name": short_name,
+        "name": company_name,
+        "icons": icons,
+        "start_url": f"/{slug}/painel",
+        "scope": f"/{slug}/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "theme_color": primary_color,
+        "background_color": "#F8FAFC",
+        "description": f"{company_name} - Agendamento e Gestao"
+    })
+
 
 @router.get("/booking/{slug}/client-lookup/{phone}")
 async def public_client_lookup(

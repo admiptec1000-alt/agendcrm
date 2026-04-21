@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { publicAPI } from '../../services/api';
+import { useCompanyBranding } from '../../hooks/useCompanyBranding';
 import { toast } from 'sonner';
 import { Calendar, Clock, User, Phone, Mail, CheckCircle2, Star, ArrowLeft, Sparkles, Scissors, ClipboardList, X, Ban } from 'lucide-react';
 
@@ -18,6 +19,13 @@ const PublicBooking = () => {
   const [submitting, setSubmitting] = useState(false);
   const [bookingDone, setBookingDone] = useState(false);
   const [selectedService, setSelectedService] = useState(null);
+
+  useCompanyBranding({
+    slug,
+    name: pageData?.company?.name,
+    logoUrl: pageData?.page?.logo_url,
+    themeColor: pageData?.page?.primary_color,
+  });
 
   const [formData, setFormData] = useState({
     service_id: '', professional_id: '', date: '', time: '',

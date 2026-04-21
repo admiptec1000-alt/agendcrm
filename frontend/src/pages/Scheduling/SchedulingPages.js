@@ -268,11 +268,28 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
       dom: { start: '00:00', end: '00:00', active: false },
     },
   });
+  const [isUser, setIsUser] = useState(false);
+  const [userForm, setUserForm] = useState({ password: '', permission_profile_id: '' });
+  const [profiles, setProfiles] = useState([]);
   const [suspensions, setSuspensions] = useState(professional?.suspensions || []);
   const [newSuspension, setNewSuspension] = useState({ start_date: '', end_date: '', reason: '' });
   const [newSpec, setNewSpec] = useState('');
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
+
+  useEffect(() => {
+    schedulingAPI.getPermissionProfiles().then(r => setProfiles(r.data)).catch(() => {});
+    // If editing, check if there's a linked user
+    if (isEditing && professional?.id) {
+      schedulingAPI.getCompanyUsers().then(r => {
+        const linked = (r.data || []).find(u => u.professional_id === professional.id);
+        if (linked) {
+          setIsUser(true);
+          setUserForm({ password: '', permission_profile_id: linked.permission_profile_id || '' });
+        }
+      }).catch(() => {});
+    }
+  }, [isEditing, professional]);
 
   const DAY_LABELS = { seg: 'Segunda', ter: 'Terca', qua: 'Quarta', qui: 'Quinta', sex: 'Sexta', sab: 'Sabado', dom: 'Domingo' };
 
@@ -319,14 +336,38 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
     if (form.phone) payload.phone = form.phone;
     if (form.email) payload.email = form.email;
     try {
+      let profId = professional?.id;
       if (isEditing) {
         await schedulingAPI.updateProfessional(professional.id, { ...payload, is_active: form.is_active, commission_percent: form.commission_percent });
       } else {
-        await schedulingAPI.createProfessional(payload);
+        const res = await schedulingAPI.createProfessional(payload);
+        profId = res.data.id;
       }
+
+      // Handle linked user
+      if (isUser) {
+        if (!form.email) { toast.error('Email e obrigatorio para criar usuario'); return; }
+        const allUsers = await schedulingAPI.getCompanyUsers();
+        const existing = (allUsers.data || []).find(u => u.professional_id === profId);
+        if (existing) {
+          const upd = { permission_profile_id: userForm.permission_profile_id || null, email: form.email, name: form.name };
+          if (userForm.password) upd.password = userForm.password;
+          await schedulingAPI.updateCompanyUser(existing.id, upd);
+        } else {
+          if (!userForm.password) { toast.error('Informe a senha do usuario'); return; }
+          await schedulingAPI.createCompanyUser({
+            name: form.name,
+            email: form.email,
+            password: userForm.password,
+            permission_profile_id: userForm.permission_profile_id || null,
+            professional_id: profId,
+          });
+        }
+      }
+
       toast.success(isEditing ? 'Atualizado!' : 'Criado!');
       onSave();
-    } catch (e) { toast.error('Erro ao salvar'); }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao salvar'); }
   };
 
   const updateDayHours = (day, field, value) => {
@@ -377,6 +418,32 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
                   <select value={form.is_active ? 'true' : 'false'} onChange={e => setForm({...form, is_active: e.target.value === 'true'})} className="input-field">
                     <option value="true">Ativo</option><option value="false">Inativo</option>
                   </select></div>
+              </div>
+
+              {/* Sistema de Usuario Toggle */}
+              <div className="border border-slate-200 rounded-xl p-3 bg-slate-50" data-testid="user-toggle-section">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={isUser} onChange={e => setIsUser(e.target.checked)} className="w-4 h-4 rounded text-primary" data-testid="is-user-checkbox" />
+                  <span className="text-sm font-medium text-slate-900">Este profissional e tambem um usuario do sistema</span>
+                </label>
+                {isUser && (
+                  <div className="mt-3 space-y-2" data-testid="user-fields-section">
+                    <p className="text-xs text-slate-500">Usara o email acima para fazer login.</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs font-medium text-slate-700 mb-1 block">Senha {isEditing ? '(opcional)' : '*'}</label>
+                        <input type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} className="input-field text-sm !py-2" placeholder={isEditing ? 'Deixe em branco para manter' : 'Senha do usuario'} data-testid="user-password-input" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-slate-700 mb-1 block">Perfil de Acesso</label>
+                        <select value={userForm.permission_profile_id} onChange={e => setUserForm({...userForm, permission_profile_id: e.target.value})} className="input-field text-sm !py-2" data-testid="user-profile-select">
+                          <option value="">Sem perfil</option>
+                          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}

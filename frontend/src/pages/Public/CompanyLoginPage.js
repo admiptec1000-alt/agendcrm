@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { publicAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { useCompanyBranding } from '../../hooks/useCompanyBranding';
 import { toast } from 'sonner';
 import { Lock, Mail } from 'lucide-react';
 
@@ -16,6 +17,13 @@ const CompanyLoginPage = () => {
   const [pageLoading, setPageLoading] = useState(true);
 
   const API_BASE = process.env.REACT_APP_BACKEND_URL;
+
+  useCompanyBranding({
+    slug,
+    name: companyData?.company?.name,
+    logoUrl: companyData?.page?.logo_url,
+    themeColor: companyData?.page?.primary_color,
+  });
 
   useEffect(() => {
     publicAPI.getBookingPage(slug)

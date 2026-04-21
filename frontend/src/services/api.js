@@ -140,6 +140,11 @@ export const schedulingAPI = {
   deletePermissionProfile: (id) => api.delete(`/scheduling/permission-profiles/${id}`),
   updateClient: (id, data) => api.put(`/scheduling/clients/${id}`, data),
   deleteClient: (id) => api.delete(`/scheduling/clients/${id}`),
+  getCompanyUsers: () => api.get('/scheduling/company-users'),
+  createCompanyUser: (data) => api.post('/scheduling/company-users', data),
+  updateCompanyUser: (id, data) => api.put(`/scheduling/company-users/${id}`, data),
+  deleteCompanyUser: (id) => api.delete(`/scheduling/company-users/${id}`),
+  getAllFeatures: () => api.get('/scheduling/all-features'),
 };
 
 // Public API

@@ -312,6 +312,124 @@ async def delete_permission_profile(
     return {"message": "Perfil deletado"}
 
 
+# === COMPANY USERS (non-admin users linked to professionals) ===
+from auth import get_password_hash, verify_password
+
+ALL_SYSTEM_FEATURES = [
+    {"feature_key": "dashboard", "label": "Inicio", "category": "Principal"},
+    {"feature_key": "atendimentos", "label": "Atendimentos", "category": "CRM"},
+    {"feature_key": "respostas_rapidas", "label": "Respostas Rapidas", "category": "CRM"},
+    {"feature_key": "kanban", "label": "Kanban", "category": "CRM"},
+    {"feature_key": "contatos", "label": "Contatos", "category": "CRM"},
+    {"feature_key": "tags", "label": "Tags", "category": "CRM"},
+    {"feature_key": "chat_interno", "label": "Chat Interno", "category": "CRM"},
+    {"feature_key": "campanhas", "label": "Campanhas", "category": "CRM"},
+    {"feature_key": "flowbuilder", "label": "Flowbuilder", "category": "CRM"},
+    {"feature_key": "filas_chatbot", "label": "Filas & Chatbot", "category": "CRM"},
+    {"feature_key": "agente_ia", "label": "Agente de IA", "category": "CRM"},
+    {"feature_key": "conexoes", "label": "Conexoes", "category": "CRM"},
+    {"feature_key": "calendario", "label": "Calendario", "category": "Operacional"},
+    {"feature_key": "agenda", "label": "Agenda", "category": "Operacional"},
+    {"feature_key": "agendamentos", "label": "Agendamento Msg", "category": "Operacional"},
+    {"feature_key": "clientes", "label": "Clientes", "category": "Operacional"},
+    {"feature_key": "categorias", "label": "Categorias", "category": "Catalogo"},
+    {"feature_key": "servicos_produtos", "label": "Servicos e Produtos", "category": "Catalogo"},
+    {"feature_key": "assinaturas", "label": "Assinaturas", "category": "Catalogo"},
+    {"feature_key": "profissionais", "label": "Profissionais", "category": "Catalogo"},
+    {"feature_key": "financeiro", "label": "Financeiro", "category": "Analise"},
+    {"feature_key": "comissoes", "label": "Comissoes", "category": "Analise"},
+    {"feature_key": "relatorios", "label": "Relatorios", "category": "Analise"},
+    {"feature_key": "meu_site", "label": "Meu Site", "category": "Config Empresa"},
+    {"feature_key": "notificacoes", "label": "Notificacoes", "category": "Config Empresa"},
+    {"feature_key": "configuracoes", "label": "Configuracoes", "category": "Config Empresa"},
+    {"feature_key": "indoor", "label": "Indoor / TV", "category": "Config Empresa"},
+    {"feature_key": "usuarios", "label": "Usuarios", "category": "Administracao"},
+    {"feature_key": "perfis_acesso", "label": "Perfis de Acesso", "category": "Administracao"},
+]
+
+@router.get("/all-features")
+async def list_all_features(user: dict = Depends(get_current_user)):
+    """List all system features for permission profile editor."""
+    return ALL_SYSTEM_FEATURES
+
+class CompanyUserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    permission_profile_id: Optional[str] = None
+    professional_id: Optional[str] = None
+
+class CompanyUserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    permission_profile_id: Optional[str] = None
+    professional_id: Optional[str] = None
+
+@router.get("/company-users")
+async def list_company_users(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    users = await db.company_users.find({"company_id": user["company_id"]}, {"_id": 0, "password": 0}).to_list(500)
+    return users
+
+@router.post("/company-users")
+async def create_company_user(
+    data: CompanyUserCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    existing = await db.company_users.find_one({"email": data.email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email ja cadastrado")
+    new_user = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": data.name,
+        "email": data.email,
+        "password": get_password_hash(data.password),
+        "role": "user",
+        "permission_profile_id": data.permission_profile_id,
+        "professional_id": data.professional_id,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.company_users.insert_one(new_user)
+    return {k: v for k, v in new_user.items() if k not in ("_id", "password")}
+
+@router.put("/company-users/{user_id}")
+async def update_company_user(
+    user_id: str,
+    data: CompanyUserUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    existing = await db.company_users.find_one({"id": user_id, "company_id": user["company_id"]})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "password" in update and update["password"]:
+        update["password"] = get_password_hash(update["password"])
+    if update:
+        await db.company_users.update_one({"id": user_id}, {"$set": update})
+    doc = await db.company_users.find_one({"id": user_id}, {"_id": 0, "password": 0})
+    return doc
+
+@router.delete("/company-users/{user_id}")
+async def delete_company_user(
+    user_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    existing = await db.company_users.find_one({"id": user_id, "company_id": user["company_id"]})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    if existing.get("role") == "company_admin":
+        raise HTTPException(status_code=400, detail="Nao e possivel excluir o administrador")
+    await db.company_users.delete_one({"id": user_id})
+    return {"message": "Usuario excluido"}
+
+
 @router.get("/calendar")
 async def get_calendar(
     user: dict = Depends(get_current_user),
