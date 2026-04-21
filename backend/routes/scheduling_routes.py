@@ -57,6 +57,31 @@ def _calc_sub_status(sub: dict) -> str:
         return "expired"
     return "active"
 
+
+async def _load_user_perms(db: AsyncIOMotorDatabase, user: dict) -> list:
+    """Return the list of permission feature_keys granted to this user via
+    permission_profile_id. Admins get ['*'] implicitly (callers should check
+    is_admin separately)."""
+    if user.get("role") in ("company_admin", "super_admin"):
+        return ["*"]
+    pid = user.get("permission_profile_id")
+    if not pid:
+        return []
+    pp = await db.permission_profiles.find_one(
+        {"id": pid, "company_id": user["company_id"]},
+        {"_id": 0, "permissions": 1}
+    )
+    return (pp or {}).get("permissions", []) or []
+
+
+async def _resolve_own_professional_id(db: AsyncIOMotorDatabase, user: dict) -> Optional[str]:
+    """Return the professional_id linked to this user (by email)."""
+    my = await db.professionals.find_one(
+        {"company_id": user["company_id"], "email": user.get("email")},
+        {"_id": 0, "id": 1}
+    )
+    return (my or {}).get("id")
+
 # === APPOINTMENTS ===
 @router.get("/appointments")
 async def list_appointments(
@@ -73,17 +98,17 @@ async def list_appointments(
         query["professional_id"] = professional_id
     if status_filter:
         query["status"] = status_filter
-    # Non-admin users: auto-filter by their linked professional (matched by email)
-    if user.get("role") and user["role"] != "company_admin" and user["role"] != "super_admin":
-        my_prof = await db.professionals.find_one(
-            {"company_id": user["company_id"], "email": user.get("email")},
-            {"_id": 0, "id": 1}
-        )
-        if my_prof:
-            query["professional_id"] = my_prof["id"]
-        else:
-            # Fail-closed: non-admin user with no linked professional sees nothing
-            return []
+    # Non-admin: optionally restrict to own appointments when the profile has
+    # the 'own_appointments_only' permission. Fail-closed if the permission is
+    # set but the user has no linked professional.
+    is_admin = user.get("role") in ("company_admin", "super_admin")
+    if not is_admin:
+        perms = await _load_user_perms(db, user)
+        if "own_appointments_only" in perms:
+            my_prof_id = await _resolve_own_professional_id(db, user)
+            if not my_prof_id:
+                return []
+            query["professional_id"] = my_prof_id
     appointments = await db.appointments.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
     return appointments
 
@@ -213,12 +238,12 @@ async def update_appointment(
     perms = []
     is_admin = user.get("role") in ("company_admin", "super_admin")
     if not is_admin:
-        if user.get("permission_profile_id"):
-            prof_doc = await db.permission_profiles.find_one(
-                {"id": user["permission_profile_id"], "company_id": user["company_id"]},
-                {"_id": 0, "permissions": 1}
-            )
-            perms = (prof_doc or {}).get("permissions", []) or []
+        perms = await _load_user_perms(db, user)
+        # own_appointments_only: cannot touch appointments of other professionals
+        if "own_appointments_only" in perms:
+            my_prof_id = await _resolve_own_professional_id(db, user)
+            if not my_prof_id or appointment.get("professional_id") != my_prof_id:
+                raise HTTPException(status_code=403, detail="Voce so pode editar seus proprios agendamentos")
         touching = set(update_data.keys())
         if (touching & sensitive_fields) - price_fields and "edit_appointment" not in perms:
             raise HTTPException(status_code=403, detail="Sem permissao para editar este agendamento")
@@ -291,15 +316,17 @@ async def conclude_appointment(
     if apt.get("status") in ["cancelado", "concluido"]:
         raise HTTPException(status_code=400, detail="Agendamento ja finalizado")
 
+    # Permission checks for non-admins
+    is_admin = user.get("role") in ("company_admin", "super_admin")
+    perms = [] if is_admin else await _load_user_perms(db, user)
+
+    if not is_admin and "own_appointments_only" in perms:
+        my_prof_id = await _resolve_own_professional_id(db, user)
+        if not my_prof_id or apt.get("professional_id") != my_prof_id:
+            raise HTTPException(status_code=403, detail="Voce so pode concluir seus proprios atendimentos")
+
     # Permission check for final_price override
-    if data.final_price is not None and user.get("role") and user["role"] not in ("company_admin", "super_admin"):
-        perms = []
-        if user.get("permission_profile_id"):
-            prof_doc = await db.permission_profiles.find_one(
-                {"id": user["permission_profile_id"], "company_id": user["company_id"]},
-                {"_id": 0, "permissions": 1}
-            )
-            perms = (prof_doc or {}).get("permissions", []) or []
+    if data.final_price is not None and not is_admin:
         if "edit_appointment_price" not in perms:
             raise HTTPException(status_code=403, detail="Sem permissao para alterar o valor")
 
@@ -470,6 +497,7 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "perfis_acesso", "label": "Perfis de Acesso", "category": "Administracao"},
     {"feature_key": "edit_appointment", "label": "Editar agendamento (hora/servico)", "category": "Permissoes"},
     {"feature_key": "edit_appointment_price", "label": "Alterar valor do agendamento", "category": "Permissoes"},
+    {"feature_key": "own_appointments_only", "label": "Ver/concluir somente os proprios agendamentos", "category": "Permissoes"},
 ]
 
 @router.get("/all-features")
@@ -481,7 +509,7 @@ async def list_all_features(
     Returns only features ENABLED by the Super Admin for this company's business type.
     Permission-only features (edit_appointment*) are always included regardless of features toggle.
     """
-    permission_only_keys = {"edit_appointment", "edit_appointment_price"}
+    permission_only_keys = {"edit_appointment", "edit_appointment_price", "own_appointments_only"}
 
     # Load company features (set by Super Admin toggles)
     company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0, "features": 1})
