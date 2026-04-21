@@ -6,28 +6,29 @@
 
 ## All Implemented Features
 - Multi-tenant SaaS, JWT Auth, PWA, Landing Page
-- **PWA Dinâmico**: manifest e favicon personalizados por empresa (nome+logo). Quando usuário adiciona atalho no mobile, traz nome/logo do salão
+- **PWA Dinâmico**: manifest e favicon personalizados por empresa
 - Super Admin: Companies, Business Types, Subdomain, features por tipo de negócio
 - CRM: Atendimentos, FlowBuilder, Kanban, AI Agent (GPT-5.2)
-- **Header**: usuário top-right + Suspender Agenda + Sair (sem título duplicado nas páginas)
 - **Início**: menu clicável (grid de atalhos) + 4 stat cards
 - **Logo global (Configurações)**: reflete em header, sidebar, site público, TV, PWA manifest e favicon
-- **Agenda page**: Lista com filtros, Confirmar/Concluir com pagamento/Cancelar
+- **Agenda page**:
+  - Lista com filtros, Confirmar/Concluir com pagamento/Cancelar
+  - **EDITAR agendamento**: alterar data/hora/serviço, adicionar itens extras (serviços/produtos), alterar valor (com permissão)
+  - **Concluir com valor final**: permite override do valor (com permissão)
+  - Permissões `edit_appointment` e `edit_appointment_price` granulares por perfil
 - **Calendario**: Mensal/Semanal/Diario
 - **Financeiro dinamico**: Filtros data, profissional, forma pagamento
-- **Clientes**: Accordion inline — expande histórico + Agendar rápido. Ao criar novo cliente, auto-expande e oferece agendamento imediato
-- **Concluir com pagamento**: 4 formas, registra financeiro
-- **Permissões de Profissional**: não-admin vê apenas agendamentos do próprio. Fail-closed
-- **Meu Site**: mobile-first, URLs truncadas com cópia
-- **Suspensão de Agenda do Profissional**: modal dedicado em cada card (dias ou horas)
-- **Usuarios (Admin)**: CRUD de usuários da empresa com email/senha/perfil de acesso/profissional vinculado
-- **Perfis de Acesso**: CRUD de perfis com seleção de 29 permissões agrupadas por categoria (com "Marcar todos" por grupo)
-- **Profissional como Usuário**: ao cadastrar/editar profissional, toggle "Este profissional é também um usuário do sistema" abre campos de senha + perfil de acesso e cria/atualiza company_user linkado
-- **WhatsApp Baileys (P0)**: Microservice Node.js porta 3002, QR Code real, send/receive, webhooks
-- **Conexoes**: WhatsApp/Instagram, QR polling real
-- **Message Templates**: 6 processos com variaveis, persistido MongoDB
-- **Chat Interno**: Canais, polling 5s
-- Meus Agendamentos (publico), Indoor TV, Mobile responsive
+- **Clientes**: Accordion inline, auto-book ao criar novo
+- **Permissões Profissional**: não-admin vê apenas próprios agendamentos. Fail-closed
+- **Suspensão de Agenda**:
+  - Modal dedicado em cada card (dias OU horas específicas)
+  - **FIX**: suspensão por horas bloqueia APENAS o intervalo (não o dia inteiro)
+- **Usuarios (Admin)**: CRUD de usuários com email/senha/perfil/profissional vinculado
+- **Perfis de Acesso**: CRUD com 31 permissões agrupadas por categoria (incluindo Permissoes granulares)
+- **Profissional como Usuário**: toggle no cadastro gera company_user linkado
+- **WhatsApp Baileys**: Microservice Node.js porta 3002
+- **Conexoes, Message Templates, Chat Interno**: Ver iterações anteriores
+- Site público, Indoor TV, Mobile responsive
 
 ## Architecture
 - FastAPI backend (port 8001)
@@ -37,13 +38,13 @@
 - All supervised
 
 ## Recent Changes (Feb 2026)
-- [x] Manifest PWA dinâmico `/api/public/manifest/{slug}` com nome+logo da empresa
-- [x] Hook `useCompanyBranding` injeta title/favicon/manifest/theme-color
-- [x] Features `usuarios` e `perfis_acesso` habilitadas para Salão (e boss)
-- [x] Backend CRUD `/api/scheduling/company-users` (bcrypt, cross-login OK)
-- [x] Backend `/api/scheduling/all-features` (29 features agrupadas)
-- [x] UsuariosPage e PerfisAcessoPage com editor visual de permissões
-- [x] ProfessionalModal: toggle "é usuário do sistema" com senha+perfil
+- [x] Typo "Servico" → "Serviço" na tela pública de agendamento
+- [x] BUG FIX: suspensão por horas considera o intervalo (não mais dia inteiro)
+- [x] Editar agendamento: data, hora, serviço, itens extras, valor
+- [x] Concluir com valor final opcional (override)
+- [x] Permissões granulares `edit_appointment` e `edit_appointment_price`
+- [x] Login + /me retornam user.permissions (['*'] admin, lista scoped user)
+- [x] Auto-fill de price em troca de serviço respeita permissão do usuário
 
 ## Backlog
 ### P1
@@ -54,6 +55,6 @@
 - [ ] Stripe payment integration
 - [ ] Notificações push
 - [ ] Relatórios gráficos
-- [ ] Refatorar Dashboard.js (>3000 linhas) em arquivos separados
+- [ ] Refatorar scheduling_routes.py e Dashboard.js (arquivos monolíticos)
+- [ ] Mover ALL_SYSTEM_FEATURES para módulo dedicado
 - [ ] Substituir HTML5 date/time pickers por shadcn Calendar
-- [ ] Hydration warning `<span>` dentro de `<option>` no dropdown de serviços

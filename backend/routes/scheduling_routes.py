@@ -153,8 +153,9 @@ async def update_appointment(
     # Permission check: non-admin needs edit_appointment or edit_appointment_price
     sensitive_fields = {"date", "time", "service_id", "extra_items", "price"}
     price_fields = {"price"}
-    if user.get("role") and user["role"] not in ("company_admin", "super_admin"):
-        perms = []
+    perms = []
+    is_admin = user.get("role") in ("company_admin", "super_admin")
+    if not is_admin:
         if user.get("permission_profile_id"):
             prof_doc = await db.permission_profiles.find_one(
                 {"id": user["permission_profile_id"], "company_id": user["company_id"]},
@@ -174,8 +175,9 @@ async def update_appointment(
             raise HTTPException(status_code=404, detail="Servico nao encontrado")
         update_data["service_name"] = new_service["name"]
         update_data.setdefault("duration", new_service.get("duration", 30))
-        # Only set price from service if caller didn't explicitly pass price
-        if "price" not in update_data:
+        # Only auto-fill price if caller didn't pass one AND has permission for price
+        has_price_perm = is_admin or "edit_appointment_price" in perms
+        if "price" not in update_data and has_price_perm:
             update_data["price"] = new_service.get("price", 0)
 
     # Normalize extra_items: ensure proper structure and recompute total if items provided
