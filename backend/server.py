@@ -151,6 +151,14 @@ async def startup_event():
     await seed_super_admin(db)
     await seed_business_types(db)
     init_object_storage()
+    # Start WhatsApp keep-alive background loop (Render free tier wake-up)
+    try:
+        from wa_keepalive import start_keepalive_loop
+        import asyncio
+        asyncio.create_task(start_keepalive_loop())
+        logger.info("WhatsApp keep-alive task started")
+    except Exception as e:
+        logger.warning(f"Failed to start WA keepalive: {e}")
     logger.info("Startup complete!")
 
 @app.on_event("shutdown")
