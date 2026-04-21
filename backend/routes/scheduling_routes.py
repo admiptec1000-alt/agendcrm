@@ -147,7 +147,54 @@ async def update_appointment(
     appointment = await db.appointments.find_one({"id": appointment_id, "company_id": user["company_id"]})
     if not appointment:
         raise HTTPException(status_code=404, detail="Agendamento nao encontrado")
+
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+
+    # Permission check: non-admin needs edit_appointment or edit_appointment_price
+    sensitive_fields = {"date", "time", "service_id", "extra_items", "price"}
+    price_fields = {"price"}
+    if user.get("role") and user["role"] not in ("company_admin", "super_admin"):
+        perms = []
+        if user.get("permission_profile_id"):
+            prof_doc = await db.permission_profiles.find_one(
+                {"id": user["permission_profile_id"], "company_id": user["company_id"]},
+                {"_id": 0, "permissions": 1}
+            )
+            perms = (prof_doc or {}).get("permissions", []) or []
+        touching = set(update_data.keys())
+        if (touching & sensitive_fields) - price_fields and "edit_appointment" not in perms:
+            raise HTTPException(status_code=403, detail="Sem permissao para editar este agendamento")
+        if (touching & price_fields) and "edit_appointment_price" not in perms:
+            raise HTTPException(status_code=403, detail="Sem permissao para alterar o valor")
+
+    # If service_id changed, refresh service_name and default price/duration
+    if "service_id" in update_data and update_data["service_id"] != appointment.get("service_id"):
+        new_service = await db.services.find_one({"id": update_data["service_id"], "company_id": user["company_id"]})
+        if not new_service:
+            raise HTTPException(status_code=404, detail="Servico nao encontrado")
+        update_data["service_name"] = new_service["name"]
+        update_data.setdefault("duration", new_service.get("duration", 30))
+        # Only set price from service if caller didn't explicitly pass price
+        if "price" not in update_data:
+            update_data["price"] = new_service.get("price", 0)
+
+    # Normalize extra_items: ensure proper structure and recompute total if items provided
+    if "extra_items" in update_data:
+        items = update_data["extra_items"] or []
+        normalized = []
+        for it in items:
+            normalized.append({
+                "service_id": it.get("service_id"),
+                "name": it.get("name"),
+                "price": float(it.get("price", 0) or 0),
+                "type": it.get("type", "service"),
+            })
+        update_data["extra_items"] = normalized
+        # If no explicit price passed, recompute: base price + sum extras
+        if "price" not in update_data:
+            base = appointment.get("price", 0) if "service_id" not in update_data else update_data.get("price", 0)
+            update_data["price"] = float(base) + sum(i["price"] for i in normalized)
+
     if update_data:
         await db.appointments.update_one({"id": appointment_id}, {"$set": update_data})
     updated = await db.appointments.find_one({"id": appointment_id}, {"_id": 0})
@@ -170,6 +217,7 @@ async def delete_appointment(
 class ConcludeAppointment(BaseModel):
     payment_method: str  # dinheiro, pix, cartao_debito, cartao_credito
     notes: Optional[str] = None
+    final_price: Optional[float] = None  # override final price at conclusion
 
 @router.put("/appointments/{appointment_id}/conclude")
 async def conclude_appointment(
@@ -183,11 +231,26 @@ async def conclude_appointment(
         raise HTTPException(status_code=404, detail="Agendamento nao encontrado")
     if apt.get("status") in ["cancelado", "concluido"]:
         raise HTTPException(status_code=400, detail="Agendamento ja finalizado")
-    
+
+    # Permission check for final_price override
+    if data.final_price is not None and user.get("role") and user["role"] not in ("company_admin", "super_admin"):
+        perms = []
+        if user.get("permission_profile_id"):
+            prof_doc = await db.permission_profiles.find_one(
+                {"id": user["permission_profile_id"], "company_id": user["company_id"]},
+                {"_id": 0, "permissions": 1}
+            )
+            perms = (prof_doc or {}).get("permissions", []) or []
+        if "edit_appointment_price" not in perms:
+            raise HTTPException(status_code=403, detail="Sem permissao para alterar o valor")
+
+    final_amount = float(data.final_price) if data.final_price is not None else apt.get("price", 0)
+
     update = {
         "status": "concluido",
         "payment_method": data.payment_method,
         "payment_status": "pago",
+        "price": final_amount,
         "concluded_at": datetime.now(timezone.utc).isoformat(),
         "concluded_by": user["id"]
     }
@@ -201,7 +264,7 @@ async def conclude_appointment(
         "company_id": user["company_id"],
         "appointment_id": appointment_id,
         "type": "receita",
-        "amount": apt.get("price", 0),
+        "amount": final_amount,
         "payment_method": data.payment_method,
         "description": f"{apt.get('service_name','')} - {apt.get('customer_name','')}",
         "professional_id": apt.get("professional_id"),
@@ -345,6 +408,8 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "indoor", "label": "Indoor / TV", "category": "Config Empresa"},
     {"feature_key": "usuarios", "label": "Usuarios", "category": "Administracao"},
     {"feature_key": "perfis_acesso", "label": "Perfis de Acesso", "category": "Administracao"},
+    {"feature_key": "edit_appointment", "label": "Editar agendamento (hora/servico)", "category": "Permissoes"},
+    {"feature_key": "edit_appointment_price", "label": "Alterar valor do agendamento", "category": "Permissoes"},
 ]
 
 @router.get("/all-features")
@@ -1031,8 +1096,28 @@ def parse_date_to_day_key(date_str: str) -> str:
 
 
 def is_professional_suspended(prof: dict, date_str: str) -> bool:
-    """Check if a professional is suspended on given date."""
-    return any(sus["start_date"] <= date_str <= sus["end_date"] for sus in prof.get("suspensions", []))
+    """Check if a professional has a FULL-DAY suspension on given date."""
+    for sus in prof.get("suspensions", []):
+        if sus["start_date"] <= date_str <= sus["end_date"]:
+            # Only counts as suspended-all-day if no time window is defined
+            if not sus.get("start_time") or not sus.get("end_time"):
+                return True
+    return False
+
+
+def get_suspension_intervals(prof: dict, date_str: str) -> list:
+    """Get time intervals (in minutes) when professional is suspended on a specific date.
+    Returns list of (start_min, end_min) tuples."""
+    intervals = []
+    for sus in prof.get("suspensions", []):
+        if sus["start_date"] <= date_str <= sus["end_date"]:
+            st = sus.get("start_time")
+            et = sus.get("end_time")
+            if st and et:
+                sh, sm = map(int, st.split(":"))
+                eh, em = map(int, et.split(":"))
+                intervals.append((sh * 60 + sm, eh * 60 + em))
+    return intervals
 
 
 def get_working_hours(prof: dict, day_key: str, biz_start: str, biz_end: str):
@@ -1124,6 +1209,8 @@ async def get_smart_availability(
             continue
 
         booked = await get_booked_intervals(db, company_id, pid, date)
+        # Add partial-day suspensions as blocked intervals
+        booked.extend(get_suspension_intervals(prof, date))
         all_slots |= calculate_available_slots(hours[0], hours[1], duration, booked)
 
     return {"date": date, "available_slots": sorted(all_slots), "duration": duration}

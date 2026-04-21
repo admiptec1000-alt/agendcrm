@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 21 full-stack testing for (1) suspension hourly-window BUG FIX, (2) edit appointment backend + frontend modal, (3) conclude with final_price override, (4) permission enforcement edit_appointment / edit_appointment_price, (5) public booking typo 'Serviço'. Backend: 12/12 pytest tests passed. Frontend: login -> painel, seeded appointment, sidebar Agenda -> agenda-edit-<id> opens edit-appointment-modal with all 7 inner testids visible. Public /boss booking page clearly shows 'Serviço' and 'Escolha seu Serviço ou Produto'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "passed_tests": [
+    "POST /api/auth/login returns user.permissions=['*'] for company_admin",
+    "GET /api/auth/me returns user.permissions=['*'] for company_admin",
+    "GET /api/scheduling/all-features returns 31 features including edit_appointment + edit_appointment_price under category 'Permissoes'",
+    "Suspension 11:00-12:00 via POST /api/scheduling/professionals/{id}/suspensions: GET /smart-availability blocks 11:00 and 11:30 but includes 12:00 and morning slots",
+    "GET /api/public/booking/boss/availability respects partial suspension (same semantics)",
+    "PUT /api/scheduling/appointments/{id} with {time,service_id} updates service_name + default price from new service",
+    "PUT /appointments/{id} with extra_items recomputes total = base + sum(extras)",
+    "PUT /appointments/{id} with {price} overrides total price",
+    "PUT /appointments/{id}/conclude with final_price=333.33 persists price=333.33 and creates financial_transaction.amount=333.33",
+    "Login for user with permission_profile returns permissions=['edit_appointment'] (scoped)",
+    "Non-admin user w/o edit perm: PUT /appointments/{id} with {time} -> 403; PUT with {price} -> 403",
+    "User with edit_appointment only: PUT time 200; PUT price -> 403; conclude with final_price -> 403",
+    "Frontend /boss/login -> /boss/painel",
+    "Frontend /boss public booking page shows 'Serviço' (with cedilla) in step indicator, 'Escolha seu Serviço ou Produto' heading",
+    "Frontend sidebar 'Agenda' shows agenda-edit-<id> pencil button for admin",
+    "Frontend clicking agenda-edit opens edit-appointment-modal with visible: edit-apt-date, edit-apt-time, edit-apt-service (select), add-extra-select, add-extra-btn, edit-apt-price, save-edit-apt-btn"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_21.py",
+    "/app/test_reports/pytest/iteration_21.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "scheduling_routes.update_appointment permission check: for a non-admin user with edit_appointment but NOT edit_appointment_price, when they change service_id only, the endpoint auto-sets update_data['price'] = new_service.price (line ~179). This updates the price in DB without triggering price permission check (price was added by server after the permission check). Consider moving the price-field permission validation to after auto-fill OR skip auto-fill when the user lacks edit_appointment_price. Low impact: changing service legitimately changes price, but admins may want non-admin to keep original price.",
+    "scheduling_routes.conclude_appointment: when final_price is None, no permission check is performed — but price is reused from appointment.price. OK. However 'price' in update dict is always set regardless of whether final_price was provided (line 253), so an audit trail would show a price re-write even on no-op. Minor.",
+    "public_routes.availability uses inline day_map/duplication of logic from scheduling_routes.get_suspension_intervals — extract to shared helper to prevent divergence on future changes.",
+    "ALL_SYSTEM_FEATURES (scheduling_routes.py line 381) now 31 entries and growing; should be moved to a dedicated module/file for feature registry to keep route file <1000 lines (currently ~1216)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_21.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% (all requested flows verified)"},
+  "test_credentials": {"boss_company": "admin@boss.com.br / boss123 (/boss/login)"},
+  "seed_data_creation": "Created and cleaned up: (a) TEST_iter21_svc_<hex> service if <2 services existed; (b) TEST_iter21_client appointment for PUT tests; (c) TEST_iter21_conclude appointment for conclude test; (d) 3 permission profiles TEST_iter21_{none|edit|both}_<tag>; (e) TEST_iter21_<tag>@boss.com.br company_users; (f) Hourly suspension 11:00-12:00 for prof 59f9312a-7f43-4511-beb6-9ff2345c1fcc. All cleaned up via DELETE in fixture teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 21 validates: (1) partial-day (hour-window) suspension bug fix -- smart-availability and public availability both block only the specified hour range and leave other slots available; (2) appointment edit: service_id, extra_items auto-total, price override; (3) conclude with final_price persists to appointment + financial_transaction; (4) permission profiles enforce 403 for non-admin on PUT/time/service/price and conclude final_price; (5) 31 features total incl. 2 'Permissoes' entries; (6) login + /me include 'permissions' array ('*' for admin, scoped list for user). Frontend EditAppointmentModal in Dashboard.js rendered from agenda page; all expected data-testids present. Public booking page shows correct 'Serviço' with cedilla. Boss company subdomain slug = 'boss' (NOT 'agentcrm-book'). Test professional id for hourly suspensions: 59f9312a-7f43-4511-beb6-9ff2345c1fcc.",
+  "rca of the issue": "Previous bug (suspension with hours blocked whole day) was fixed by splitting is_professional_suspended (only returns True for full-day suspensions, i.e., when start_time/end_time missing) from get_suspension_intervals (returns hour windows that are merged into 'booked' intervals before slot calculation). Same pattern applied in public_routes.availability. Verified via pytest test_smart_availability_blocks_only_suspended_hours and test_public_availability_respects_partial_suspension."
+}

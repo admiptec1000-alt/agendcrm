@@ -158,6 +158,9 @@ class AppointmentUpdate(BaseModel):
     notes: Optional[str] = None
     payment_method: Optional[str] = None  # dinheiro, pix, cartao_debito, cartao_credito
     payment_status: Optional[str] = None  # pendente, pago
+    service_id: Optional[str] = None
+    price: Optional[float] = None
+    extra_items: Optional[List[Dict[str, Any]]] = None  # [{service_id, name, price, type}]
 
 # Service Models
 class ServiceCreate(BaseModel):

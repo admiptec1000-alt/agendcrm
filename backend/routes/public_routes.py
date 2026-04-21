@@ -209,9 +209,21 @@ async def get_availability(
         prof = await db.professionals.find_one({"id": pid}, {"_id": 0})
         if not prof or not prof.get("is_active", True):
             continue
-        is_suspended = any(s["start_date"] <= date <= s["end_date"] for s in prof.get("suspensions", []))
+        # Full-day suspension check (no hourly window)
+        is_suspended = any(
+            s["start_date"] <= date <= s["end_date"] and not (s.get("start_time") and s.get("end_time"))
+            for s in prof.get("suspensions", [])
+        )
         if is_suspended:
             continue
+
+        # Partial-day suspension windows for this date
+        suspension_windows = []
+        for s in prof.get("suspensions", []):
+            if s["start_date"] <= date <= s["end_date"] and s.get("start_time") and s.get("end_time"):
+                sh, sm = map(int, s["start_time"].split(":"))
+                eh, em = map(int, s["end_time"].split(":"))
+                suspension_windows.append((sh * 60 + sm, eh * 60 + em))
 
         prof_hours = (prof.get("working_hours") or {}).get(day_key)
         if prof_hours:
@@ -234,6 +246,8 @@ async def get_availability(
         for apt in existing:
             ah, am = map(int, apt["time"].split(":"))
             booked.append((ah * 60 + am, ah * 60 + am + apt.get("duration", 30)))
+        # Merge partial-day suspension windows into booked intervals
+        booked.extend(suspension_windows)
 
         current = start_min
         while current + duration <= end_min:

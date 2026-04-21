@@ -77,7 +77,19 @@ async def company_login(
     
     user_data = {k: v for k, v in user.items() if k != "password"}
     user_data["company"] = company
-    
+
+    # Attach permissions for non-admin, "*" for admins
+    if user.get("role") == "company_admin":
+        user_data["permissions"] = ["*"]
+    elif user.get("permission_profile_id"):
+        pp = await db.permission_profiles.find_one(
+            {"id": user["permission_profile_id"], "company_id": user["company_id"]},
+            {"_id": 0, "permissions": 1, "name": 1}
+        )
+        if pp:
+            user_data["permissions"] = pp.get("permissions", [])
+            user_data["permission_profile_name"] = pp.get("name")
+
     return TokenResponse(
         access_token=access_token,
         user=user_data
@@ -186,6 +198,18 @@ async def get_current_user_info(
         bt = await db.business_types.find_one({"id": company["business_type_id"]}, {"_id": 0})
         if bt:
             user["business_type"] = bt
+
+    # Include permission keys for non-admin users
+    if user.get("permission_profile_id"):
+        pp = await db.permission_profiles.find_one(
+            {"id": user["permission_profile_id"], "company_id": user["company_id"]},
+            {"_id": 0, "permissions": 1, "name": 1}
+        )
+        if pp:
+            user["permissions"] = pp.get("permissions", [])
+            user["permission_profile_name"] = pp.get("name")
+    elif user.get("role") == "company_admin":
+        user["permissions"] = ["*"]  # Admin sees all
 
     return user
 

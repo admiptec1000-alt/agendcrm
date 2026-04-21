@@ -106,7 +106,7 @@ const PublicBooking = () => {
           <h2 className="text-2xl font-bold font-heading mb-2">Agendamento Confirmado!</h2>
           <p className="text-sm text-slate-600 mb-6">Voce recebera uma confirmacao no seu WhatsApp.</p>
           <div className="bg-slate-50 rounded-lg p-4 text-left space-y-2 text-sm">
-            <p><strong>Servico:</strong> {selectedService?.name}</p>
+            <p><strong>Serviço:</strong> {selectedService?.name}</p>
             <p><strong>Data:</strong> {formData.date}</p>
             <p><strong>Hora:</strong> {formData.time}</p>
           </div>
@@ -120,7 +120,7 @@ const PublicBooking = () => {
   }
 
   const steps = [
-    { n: 1, label: 'Servico' },
+    { n: 1, label: 'Serviço' },
     { n: 2, label: 'Profissional' },
     { n: 3, label: 'Data' },
     { n: 4, label: 'Horario' },
@@ -177,7 +177,7 @@ const PublicBooking = () => {
           {/* Step 1: Service */}
           {step === 1 && (
             <div data-testid="step-service">
-              <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Escolha seu Servico ou Produto</h2>
+              <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Escolha seu Serviço ou Produto</h2>
               <p className="text-sm text-slate-500 mb-6">Selecione o que voce deseja agendar</p>
               <div className="space-y-3">
                 {services.map(svc => {
@@ -214,7 +214,7 @@ const PublicBooking = () => {
                     </button>
                   );
                 })}
-                {services.length === 0 && <p className="text-center py-8 text-slate-500">Nenhum servico disponivel</p>}
+                {services.length === 0 && <p className="text-center py-8 text-slate-500">Nenhum serviço disponível</p>}
               </div>
             </div>
           )}
@@ -339,7 +339,7 @@ const PublicBooking = () => {
                 {/* Summary */}
                 <div className="bg-slate-50 rounded-xl p-4 space-y-2">
                   <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Resumo do Agendamento</p>
-                  <div className="flex justify-between text-sm"><span className="text-slate-600">Servico</span><span className="font-medium">{selectedService?.name}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-slate-600">Serviço</span><span className="font-medium">{selectedService?.name}</span></div>
                   <div className="flex justify-between text-sm"><span className="text-slate-600">Data</span><span className="font-medium">{formData.date}</span></div>
                   <div className="flex justify-between text-sm"><span className="text-slate-600">Horario</span><span className="font-medium">{formData.time}</span></div>
                   <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
