@@ -111,6 +111,15 @@ const LandingPage = () => {
         <div className="max-w-6xl mx-auto text-center">
           <h2 className="text-2xl font-bold font-heading mb-2">AgentCRM</h2>
           <p className="text-slate-400 text-sm">Sistema de CRM e Agendamento - Todos os direitos reservados</p>
+          <div className="mt-6">
+            <a
+              href="/admin-login"
+              data-testid="footer-admin-link"
+              className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              Administracao
+            </a>
+          </div>
         </div>
       </footer>
     </div>
