@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { crmAPI, schedulingAPI, uploadAPI, reportsAPI, notificationsAPI, channelsAPI } from '../../services/api';
 import { useCompanyBranding } from '../../hooks/useCompanyBranding';
@@ -308,54 +309,95 @@ const UserHeaderMenu = ({ user, logout }) => {
         )}
       </div>
 
-      {showSuspend && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center" onClick={() => setShowSuspend(false)}>
-          <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="p-4 border-b border-slate-100">
-              <h3 className="text-base font-bold font-heading">Suspender Agenda</h3>
-              <p className="text-xs text-slate-500">Escolha o tipo de suspensao</p>
+      {showSuspend && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center"
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
+          data-testid="suspend-modal-overlay"
+        >
+          <div
+            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            onClick={() => setShowSuspend(false)}
+          />
+          <div
+            className="relative bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl flex flex-col"
+            style={{ maxHeight: '90vh' }}
+            data-testid="suspend-modal"
+          >
+            {/* Handle bar for mobile */}
+            <div className="sm:hidden w-full flex justify-center pt-2 pb-1">
+              <div className="w-10 h-1 rounded-full bg-slate-300" />
             </div>
-            <div className="p-4 space-y-3">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold font-heading">Suspender Agenda</h3>
+                <p className="text-xs text-slate-500">Escolha o tipo de suspensao</p>
+              </div>
+              <button onClick={() => setShowSuspend(false)} className="p-1.5 rounded-lg hover:bg-slate-100" data-testid="close-suspend-modal">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {/* Type selector */}
-              <div className="flex bg-slate-100 rounded-lg p-0.5">
-                {[{k:'days',l:'Dias'},{k:'day',l:'Dia Inteiro'},{k:'hours',l:'Algumas Horas'}].map(t => (
-                  <button key={t.k} onClick={() => setSuspendType(t.k)} className={`flex-1 py-2 rounded-md text-xs font-semibold transition-all ${suspendType===t.k?'bg-white shadow-sm text-slate-900':'text-slate-500'}`}>{t.l}</button>
+              <div className="flex bg-slate-100 rounded-lg p-0.5" data-testid="suspend-type-tabs">
+                {[{k:'days',l:'Dias'},{k:'day',l:'Dia Inteiro'},{k:'hours',l:'Horas'}].map(t => (
+                  <button key={t.k} onClick={() => setSuspendType(t.k)} className={`flex-1 py-2 rounded-md text-xs font-semibold transition-all ${suspendType===t.k?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid={`suspend-type-${t.k}`}>{t.l}</button>
                 ))}
               </div>
 
               {suspendType === 'days' && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">De</label>
-                    <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" data-testid="suspend-start" /></div>
-                  <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Ate</label>
-                    <input type="date" value={suspendForm.end_date} onChange={e => setSuspendForm({...suspendForm, end_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" data-testid="suspend-end" /></div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">De</label>
+                    <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-sm !py-2 w-full" data-testid="suspend-start" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Ate</label>
+                    <input type="date" value={suspendForm.end_date} onChange={e => setSuspendForm({...suspendForm, end_date: e.target.value})} className="input-field text-sm !py-2 w-full" data-testid="suspend-end" />
+                  </div>
                 </div>
               )}
+
               {suspendType === 'day' && (
-                <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Data</label>
-                  <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value, end_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" /></div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Data</label>
+                  <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value, end_date: e.target.value})} className="input-field text-sm !py-2 w-full" data-testid="suspend-day-date" />
+                </div>
               )}
+
               {suspendType === 'hours' && (
                 <>
-                  <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Data</label>
-                    <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" /></div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Data</label>
+                    <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-sm !py-2 w-full" data-testid="suspend-hours-date" />
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <div><label className="text-[10px] font-bold uppercase text-slate-400">De</label>
-                      <input type="time" value={suspendForm.start_time} onChange={e => setSuspendForm({...suspendForm, start_time: e.target.value})} className="input-field text-xs !py-1.5 w-full" /></div>
-                    <div><label className="text-[10px] font-bold uppercase text-slate-400">Ate</label>
-                      <input type="time" value={suspendForm.end_time} onChange={e => setSuspendForm({...suspendForm, end_time: e.target.value})} className="input-field text-xs !py-1.5 w-full" /></div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">De</label>
+                      <input type="time" value={suspendForm.start_time} onChange={e => setSuspendForm({...suspendForm, start_time: e.target.value})} className="input-field text-sm !py-2 w-full" data-testid="suspend-start-time" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Ate</label>
+                      <input type="time" value={suspendForm.end_time} onChange={e => setSuspendForm({...suspendForm, end_time: e.target.value})} className="input-field text-sm !py-2 w-full" data-testid="suspend-end-time" />
+                    </div>
                   </div>
                 </>
               )}
-              <div><label className="text-[10px] font-bold uppercase text-slate-400">Motivo</label>
-                <input value={suspendForm.reason} onChange={e => setSuspendForm({...suspendForm, reason: e.target.value})} placeholder="Ex: Ferias, consulta..." className="input-field text-xs !py-1.5" /></div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">Motivo (opcional)</label>
+                <input value={suspendForm.reason} onChange={e => setSuspendForm({...suspendForm, reason: e.target.value})} placeholder="Ex: Ferias, consulta..." className="input-field text-sm !py-2" data-testid="suspend-reason" />
+              </div>
             </div>
-            <div className="flex gap-2 p-4 border-t border-slate-100">
+
+            <div className="flex gap-2 p-4 border-t border-slate-100 bg-white">
               <button onClick={() => setShowSuspend(false)} className="btn-secondary flex-1 text-sm">Cancelar</button>
               <button onClick={handleSuspend} className="btn-primary flex-1 text-sm" data-testid="confirm-suspend-btn">Suspender</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
