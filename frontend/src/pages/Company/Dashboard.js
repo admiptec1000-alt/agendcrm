@@ -197,7 +197,7 @@ const CompanyDashboard = () => {
         </header>
 
         <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-4 lg:p-6 max-w-full overflow-x-hidden'}>
-          <PageContent page={activePage} hasFeature={hasFeature} />
+          <PageContent page={activePage} hasFeature={hasFeature} setActivePage={setActivePage} menuGroups={menuGroups} />
         </div>
       </main>
 
@@ -210,9 +210,9 @@ const CompanyDashboard = () => {
 };
 
 /* ========== PAGE ROUTER ========== */
-const PageContent = ({ page, hasFeature }) => {
+const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
   switch (page) {
-    case 'dashboard': return <DashboardPage />;
+    case 'dashboard': return <DashboardPage setActivePage={setActivePage} menuGroups={menuGroups} />;
     case 'kanban': return <KanbanPage />;
     case 'atendimentos': return <AtendimentosPage />;
     case 'contatos': return <ContactsPage />;
@@ -348,25 +348,69 @@ const UserHeaderMenu = ({ user, logout }) => {
   );
 };
 
-/* ========== DASHBOARD ========== */
-const DashboardPage = () => {
-  const [data, setData] = useState({ tickets: 0, appointments: 0, services: 0, professionals: 0 });
+/* ========== INICIO (MENU DE ATALHOS) ========== */
+const DashboardPage = ({ setActivePage, menuGroups }) => {
+  const [data, setData] = useState({ tickets: 0, appointments: 0, services: 0, professionals: 0, today: 0 });
   useEffect(() => {
+    const today = new Date().toISOString().split('T')[0];
     Promise.all([
       crmAPI.getTickets().catch(() => ({ data: [] })),
       schedulingAPI.getAppointments().catch(() => ({ data: [] })),
       schedulingAPI.getServices().catch(() => ({ data: [] })),
       schedulingAPI.getProfessionals().catch(() => ({ data: [] })),
-    ]).then(([t, a, s, p]) => setData({ tickets: t.data.length, appointments: a.data.length, services: s.data.length, professionals: p.data.length }));
+    ]).then(([t, a, s, p]) => setData({
+      tickets: t.data.length,
+      appointments: a.data.length,
+      services: s.data.length,
+      professionals: p.data.length,
+      today: a.data.filter(x => x.date === today).length,
+    }));
   }, []);
+
+  // Flatten menu groups into ordered list (excluding 'dashboard' itself)
+  const shortcuts = useMemo(() => {
+    if (!menuGroups) return [];
+    const list = [];
+    Object.entries(menuGroups).forEach(([group, items]) => {
+      items.forEach(it => { if (it.key !== 'dashboard') list.push({ ...it, group }); });
+    });
+    return list;
+  }, [menuGroups]);
+
   return (
-    <div className="animate-fade-in" data-testid="dashboard-page">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+    <div className="animate-fade-in space-y-6" data-testid="dashboard-page">
+      {/* Quick Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard label="Agend. Hoje" value={data.today} icon={<CalendarCheck className="w-5 h-5" />} color="bg-emerald-500" />
         <StatCard label="Tickets" value={data.tickets} icon={<Headphones className="w-5 h-5" />} color="bg-blue-500" />
-        <StatCard label="Agendamentos" value={data.appointments} icon={<CalendarCheck className="w-5 h-5" />} color="bg-emerald-500" />
         <StatCard label="Servicos" value={data.services} icon={<Scissors className="w-5 h-5" />} color="bg-violet-500" />
         <StatCard label="Profissionais" value={data.professionals} icon={<Briefcase className="w-5 h-5" />} color="bg-amber-500" />
       </div>
+
+      {/* Menu Grid */}
+      {shortcuts.length > 0 && (
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 mb-3">Acesso Rapido</p>
+          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3" data-testid="home-menu-grid">
+            {shortcuts.map(item => {
+              const Icon = ICON_MAP[item.icon] || LayoutDashboard;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => setActivePage(item.key)}
+                  className="group flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-white border border-slate-200 hover:border-primary/50 hover:shadow-md active:scale-95 transition-all"
+                  data-testid={`home-shortcut-${item.key}`}
+                >
+                  <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-white transition-colors">
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <span className="text-xs font-medium text-slate-700 text-center leading-tight line-clamp-2">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -551,11 +595,21 @@ const ClientsPage = () => {
       if (editingClient) {
         await schedulingAPI.updateClient(editingClient.id, form);
         toast.success('Cliente atualizado!');
+        setShowAdd(false); setEditingClient(null); load();
       } else {
-        await schedulingAPI.createClient(form);
+        const res = await schedulingAPI.createClient(form);
         toast.success('Cliente criado!');
+        setShowAdd(false); setEditingClient(null);
+        await load();
+        // Auto-expand new client and prompt to book
+        const newClient = res.data;
+        if (newClient?.id) {
+          setExpandedId(newClient.id);
+          setBookingClientId(newClient.id);
+          if (!historyByPhone[newClient.phone]) loadHistory(newClient.phone);
+          toast('Deseja agendar agora?', { description: 'Preencha os dados abaixo' });
+        }
       }
-      setShowAdd(false); setEditingClient(null); load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
   };
 
@@ -588,10 +642,7 @@ const ClientsPage = () => {
   return (
     <div className="animate-fade-in" data-testid="clients-page">
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Clientes</h2>
-          <p className="text-sm text-slate-600">{clients.length} clientes cadastrados</p>
-        </div>
+        <p className="text-sm text-slate-600">{clients.length} clientes cadastrados</p>
         <button onClick={() => { setEditingClient(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2 justify-center" data-testid="add-client-btn">
           <Plus className="w-4 h-4" /> Novo Cliente
         </button>
@@ -1161,10 +1212,7 @@ const MessageSchedulingPage = () => {
   return (
     <div className="animate-fade-in" data-testid="message-scheduling-page">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Agendamento de Mensagens</h2>
-          <p className="text-sm text-slate-600">Agende envios de mensagens via WhatsApp e outros canais</p>
-        </div>
+        <p className="text-sm text-slate-600">Agende envios de mensagens via WhatsApp e outros canais</p>
         <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2" data-testid="new-msg-schedule-btn">
           <Plus className="w-4 h-4" /> Agendar Mensagem
         </button>
@@ -1286,10 +1334,7 @@ const ChatInternoPage = () => {
   return (
     <div className="animate-fade-in h-[calc(100vh-120px)] flex flex-col" data-testid="chat-interno-page">
       <div className="flex items-center justify-between mb-4">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Chat Interno</h2>
-          <p className="text-sm text-slate-600">Comunicacao da equipe</p>
-        </div>
+        <p className="text-sm text-slate-600">Comunicacao da equipe</p>
       </div>
 
       <div className="flex-1 flex gap-4 min-h-0">
@@ -1440,7 +1485,6 @@ const ConexoesPage = () => {
 
   return (
     <div className="animate-fade-in" data-testid="conexoes-page">
-      <h2 className="text-2xl font-bold font-heading text-slate-900 mb-1">Conexoes</h2>
       <p className="text-sm text-slate-600 mb-6">Gerencie canais de comunicacao e mensagens automaticas</p>
 
       <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1 mb-6 w-fit">
@@ -2058,10 +2102,7 @@ const ComissoesPage = () => {
   return (
     <div className="animate-fade-in" data-testid="comissoes-page">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Comissoes</h2>
-          <p className="text-sm text-slate-600">Relatorio de comissoes por profissional</p>
-        </div>
+        <p className="text-sm text-slate-600">Relatorio de comissoes por profissional</p>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Faturamento Total" value={`R$ ${(data?.summary?.total_revenue || 0).toFixed(2)}`} icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
@@ -2134,10 +2175,7 @@ const NotificacoesPage = () => {
   return (
     <div className="animate-fade-in" data-testid="notificacoes-page">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Notificacoes</h2>
-          <p className="text-sm text-slate-600">Configure as notificacoes automaticas da sua empresa</p>
-        </div>
+        <p className="text-sm text-slate-600">Configure as notificacoes automaticas da sua empresa</p>
         <button onClick={handleSendTest} className="btn-secondary text-sm" data-testid="send-test-notif">Enviar Teste</button>
       </div>
 
@@ -2377,10 +2415,7 @@ const IndoorSettingsPage = () => {
   return (
     <div className="animate-fade-in" data-testid="indoor-settings-page">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Indoor / TV</h2>
-          <p className="text-sm text-slate-600">Configure a tela que sera exibida no salao ou clinica</p>
-        </div>
+        <p className="text-sm text-slate-600">Configure a tela que sera exibida no salao ou clinica</p>
         <a href={`/${bookingPage}/indoor`} target="_blank" rel="noopener noreferrer" className="btn-primary text-sm flex items-center gap-2" data-testid="open-indoor-btn">
           <Monitor className="w-4 h-4" /> Abrir Tela Indoor
         </a>

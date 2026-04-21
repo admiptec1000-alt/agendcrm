@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 19 frontend-only testing. All 4 reviewed features confirmed working: (1) 'Início' as clickable menu with home-menu-grid + 17 home-shortcut-{key} cards; click home-shortcut-clientes navigates to Clientes. (2) Duplicate internal h2 titles removed from ClientsPage, ProfessionalsFull, ServicesFull, CalendarFull, Subscriptions, Notificacoes, Conexoes, Indoor, Comissoes, ChatInterno, MessageScheduling — all show 0 internal <h2> while header displays the page title. (3) New-client auto-book flow: after POST save, client is auto-expanded (client-expanded-{id}) and inline-booking-{id} is visible automatically with 'Deseja agendar agora?' hint. (4) SuspensionModal works: dates pre-filled with today (2026-04-21), mode tabs (days vs hours) toggle correctly — in hours mode suspension-end-date is disabled=true and suspension-time-row appears with start/end time inputs; confirm-suspension-btn POSTs to /api/scheduling/professionals/{id}/suspensions returning 200 and closes the modal. Mobile 390px renders home-menu-grid in 3 columns (~111px each) without overflow.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Inline booking form (inline-booking-{id}) and Suspension Modal (suspension-start-date/end-date/start-time/end-time)", "issues": ["Uses HTML5 native date/time pickers instead of shadcn Calendar/TimePicker — inconsistent with product design system (carryover from iteration_18)"]},
+      {"screen": "Services <select> dropdown (BookFromClientForm ~Dashboard.js:765)", "issues": ["React hydration warning: <span> inside <option> causes invalid HTML (carryover from iteration_18) — replace option inner span with plain text"]}
+    ]
+  },
+  "passed_tests": [
+    "Login /boss/login (admin@boss.com.br / boss123) -> /boss/painel",
+    "dashboard-page loads; header shows 'Início'; no internal h2",
+    "home-menu-grid present with 17 home-shortcut-* cards (calendario, agendamentos, clientes, chat_interno, agenda, categorias, servicos_produtos, assinaturas, profissionais, financeiro, comissoes, relatorios, meu_site, notificacoes, configuracoes, indoor, conexoes)",
+    "home-shortcut-clientes click navigates to clients-page; header shows 'Clientes / Leads'; 0 internal h2",
+    "add-client-btn -> client-name-input/client-phone-input; save-client-btn auto-expands new client (client-expanded-{id}) and shows inline-booking-{id} with 'Deseja agendar agora? Preencha os dados abaixo' hint",
+    "Profissionais page: prof-card-{id} contains suspend-prof-btn-{id}; click opens suspension-modal",
+    "suspension-start-date and suspension-end-date prefilled with today (2026-04-21)",
+    "Days mode: suspension-time-row hidden; end-date editable (not disabled)",
+    "Hours mode: suspension-time-row visible with suspension-start-time and suspension-end-time; suspension-end-date disabled=true",
+    "confirm-suspension-btn (hours mode) POST /api/scheduling/professionals/{id}/suspensions -> 200 and modal closes",
+    "Duplicate h2 removed on: services-full-page, calendar-full-page, notificacoes-page, conexoes-page, indoor-settings-page, comissoes-page, subscriptions-page, chat-interno-page, message-scheduling-page, professionals-full-page, clients-page",
+    "Mobile 390x800: home-menu-grid renders 3 columns without horizontal overflow"
+  ],
+  "test_report_links": ["/app/test_reports/iteration_19.json"],
+  "action_items": [
+    "(Carryover, non-blocking) Replace HTML5 native date/time inputs with shadcn Calendar/TimePicker in inline booking form and SuspensionModal for design consistency",
+    "(Carryover, non-blocking) Fix React hydration warning: remove <span> inside <option> in services dropdown (BookFromClientForm ~Dashboard.js:765)"
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.js is 2667 lines — still recommended to split ClientsPage/ConfigPage/MySitePage into separate files (carryover)",
+    "SuspensionModal: start_date is initialized to today and end_date also to today, both in days AND hours mode. Acceptable per spec but confirm UX for multi-day suspensions."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only request)", "frontend": "100% (all reviewed features verified)"},
+  "test_credentials": {"boss_company": "admin@boss.com.br / boss123 (/boss/login)"},
+  "seed_data_creation": "Created 1 test client 'TEST Auto Book 41412' (phone 62976741412) via save-client-btn, 1 test suspension on first professional (2026-04-21 09:00-11:00) via confirm-suspension-btn. Not cleaned up — main agent may purge TEST_-prefixed data if desired.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 19 complete. All 4 requested features work end-to-end. Known design carryovers from iter 18: HTML5 native date/time pickers and React hydration warning on services <option><span>. Public URL REACT_APP_BACKEND_URL=https://agentcrm-book.preview.emergentagent.com works. Suspension modal integration verified against backend POST /api/scheduling/professionals/{id}/suspensions — returns 200. Home-menu-grid columns on mobile 390px = 3 cols, on desktop 1280px = 6 cols."
+}

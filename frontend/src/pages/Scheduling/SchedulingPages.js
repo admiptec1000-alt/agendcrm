@@ -16,6 +16,7 @@ export const ProfessionalsPageFull = () => {
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [suspendingProf, setSuspendingProf] = useState(null);
 
   useEffect(() => { load(); }, [search]);
   const load = async () => {
@@ -30,10 +31,7 @@ export const ProfessionalsPageFull = () => {
   return (
     <div className="animate-fade-in" data-testid="professionals-full-page">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Profissionais</h2>
-          <p className="text-sm text-slate-600">Gerencie sua equipe de profissionais</p>
-        </div>
+        <p className="text-sm text-slate-600">Gerencie sua equipe de profissionais</p>
         <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary flex items-center gap-2" data-testid="new-prof-btn">
           <Plus className="w-4 h-4" /> Novo Profissional
         </button>
@@ -87,14 +85,171 @@ export const ProfessionalsPageFull = () => {
                 <div><p className="text-[10px] text-slate-400 uppercase">Hoje</p><p className="text-sm font-bold">{prof.appointments_today || 0}</p></div>
                 <div><p className="text-[10px] text-slate-400 uppercase">Ganhos</p><p className="text-sm font-bold text-emerald-600">R$ {(prof.total_commission || 0).toFixed(0)}</p></div>
               </div>
+              <button
+                onClick={() => setSuspendingProf(prof)}
+                className="w-full mt-3 flex items-center justify-center gap-2 py-2 rounded-lg border border-amber-200 bg-amber-50/60 text-amber-700 hover:bg-amber-100 transition-all text-sm font-medium"
+                data-testid={`suspend-prof-btn-${prof.id}`}
+              >
+                <Calendar className="w-4 h-4" /> Suspender Agenda
+              </button>
             </div>
           </div>
         ))}
       </div>
       {showModal && <ProfessionalModal professional={editing} onClose={() => setShowModal(false)} onSave={() => { setShowModal(false); load(); }} />}
+      {suspendingProf && <SuspensionModal professional={suspendingProf} onClose={() => setSuspendingProf(null)} onSaved={() => { setSuspendingProf(null); load(); }} />}
     </div>
   );
 };
+/* ========== SUSPENSION MODAL (dedicated) ========== */
+const SuspensionModal = ({ professional, onClose, onSaved }) => {
+  const today = new Date().toISOString().split('T')[0];
+  const [mode, setMode] = useState('days'); // 'days' (several days) or 'hours' (period in a day)
+  const [form, setForm] = useState({
+    start_date: today,
+    end_date: today,
+    start_time: '08:00',
+    end_time: '18:00',
+    reason: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const existing = professional?.suspensions || [];
+
+  const handleSave = async () => {
+    if (!form.start_date || !form.end_date) { toast.error('Informe as datas'); return; }
+    if (mode === 'hours' && (!form.start_time || !form.end_time)) { toast.error('Informe os horarios'); return; }
+    const payload = {
+      start_date: form.start_date,
+      end_date: mode === 'hours' ? form.start_date : form.end_date,
+      reason: form.reason || '',
+    };
+    if (mode === 'hours') {
+      payload.start_time = form.start_time;
+      payload.end_time = form.end_time;
+    }
+    setSaving(true);
+    try {
+      await schedulingAPI.addSuspension(professional.id, payload);
+      toast.success('Agenda suspensa!');
+      onSaved?.();
+    } catch (e) { toast.error('Erro ao suspender'); }
+    finally { setSaving(false); }
+  };
+
+  const handleRemove = async (susId) => {
+    try {
+      await schedulingAPI.removeSuspension(professional.id, susId);
+      toast.success('Suspensao removida');
+      onSaved?.();
+    } catch (e) { toast.error('Erro ao remover'); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="suspension-modal">
+        <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white">
+          <div>
+            <h3 className="text-base font-bold font-heading">Suspender Agenda</h3>
+            <p className="text-xs text-slate-500">{professional?.name}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100" data-testid="close-suspension-modal"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {/* Mode selector */}
+          <div className="flex bg-slate-100 rounded-lg p-0.5">
+            <button onClick={() => setMode('days')}
+              className={`flex-1 py-2 rounded-md text-xs font-semibold transition-all ${mode==='days' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'}`}
+              data-testid="suspension-mode-days">
+              Período de dias
+            </button>
+            <button onClick={() => setMode('hours')}
+              className={`flex-1 py-2 rounded-md text-xs font-semibold transition-all ${mode==='hours' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'}`}
+              data-testid="suspension-mode-hours">
+              Período do dia
+            </button>
+          </div>
+
+          {/* Dates */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Data Inicio</label>
+              <input type="date" value={form.start_date}
+                onChange={e => setForm({...form, start_date: e.target.value, ...(mode==='hours'?{end_date: e.target.value}:{})})}
+                className="input-field text-sm !py-2 w-full" data-testid="suspension-start-date" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Data Fim</label>
+              <input type="date" value={form.end_date}
+                disabled={mode==='hours'}
+                onChange={e => setForm({...form, end_date: e.target.value})}
+                className="input-field text-sm !py-2 w-full disabled:bg-slate-50 disabled:text-slate-400"
+                data-testid="suspension-end-date" />
+            </div>
+          </div>
+
+          {/* Times (for 'hours' mode) */}
+          {mode === 'hours' && (
+            <div className="grid grid-cols-2 gap-2" data-testid="suspension-time-row">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Hora Inicio</label>
+                <input type="time" value={form.start_time}
+                  onChange={e => setForm({...form, start_time: e.target.value})}
+                  className="input-field text-sm !py-2 w-full" data-testid="suspension-start-time" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Hora Fim</label>
+                <input type="time" value={form.end_time}
+                  onChange={e => setForm({...form, end_time: e.target.value})}
+                  className="input-field text-sm !py-2 w-full" data-testid="suspension-end-time" />
+              </div>
+            </div>
+          )}
+
+          {/* Reason */}
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Motivo (opcional)</label>
+            <input value={form.reason} onChange={e => setForm({...form, reason: e.target.value})}
+              placeholder="Ex: Ferias, consulta, compromisso..."
+              className="input-field text-sm !py-2" data-testid="suspension-reason" />
+          </div>
+
+          {/* Existing suspensions */}
+          {existing.length > 0 && (
+            <div>
+              <p className="text-[10px] font-bold uppercase text-slate-400 mb-2">Suspensoes Ativas</p>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {existing.map(sus => (
+                  <div key={sus.id} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg" data-testid={`existing-sus-${sus.id}`}>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-slate-900 truncate">
+                        {sus.start_date}{sus.end_date !== sus.start_date ? ` → ${sus.end_date}` : ''}
+                        {sus.start_time && sus.end_time ? ` (${sus.start_time}-${sus.end_time})` : ''}
+                      </p>
+                      {sus.reason && <p className="text-[10px] text-slate-500 truncate">{sus.reason}</p>}
+                    </div>
+                    <button onClick={() => handleRemove(sus.id)} className="text-red-400 hover:text-red-600 p-1" data-testid={`remove-existing-sus-${sus.id}`}>
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-2 p-4 border-t border-slate-100 sticky bottom-0 bg-white">
+          <button onClick={onClose} className="btn-secondary flex-1 text-sm">Cancelar</button>
+          <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 text-sm" data-testid="confirm-suspension-btn">
+            {saving ? 'Salvando...' : 'Suspender'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 
 const ProfessionalModal = ({ professional, onClose, onSave }) => {
   const isEditing = !!professional;
@@ -331,7 +486,7 @@ export const ServicesPageFull = () => {
   return (
     <div className="animate-fade-in" data-testid="services-full-page">
       <div className="flex items-center justify-between mb-6">
-        <div><h2 className="text-2xl font-bold font-heading text-slate-900">Servicos e Produtos</h2><p className="text-sm text-slate-600">Gerencie seu catalogo</p></div>
+        <p className="text-sm text-slate-600">Gerencie seu catalogo</p>
         <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary flex items-center gap-2" data-testid="new-service-btn"><Plus className="w-4 h-4" /> Novo Item</button>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -517,7 +672,7 @@ export const SubscriptionsPageFull = () => {
   return (
     <div className="animate-fade-in" data-testid="subscriptions-page">
       <div className="flex items-center justify-between mb-6">
-        <div><h2 className="text-2xl font-bold font-heading text-slate-900">Assinaturas</h2><p className="text-sm text-slate-600">Gerencie assinaturas dos clientes</p></div>
+        <p className="text-sm text-slate-600">Gerencie assinaturas dos clientes</p>
         <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2" data-testid="add-sub-btn"><Plus className="w-4 h-4" /> Adicionar</button>
       </div>
       <div className="card overflow-x-auto">
@@ -618,10 +773,7 @@ export const CalendarPageFull = () => {
   return (
     <div className="animate-fade-in" data-testid="calendar-full-page">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold font-heading text-slate-900">Calendario</h2>
-          <p className="text-sm text-slate-600">{appointments.length} agendamentos</p>
-        </div>
+        <p className="text-sm text-slate-600">{appointments.length} agendamentos</p>
         <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1">
           {[{key:'month',label:'Mes'},{key:'week',label:'Semana'},{key:'day',label:'Dia'}].map(v => (
             <button key={v.key} onClick={() => setView(v.key)} className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view===v.key?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid={`view-${v.key}`}>
