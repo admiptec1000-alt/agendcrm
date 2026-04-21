@@ -48,6 +48,14 @@ async def list_appointments(
         query["professional_id"] = professional_id
     if status_filter:
         query["status"] = status_filter
+    # Non-admin users: auto-filter by their linked professional (matched by email)
+    if user.get("role") and user["role"] != "company_admin" and user["role"] != "super_admin":
+        my_prof = await db.professionals.find_one(
+            {"company_id": user["company_id"], "email": user.get("email")},
+            {"_id": 0, "id": 1}
+        )
+        if my_prof:
+            query["professional_id"] = my_prof["id"]
     appointments = await db.appointments.find(query, {"_id": 0}).sort("date", -1).to_list(1000)
     return appointments
 
@@ -810,6 +818,8 @@ async def update_business_hours(
 class SuspensionCreate(BaseModel):
     start_date: str
     end_date: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
     reason: Optional[str] = None
 
 @router.post("/professionals/{professional_id}/suspensions")
@@ -822,7 +832,14 @@ async def add_suspension(
     prof = await db.professionals.find_one({"id": professional_id, "company_id": user["company_id"]})
     if not prof:
         raise HTTPException(status_code=404, detail="Profissional nao encontrado")
-    suspension = {"id": str(uuid.uuid4()), "start_date": data.start_date, "end_date": data.end_date, "reason": data.reason}
+    suspension = {
+        "id": str(uuid.uuid4()),
+        "start_date": data.start_date,
+        "end_date": data.end_date,
+        "start_time": data.start_time,
+        "end_time": data.end_time,
+        "reason": data.reason,
+    }
     await db.professionals.update_one({"id": professional_id}, {"$push": {"suspensions": suspension}})
     return suspension
 

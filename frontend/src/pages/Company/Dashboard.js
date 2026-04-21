@@ -23,7 +23,7 @@ const ICON_MAP = {
 };
 
 const FEATURE_META = {
-  dashboard:          { icon: 'LayoutDashboard', label: 'Dashboard', group: 'Principal' },
+  dashboard:          { icon: 'LayoutDashboard', label: 'Início', group: 'Principal' },
   atendimentos:       { icon: 'Headphones',      label: 'Atendimentos', group: 'CRM' },
   respostas_rapidas:  { icon: 'Zap',             label: 'Respostas Rapidas', group: 'CRM' },
   kanban:             { icon: 'Columns3',         label: 'Kanban', group: 'CRM' },
@@ -64,6 +64,10 @@ const CompanyDashboard = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [bookingPage, setBookingPage] = useState(null);
+
+  const API_BASE = process.env.REACT_APP_BACKEND_URL;
+  const logoUrl = bookingPage?.logo_url ? `${API_BASE}${bookingPage.logo_url}` : null;
 
   const enabledFeatures = useMemo(() => {
     const feats = user?.company?.features || [];
@@ -75,6 +79,10 @@ const CompanyDashboard = () => {
     schedulingAPI.getOnboardingStatus().then(r => {
       if (!r.data.onboarding_done) setShowOnboarding(true);
     }).catch(() => {});
+    schedulingAPI.getBookingPage().then(r => setBookingPage(r.data)).catch(() => {});
+    const onLogoUpdate = () => { schedulingAPI.getBookingPage().then(r => setBookingPage(r.data)).catch(() => {}); };
+    window.addEventListener('company-logo-updated', onLogoUpdate);
+    return () => window.removeEventListener('company-logo-updated', onLogoUpdate);
   }, []);
 
   const menuGroups = useMemo(() => {
@@ -98,11 +106,21 @@ const CompanyDashboard = () => {
 
       {/* Sidebar */}
       <aside className={`${sidebarCollapsed ? 'w-16' : 'w-60'} bg-white border-r border-slate-200 flex flex-col fixed h-full z-40 transition-all duration-200 ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+        <div className="p-4 border-b border-slate-200 flex items-center justify-between gap-2">
           {!sidebarCollapsed && (
-            <div className="min-w-0">
-              <h1 className="text-lg font-bold font-heading text-slate-900 truncate">{user?.company?.name || 'Empresa'}</h1>
+            <div className="min-w-0 flex items-center gap-2">
+              {logoUrl ? (
+                <img src={logoUrl} alt="Logo" className="w-9 h-9 rounded-lg object-cover flex-shrink-0 border border-slate-200" />
+              ) : (
+                <div className="w-9 h-9 rounded-lg bg-[var(--primary-color)]/10 flex items-center justify-center text-[var(--primary-color)] font-bold flex-shrink-0">
+                  {user?.company?.name?.[0]?.toUpperCase() || 'E'}
+                </div>
+              )}
+              <h1 className="text-sm font-bold font-heading text-slate-900 truncate">{user?.company?.name || 'Empresa'}</h1>
             </div>
+          )}
+          {sidebarCollapsed && logoUrl && (
+            <img src={logoUrl} alt="Logo" className="w-9 h-9 rounded-lg object-cover flex-shrink-0 mx-auto" />
           )}
           <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 flex-shrink-0" data-testid="toggle-sidebar">
             {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -164,18 +182,21 @@ const CompanyDashboard = () => {
       {/* Main Content */}
       <main className={`flex-1 ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-60'} transition-all duration-200`}>
         <header className="glass border-b border-slate-200 sticky top-0 z-30 px-4 lg:px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100" data-testid="mobile-menu-btn">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
-            <h2 className="text-lg font-bold font-heading text-slate-900">
-              {FEATURE_META[activePage]?.label || 'Dashboard'}
+            {logoUrl && (
+              <img src={logoUrl} alt="Logo" className="w-8 h-8 rounded-lg object-cover flex-shrink-0 border border-slate-200 hidden sm:block" data-testid="header-logo" />
+            )}
+            <h2 className="text-lg font-bold font-heading text-slate-900 truncate">
+              {FEATURE_META[activePage]?.label || 'Início'}
             </h2>
           </div>
           <UserHeaderMenu user={user} logout={logout} />
         </header>
 
-        <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-6'}>
+        <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-4 lg:p-6 max-w-full overflow-x-hidden'}>
           <PageContent page={activePage} hasFeature={hasFeature} />
         </div>
       </main>
@@ -225,46 +246,43 @@ const PageContent = ({ page, hasFeature }) => {
 const UserHeaderMenu = ({ user, logout }) => {
   const [open, setOpen] = useState(false);
   const [showSuspend, setShowSuspend] = useState(false);
-  const [suspendForm, setSuspendForm] = useState({ start_date: '', end_date: '', reason: '' });
+  const [suspendType, setSuspendType] = useState('days');
+  const [suspendForm, setSuspendForm] = useState({ start_date: '', end_date: '', start_time: '', end_time: '', reason: '' });
 
   const handleSuspend = async () => {
-    if (!suspendForm.start_date || !suspendForm.end_date) { toast.error('Informe as datas'); return; }
+    if (!suspendForm.start_date) { toast.error('Informe a data'); return; }
+    const payload = { start_date: suspendForm.start_date, end_date: suspendType === 'hours' ? suspendForm.start_date : (suspendForm.end_date || suspendForm.start_date), reason: suspendForm.reason || '' };
+    if (suspendType === 'hours') { payload.start_time = suspendForm.start_time; payload.end_time = suspendForm.end_time; }
     try {
-      // If the user is a professional, suspend their agenda
       const profs = await schedulingAPI.getProfessionals();
       const myProf = profs.data.find(p => p.email === user?.email || p.name === user?.name);
-      if (myProf) {
-        await schedulingAPI.addSuspension(myProf.id, suspendForm);
-        toast.success('Agenda suspensa!');
-      } else {
-        toast.error('Profissional nao encontrado');
-      }
+      if (myProf) { await schedulingAPI.addSuspension(myProf.id, payload); toast.success('Agenda suspensa!'); }
+      else { toast.error('Profissional nao encontrado'); }
       setShowSuspend(false);
-      setSuspendForm({ start_date: '', end_date: '', reason: '' });
+      setSuspendForm({ start_date: '', end_date: '', start_time: '', end_time: '', reason: '' });
     } catch (e) { toast.error('Erro ao suspender'); }
   };
 
   return (
     <>
       <div className="relative">
-        <button onClick={() => setOpen(!open)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-colors" data-testid="user-menu-btn">
-          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm">
+        <button onClick={() => setOpen(!open)} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-100 transition-colors" data-testid="user-menu-btn">
+          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm flex-shrink-0">
             {user?.name?.[0]?.toUpperCase() || 'U'}
           </div>
           <div className="text-left hidden sm:block">
-            <p className="text-sm font-medium text-slate-900 leading-tight">{user?.name}</p>
-            <p className="text-[10px] text-slate-500">{user?.company?.name}</p>
+            <p className="text-sm font-medium text-slate-900 leading-tight truncate max-w-[120px]">{user?.name}</p>
+            <p className="text-[10px] text-slate-500 truncate max-w-[120px]">{user?.company?.name}</p>
           </div>
-          <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${open ? 'rotate-90' : ''}`} />
+          <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform flex-shrink-0 ${open ? 'rotate-90' : ''}`} />
         </button>
-
         {open && (
           <>
             <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
             <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50" data-testid="user-dropdown">
               <div className="px-4 py-2 border-b border-slate-100">
-                <p className="text-sm font-medium text-slate-900">{user?.name}</p>
-                <p className="text-xs text-slate-500">{user?.email}</p>
+                <p className="text-sm font-medium text-slate-900 truncate">{user?.name}</p>
+                <p className="text-xs text-slate-500 truncate">{user?.email}</p>
               </div>
               <button onClick={() => { setShowSuspend(true); setOpen(false); }} className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2" data-testid="suspend-agenda-btn">
                 <Calendar className="w-4 h-4 text-amber-500" /> Suspender Minha Agenda
@@ -278,23 +296,48 @@ const UserHeaderMenu = ({ user, logout }) => {
       </div>
 
       {showSuspend && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowSuspend(false)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
-            <div className="p-5 border-b border-slate-200">
-              <h3 className="text-lg font-bold font-heading">Suspender Agenda</h3>
-              <p className="text-xs text-slate-500">Informe o periodo de folga ou ausencia</p>
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center" onClick={() => setShowSuspend(false)}>
+          <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-slate-100">
+              <h3 className="text-base font-bold font-heading">Suspender Agenda</h3>
+              <p className="text-xs text-slate-500">Escolha o tipo de suspensao</p>
             </div>
-            <div className="p-5 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-slate-700">Inicio</label>
-                  <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-sm" data-testid="suspend-start" /></div>
-                <div><label className="text-xs font-medium text-slate-700">Fim</label>
-                  <input type="date" value={suspendForm.end_date} onChange={e => setSuspendForm({...suspendForm, end_date: e.target.value})} className="input-field text-sm" data-testid="suspend-end" /></div>
+            <div className="p-4 space-y-3">
+              {/* Type selector */}
+              <div className="flex bg-slate-100 rounded-lg p-0.5">
+                {[{k:'days',l:'Dias'},{k:'day',l:'Dia Inteiro'},{k:'hours',l:'Algumas Horas'}].map(t => (
+                  <button key={t.k} onClick={() => setSuspendType(t.k)} className={`flex-1 py-2 rounded-md text-xs font-semibold transition-all ${suspendType===t.k?'bg-white shadow-sm text-slate-900':'text-slate-500'}`}>{t.l}</button>
+                ))}
               </div>
-              <div><label className="text-xs font-medium text-slate-700">Motivo</label>
-                <input value={suspendForm.reason} onChange={e => setSuspendForm({...suspendForm, reason: e.target.value})} placeholder="Ex: Ferias" className="input-field text-sm" /></div>
+
+              {suspendType === 'days' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">De</label>
+                    <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" data-testid="suspend-start" /></div>
+                  <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Ate</label>
+                    <input type="date" value={suspendForm.end_date} onChange={e => setSuspendForm({...suspendForm, end_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" data-testid="suspend-end" /></div>
+                </div>
+              )}
+              {suspendType === 'day' && (
+                <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Data</label>
+                  <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value, end_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" /></div>
+              )}
+              {suspendType === 'hours' && (
+                <>
+                  <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Data</label>
+                    <input type="date" value={suspendForm.start_date} onChange={e => setSuspendForm({...suspendForm, start_date: e.target.value})} className="input-field text-xs !py-1.5 w-full min-w-0" /></div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><label className="text-[10px] font-bold uppercase text-slate-400">De</label>
+                      <input type="time" value={suspendForm.start_time} onChange={e => setSuspendForm({...suspendForm, start_time: e.target.value})} className="input-field text-xs !py-1.5 w-full" /></div>
+                    <div><label className="text-[10px] font-bold uppercase text-slate-400">Ate</label>
+                      <input type="time" value={suspendForm.end_time} onChange={e => setSuspendForm({...suspendForm, end_time: e.target.value})} className="input-field text-xs !py-1.5 w-full" /></div>
+                  </div>
+                </>
+              )}
+              <div><label className="text-[10px] font-bold uppercase text-slate-400">Motivo</label>
+                <input value={suspendForm.reason} onChange={e => setSuspendForm({...suspendForm, reason: e.target.value})} placeholder="Ex: Ferias, consulta..." className="input-field text-xs !py-1.5" /></div>
             </div>
-            <div className="flex gap-2 p-5 border-t border-slate-200">
+            <div className="flex gap-2 p-4 border-t border-slate-100">
               <button onClick={() => setShowSuspend(false)} className="btn-secondary flex-1 text-sm">Cancelar</button>
               <button onClick={handleSuspend} className="btn-primary flex-1 text-sm" data-testid="confirm-suspend-btn">Suspender</button>
             </div>
@@ -469,9 +512,9 @@ const ClientsPage = () => {
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
-  const [selectedClient, setSelectedClient] = useState(null);
-  const [clientHistory, setClientHistory] = useState([]);
-  const [showBooking, setShowBooking] = useState(false);
+  const [expandedId, setExpandedId] = useState(null);
+  const [historyByPhone, setHistoryByPhone] = useState({});
+  const [bookingClientId, setBookingClientId] = useState(null);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
 
@@ -488,10 +531,20 @@ const ClientsPage = () => {
 
   const loadHistory = async (phone) => {
     const res = await schedulingAPI.getAppointments();
-    setClientHistory(res.data.filter(a => a.customer_phone === phone).sort((a,b) => b.date.localeCompare(a.date)));
+    const list = res.data.filter(a => a.customer_phone === phone).sort((a,b) => b.date.localeCompare(a.date));
+    setHistoryByPhone(h => ({ ...h, [phone]: list }));
   };
 
-  const handleSelectClient = (client) => { setSelectedClient(client); loadHistory(client.phone); };
+  const handleToggleExpand = (client) => {
+    if (expandedId === client.id) {
+      setExpandedId(null);
+      setBookingClientId(null);
+    } else {
+      setExpandedId(client.id);
+      setBookingClientId(null);
+      if (!historyByPhone[client.phone]) loadHistory(client.phone);
+    }
+  };
 
   const handleSaveClient = async (form) => {
     try {
@@ -508,21 +561,25 @@ const ClientsPage = () => {
 
   const handleDeleteClient = async (id) => {
     if (!window.confirm('Excluir este cliente?')) return;
-    try { await schedulingAPI.deleteClient(id); toast.success('Excluido!'); setSelectedClient(null); load(); }
-    catch (e) { toast.error('Erro ao excluir'); }
+    try {
+      await schedulingAPI.deleteClient(id);
+      toast.success('Excluido!');
+      setExpandedId(null);
+      load();
+    } catch (e) { toast.error('Erro ao excluir'); }
   };
 
-  const handleBookFromClient = async (bookForm) => {
+  const handleBookFromClient = async (client, bookForm) => {
     try {
       await schedulingAPI.createAppointment({
-        customer_name: selectedClient.name,
-        customer_phone: selectedClient.phone,
-        customer_email: selectedClient.email || undefined,
+        customer_name: client.name,
+        customer_phone: client.phone,
+        customer_email: client.email || undefined,
         ...bookForm
       });
       toast.success('Agendamento criado!');
-      setShowBooking(false);
-      loadHistory(selectedClient.phone);
+      setBookingClientId(null);
+      loadHistory(client.phone);
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao agendar'); }
   };
 
@@ -530,12 +587,12 @@ const ClientsPage = () => {
 
   return (
     <div className="animate-fade-in" data-testid="clients-page">
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
         <div>
           <h2 className="text-2xl font-bold font-heading text-slate-900">Clientes</h2>
           <p className="text-sm text-slate-600">{clients.length} clientes cadastrados</p>
         </div>
-        <button onClick={() => { setEditingClient(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2" data-testid="add-client-btn">
+        <button onClick={() => { setEditingClient(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2 justify-center" data-testid="add-client-btn">
           <Plus className="w-4 h-4" /> Novo Cliente
         </button>
       </div>
@@ -545,92 +602,88 @@ const ClientsPage = () => {
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nome ou telefone..." className="input-field pl-10" data-testid="client-search" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-2">
-          {clients.map(c => (
-            <div key={c.id} onClick={() => handleSelectClient(c)}
-              className={`card !p-4 cursor-pointer transition-all hover:shadow-sm ${selectedClient?.id === c.id ? 'ring-2 ring-primary/50 bg-primary/5' : ''}`}
-              data-testid={`client-row-${c.id}`}>
-              <div className="flex items-center gap-3">
+      <div className="space-y-2">
+        {clients.map(c => {
+          const isExpanded = expandedId === c.id;
+          const history = historyByPhone[c.phone] || [];
+          const isBookingHere = bookingClientId === c.id;
+          return (
+            <div key={c.id} className={`rounded-xl border bg-white transition-all ${isExpanded ? 'border-primary/40 shadow-sm' : 'border-slate-200'}`} data-testid={`client-card-${c.id}`}>
+              <button onClick={() => handleToggleExpand(c)} className="w-full p-3 sm:p-4 flex items-center gap-3 text-left" data-testid={`client-row-${c.id}`}>
                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-primary font-bold text-sm flex-shrink-0">
                   {c.name?.substring(0,2).toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-slate-900 truncate">{c.name}</p>
-                  <p className="text-xs text-slate-500">{c.phone} {c.email ? `• ${c.email}` : ''}</p>
+                  <p className="text-xs text-slate-500 truncate">{c.phone}{c.email ? ` • ${c.email}` : ''}</p>
                 </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-xs text-slate-500">{c.total_appointments || 0} agend.</p>
-                  {c.active_subscription && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Assinante</span>}
-                </div>
-              </div>
-            </div>
-          ))}
-          {clients.length === 0 && <div className="card text-center py-12"><Users className="w-12 h-12 text-slate-300 mx-auto mb-3" /><p className="text-sm text-slate-500">Nenhum cliente encontrado</p></div>}
-        </div>
-
-        <div>
-          {selectedClient ? (
-            <div className="card sticky top-20" data-testid="client-detail">
-              <div className="text-center mb-4">
-                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-primary text-xl font-bold mx-auto mb-3">
-                  {selectedClient.name?.substring(0,2).toUpperCase()}
-                </div>
-                <p className="font-bold text-slate-900 text-lg">{selectedClient.name}</p>
-                <p className="text-sm text-slate-500">{selectedClient.phone}</p>
-                {selectedClient.email && <p className="text-xs text-slate-400">{selectedClient.email}</p>}
-              </div>
-
-              <div className="flex gap-2 mb-4">
-                <button onClick={() => setShowBooking(true)} className="btn-primary flex-1 text-sm flex items-center justify-center gap-1" data-testid="book-from-client-btn">
-                  <Calendar className="w-4 h-4" /> Agendar
-                </button>
-                <button onClick={() => { setEditingClient(selectedClient); setShowAdd(true); }} className="btn-secondary text-sm p-2" data-testid="edit-client-btn">
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button onClick={() => handleDeleteClient(selectedClient.id)} className="p-2 rounded-lg border border-red-200 text-red-500 hover:bg-red-50" data-testid="delete-client-btn">
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-
-              {selectedClient.notes && <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg mb-4">{selectedClient.notes}</p>}
-
-              <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Historico de Agendamentos</h4>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {clientHistory.map(a => (
-                  <div key={a.id} className="p-3 bg-slate-50 rounded-lg">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-bold text-primary">{a.date?.split('-').reverse().join('/')} {a.time}</span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[a.status] || 'bg-slate-100 text-slate-600'}`}>{a.status}</span>
-                    </div>
-                    <p className="text-xs font-medium text-slate-900">{a.service_name}</p>
-                    <div className="flex items-center justify-between mt-1">
-                      <span className="text-[11px] text-slate-500">{a.professional_name}</span>
-                      <span className="text-xs font-medium">R$ {(a.price || 0).toFixed(2)}</span>
-                    </div>
-                    {a.payment_method && <span className="text-[10px] text-slate-400 mt-0.5 block">Pago: {a.payment_method}</span>}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="text-right hidden sm:block">
+                    <p className="text-xs text-slate-500">{c.total_appointments || 0} agend.</p>
+                    {c.active_subscription && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Assinante</span>}
                   </div>
-                ))}
-                {clientHistory.length === 0 && <p className="text-xs text-slate-400 text-center py-6">Sem historico</p>}
-              </div>
+                  <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="border-t border-slate-100 p-3 sm:p-4 space-y-3 animate-fade-in" data-testid={`client-expanded-${c.id}`}>
+                  {/* Action buttons */}
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => setBookingClientId(isBookingHere ? null : c.id)} className="btn-primary text-sm flex items-center gap-1.5" data-testid={`book-from-client-btn-${c.id}`}>
+                      <Calendar className="w-4 h-4" /> {isBookingHere ? 'Cancelar' : 'Agendar'}
+                    </button>
+                    <button onClick={() => { setEditingClient(c); setShowAdd(true); }} className="btn-secondary text-sm flex items-center gap-1.5" data-testid={`edit-client-btn-${c.id}`}>
+                      <Pencil className="w-4 h-4" /> Editar
+                    </button>
+                    <button onClick={() => handleDeleteClient(c.id)} className="p-2 rounded-lg border border-red-200 text-red-500 hover:bg-red-50" data-testid={`delete-client-btn-${c.id}`}>
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {c.notes && <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg">{c.notes}</p>}
+
+                  {/* Inline Booking Form */}
+                  {isBookingHere && (
+                    <div className="bg-primary/5 border border-primary/20 rounded-xl p-3" data-testid={`inline-booking-${c.id}`}>
+                      <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Novo Agendamento</p>
+                      <BookFromClientForm services={services} professionals={professionals} onSave={(form) => handleBookFromClient(c, form)} />
+                    </div>
+                  )}
+
+                  {/* History */}
+                  <div>
+                    <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Historico de Agendamentos</h4>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {history.map(a => (
+                        <div key={a.id} className="p-3 bg-slate-50 rounded-lg">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-primary">{a.date?.split('-').reverse().join('/')} {a.time}</span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[a.status] || 'bg-slate-100 text-slate-600'}`}>{a.status}</span>
+                          </div>
+                          <p className="text-xs font-medium text-slate-900">{a.service_name}</p>
+                          <div className="flex items-center justify-between mt-1">
+                            <span className="text-[11px] text-slate-500">{a.professional_name}</span>
+                            <span className="text-xs font-medium">R$ {(a.price || 0).toFixed(2)}</span>
+                          </div>
+                          {a.payment_method && <span className="text-[10px] text-slate-400 mt-0.5 block">Pago: {a.payment_method}</span>}
+                        </div>
+                      ))}
+                      {history.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Sem historico</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="card text-center py-12"><UserCheck className="w-10 h-10 text-slate-300 mx-auto mb-2" /><p className="text-sm text-slate-500">Selecione um cliente</p></div>
-          )}
-        </div>
+          );
+        })}
+        {clients.length === 0 && <div className="card text-center py-12"><Users className="w-12 h-12 text-slate-300 mx-auto mb-3" /><p className="text-sm text-slate-500">Nenhum cliente encontrado</p></div>}
       </div>
 
       {/* Add/Edit Client Modal */}
       {showAdd && (
         <Modal title={editingClient ? 'Editar Cliente' : 'Novo Cliente'} onClose={() => { setShowAdd(false); setEditingClient(null); }}>
           <ClientForm client={editingClient} onSave={handleSaveClient} />
-        </Modal>
-      )}
-
-      {/* Book from Client Modal */}
-      {showBooking && selectedClient && (
-        <Modal title={`Agendar para ${selectedClient.name}`} onClose={() => setShowBooking(false)}>
-          <BookFromClientForm services={services} professionals={professionals} onSave={handleBookFromClient} />
         </Modal>
       )}
     </div>
@@ -1740,26 +1793,32 @@ const MySitePage = () => {
           <div className="space-y-3">
             <div className="p-4 bg-slate-50 rounded-lg">
               <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Agenda Publica</p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}/agenda</code>
-                <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/agenda`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-link-btn">Copiar</button>
-                <a href={`/${page.slug}/agenda`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <code className="flex-1 min-w-0 bg-white px-3 py-2 rounded border border-slate-200 text-xs sm:text-sm truncate">{window.location.origin}/{page.slug}/agenda</code>
+                <div className="flex gap-2">
+                  <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/agenda`); toast.success('Link copiado!'); }} className="btn-primary text-sm flex-1 sm:flex-initial" data-testid="copy-link-btn">Copiar</button>
+                  <a href={`/${page.slug}/agenda`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm flex-1 sm:flex-initial text-center">Visualizar</a>
+                </div>
               </div>
             </div>
             <div className="p-4 bg-slate-50 rounded-lg">
               <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Login da Empresa</p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}/login</code>
-                <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/login`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-login-link-btn">Copiar</button>
-                <a href={`/${page.slug}/login`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <code className="flex-1 min-w-0 bg-white px-3 py-2 rounded border border-slate-200 text-xs sm:text-sm truncate">{window.location.origin}/{page.slug}/login</code>
+                <div className="flex gap-2">
+                  <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/login`); toast.success('Link copiado!'); }} className="btn-primary text-sm flex-1 sm:flex-initial" data-testid="copy-login-link-btn">Copiar</button>
+                  <a href={`/${page.slug}/login`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm flex-1 sm:flex-initial text-center">Visualizar</a>
+                </div>
               </div>
             </div>
             <div className="p-4 bg-slate-50 rounded-lg">
               <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Indoor TV</p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 bg-white px-3 py-2 rounded border border-slate-200 text-sm">{window.location.origin}/{page.slug}/indoor</code>
-                <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/indoor`); toast.success('Link copiado!'); }} className="btn-primary text-sm" data-testid="copy-indoor-link-btn">Copiar</button>
-                <a href={`/${page.slug}/indoor`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">Visualizar</a>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <code className="flex-1 min-w-0 bg-white px-3 py-2 rounded border border-slate-200 text-xs sm:text-sm truncate">{window.location.origin}/{page.slug}/indoor</code>
+                <div className="flex gap-2">
+                  <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${page.slug}/indoor`); toast.success('Link copiado!'); }} className="btn-primary text-sm flex-1 sm:flex-initial" data-testid="copy-indoor-link-btn">Copiar</button>
+                  <a href={`/${page.slug}/indoor`} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm flex-1 sm:flex-initial text-center">Visualizar</a>
+                </div>
               </div>
             </div>
           </div>
@@ -2147,10 +2206,17 @@ const ConfigPage = () => {
   const { user } = useAuth();
   const [businessHours, setBusinessHours] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [bookingPage, setBookingPage] = useState(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const logoRef = useRef(null);
+  const API_BASE = process.env.REACT_APP_BACKEND_URL;
 
   const DAY_LABELS = { seg: 'Segunda', ter: 'Terca', qua: 'Quarta', qui: 'Quinta', sex: 'Sexta', sab: 'Sabado', dom: 'Domingo' };
 
-  useEffect(() => { schedulingAPI.getBusinessHours().then(r => setBusinessHours(r.data)).catch(() => {}); }, []);
+  useEffect(() => {
+    schedulingAPI.getBusinessHours().then(r => setBusinessHours(r.data)).catch(() => {});
+    schedulingAPI.getBookingPage().then(r => setBookingPage(r.data)).catch(() => {});
+  }, []);
 
   const updateDay = (day, field, value) => {
     setBusinessHours(h => ({ ...h, [day]: { ...h[day], [field]: value } }));
@@ -2165,8 +2231,62 @@ const ConfigPage = () => {
     finally { setSaving(false); }
   };
 
+  const handleLogoUpload = async (file) => {
+    if (!file) return;
+    setUploadingLogo(true);
+    try {
+      const res = await uploadAPI.uploadBookingImage(file);
+      await schedulingAPI.updateBookingPage({ logo_url: res.data.url });
+      const updated = await schedulingAPI.getBookingPage();
+      setBookingPage(updated.data);
+      window.dispatchEvent(new CustomEvent('company-logo-updated'));
+      toast.success('Logomarca atualizada!');
+    } catch (e) {
+      toast.error('Erro ao enviar logomarca');
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    try {
+      await schedulingAPI.updateBookingPage({ logo_url: null });
+      const updated = await schedulingAPI.getBookingPage();
+      setBookingPage(updated.data);
+      window.dispatchEvent(new CustomEvent('company-logo-updated'));
+      toast.success('Logomarca removida');
+    } catch (e) { toast.error('Erro ao remover'); }
+  };
+
   return (
     <div className="animate-fade-in" data-testid="config-page">
+      {/* Logo Global */}
+      <div className="card max-w-2xl mb-6" data-testid="config-logo-section">
+        <h3 className="font-semibold text-slate-900 mb-2">Logomarca Global</h3>
+        <p className="text-xs text-slate-500 mb-4">Esta logo aparecera no painel, no site publico de agendamento e na Indoor TV.</p>
+        <input type="file" ref={logoRef} className="hidden" accept="image/*" onChange={(e) => handleLogoUpload(e.target.files[0])} data-testid="config-logo-input" />
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          <div className="w-28 h-28 rounded-xl border-2 border-dashed border-slate-300 flex items-center justify-center overflow-hidden bg-slate-50 flex-shrink-0">
+            {bookingPage?.logo_url ? (
+              <img src={`${API_BASE}${bookingPage.logo_url}`} alt="Logo" className="w-full h-full object-cover" />
+            ) : (
+              <Image className="w-8 h-8 text-slate-300" />
+            )}
+          </div>
+          <div className="flex-1 w-full flex flex-col sm:flex-row gap-2">
+            <button onClick={() => logoRef.current?.click()} disabled={uploadingLogo} className="btn-primary text-sm flex items-center justify-center gap-2" data-testid="config-logo-upload-btn">
+              <Upload className="w-4 h-4" />
+              {uploadingLogo ? 'Enviando...' : (bookingPage?.logo_url ? 'Trocar Logo' : 'Enviar Logo')}
+            </button>
+            {bookingPage?.logo_url && (
+              <button onClick={handleRemoveLogo} className="btn-secondary text-sm flex items-center justify-center gap-2" data-testid="config-logo-remove-btn">
+                <Trash2 className="w-4 h-4" /> Remover
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="card max-w-2xl mb-6">
         <h3 className="font-semibold text-slate-900 mb-4">Configuracoes da Empresa</h3>
         <div className="space-y-3">
@@ -2499,7 +2619,7 @@ const OnboardingWizard = ({ onClose }) => {
                 <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-2" />
                 <p className="text-sm font-medium text-emerald-800">Configuracao concluida!</p>
               </div>
-              <button onClick={onClose} className="btn-primary w-full" data-testid="onboarding-finish-btn">Ir para o Dashboard</button>
+              <button onClick={onClose} className="btn-primary w-full" data-testid="onboarding-finish-btn">Ir para o Início</button>
             </div>
           )}
         </div>
