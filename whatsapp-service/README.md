@@ -15,8 +15,24 @@ Este serviço **NÃO é deployado** junto com o backend FastAPI no Emergent. Voc
    - **Start Command**: `node index.js`
    - **Environment Variables**:
      - `FASTAPI_URL` = URL do seu backend em produção (ex: `https://agentcrm.8ip.com.br`)
+     - `AUTH_DIR` = `/var/data/auth_sessions` (quando usar Persistent Disk — ver abaixo)
 3. Render expõe automaticamente a porta via `process.env.PORT`
 4. Copie a URL pública gerada (ex: `https://boss-whatsapp.onrender.com`)
+
+### IMPORTANTE: Persistent Disk (recomendado no plano Starter+)
+
+Sem um disco persistente o arquivo de auth do Baileys é apagado a cada redeploy,
+forçando reescaneamento do QR e mudando o ID da instância.
+
+1. No dashboard do Render, vá em **agendcrm > Settings > Disks**
+2. Clique **Add Disk**:
+   - **Name**: `auth`
+   - **Mount Path**: `/var/data`
+   - **Size**: `1 GB` (suficiente para várias instâncias)
+3. Em **Environment**, adicione:
+   - `AUTH_DIR` = `/var/data/auth_sessions`
+4. Manual Deploy → Clear build cache & deploy
+5. Escaneie o QR Code uma vez — o login ficará persistente entre restarts
 
 ### Opção 2: Railway, Fly.io, VPS
 

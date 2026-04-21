@@ -14,7 +14,12 @@ app.use(express.json());
 const logger = pino({ level: 'warn' });
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8001';
 const PORT = process.env.PORT || process.env.WA_PORT || 3002;
-const AUTH_DIR = path.join(__dirname, 'auth_sessions');
+// Allow overriding with AUTH_DIR so operators can point to a persistent disk
+// (e.g. /var/data/auth_sessions on Render with a mounted Persistent Disk).
+const AUTH_DIR = process.env.AUTH_DIR
+  ? path.resolve(process.env.AUTH_DIR)
+  : path.join(__dirname, 'auth_sessions');
+console.log(`[whatsapp-service] Using AUTH_DIR=${AUTH_DIR}`);
 
 // Store connections per company
 const connections = {};
