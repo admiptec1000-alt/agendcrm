@@ -8,18 +8,26 @@ from models import (
     BookingPageUpdate, AppointmentStatus
 )
 import uuid
+import logging
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, EmailStr
 
 router = APIRouter(prefix="/scheduling", tags=["scheduling"])
+logger = logging.getLogger(__name__)
 
 # === EXTRA MODELS ===
+class SubscriptionPlanItem(BaseModel):
+    service_id: str
+    credits_per_use: int = 1
+
 class SubscriptionPlanCreate(BaseModel):
     name: str
     price: float
-    visits_per_month: int
-    included_service_ids: List[str] = []
+    cycle_days: int = 30
+    total_credits: int
+    items: List[SubscriptionPlanItem] = []  # detailed per-service credits
+    included_service_ids: List[str] = []  # legacy fallback
     description: Optional[str] = None
 
 class ClientSubscriptionCreate(BaseModel):
@@ -32,6 +40,22 @@ class ClientCreate(BaseModel):
     email: Optional[str] = None
     birth_date: Optional[str] = None  # YYYY-MM-DD
     notes: Optional[str] = None
+
+def _calc_sub_status(sub: dict) -> str:
+    """Determine if subscription is active or expired based on end_date and credits."""
+    if sub.get("status") == "cancelled":
+        return "cancelled"
+    end = sub.get("end_date")
+    if end:
+        try:
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) > end_dt:
+                return "expired"
+        except Exception:
+            pass
+    if sub.get("credits_remaining", 0) <= 0:
+        return "expired"
+    return "active"
 
 # === APPOINTMENTS ===
 @router.get("/appointments")
@@ -76,24 +100,39 @@ async def create_appointment(
     if not professional:
         raise HTTPException(status_code=404, detail="Profissional nao encontrado")
 
-    # Check client subscription
+    # Check client subscription (active + not expired + has credits for this service)
     price = service["price"]
     subscription_applied = False
     client_sub = await db.client_subscriptions.find_one({
         "company_id": user["company_id"],
         "client_phone": data.customer_phone,
-        "status": "active",
-        "credits_remaining": {"$gt": 0}
+        "status": "active"
     })
-    if client_sub:
+    if client_sub and _calc_sub_status(client_sub) == "active":
         plan = await db.subscription_plans.find_one({"id": client_sub["plan_id"]})
-        if plan and data.service_id in plan.get("included_service_ids", []):
-            price = 0.0
-            subscription_applied = True
-            await db.client_subscriptions.update_one(
-                {"id": client_sub["id"]},
-                {"$inc": {"credits_remaining": -1}}
-            )
+        if plan:
+            # Find credits_per_use for this service
+            cost = None
+            for item in plan.get("items", []):
+                if item.get("service_id") == data.service_id:
+                    cost = item.get("credits_per_use", 1)
+                    break
+            # Fallback: legacy included_service_ids with 1 credit each
+            if cost is None and data.service_id in plan.get("included_service_ids", []):
+                cost = 1
+            if cost is not None and client_sub.get("credits_remaining", 0) >= cost:
+                price = 0.0
+                subscription_applied = True
+                await db.client_subscriptions.update_one(
+                    {"id": client_sub["id"]},
+                    {"$inc": {"credits_remaining": -cost, "credits_used": cost}}
+                )
+                # Expire if runs out
+                updated = await db.client_subscriptions.find_one({"id": client_sub["id"]})
+                if updated and updated.get("credits_remaining", 0) <= 0:
+                    await db.client_subscriptions.update_one(
+                        {"id": client_sub["id"]}, {"$set": {"status": "expired"}}
+                    )
 
     appointment_id = str(uuid.uuid4())
     appointment = {
@@ -117,6 +156,23 @@ async def create_appointment(
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.appointments.insert_one(appointment)
+
+    # Send WhatsApp confirmation (fire-and-forget; auto-tag as confirmed if sent)
+    try:
+        from notifications import notify_appointment_created
+        import os as _os
+        base_url = _os.environ.get("FRONTEND_PUBLIC_URL", "")
+        page = await db.booking_pages.find_one({"company_id": user["company_id"]}, {"_id": 0, "slug": 1})
+        slug = (page or {}).get("slug", "")
+        sent = await notify_appointment_created(db, user["company_id"], appointment, base_url, slug)
+        if sent:
+            await db.appointments.update_one(
+                {"id": appointment_id},
+                {"$set": {"status": AppointmentStatus.CONFIRMADO, "whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            appointment["status"] = AppointmentStatus.CONFIRMADO
+    except Exception as e:
+        logger.warning(f"Failed to notify appointment {appointment_id}: {e}")
 
     # Update/create client record
     existing_client = await db.clients.find_one({"company_id": user["company_id"], "phone": data.customer_phone})
@@ -817,19 +873,62 @@ async def create_subscription_plan(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    items = [it.model_dump() for it in data.items]
+    # Derive included_service_ids from items for backward compat
+    if items and not data.included_service_ids:
+        included_ids = [i["service_id"] for i in items]
+    else:
+        included_ids = data.included_service_ids
     plan = {
         "id": str(uuid.uuid4()),
         "company_id": user["company_id"],
         "name": data.name,
         "price": data.price,
-        "visits_per_month": data.visits_per_month,
-        "included_service_ids": data.included_service_ids,
+        "cycle_days": data.cycle_days,
+        "total_credits": data.total_credits,
+        "visits_per_month": data.total_credits,  # legacy alias
+        "items": items,
+        "included_service_ids": included_ids,
         "description": data.description,
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.subscription_plans.insert_one(plan)
     return {k: v for k, v in plan.items() if k != "_id"}
+
+class SubscriptionPlanUpdate(BaseModel):
+    name: Optional[str] = None
+    price: Optional[float] = None
+    cycle_days: Optional[int] = None
+    total_credits: Optional[int] = None
+    items: Optional[List[SubscriptionPlanItem]] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+@router.put("/subscription-plans/{plan_id}")
+async def update_subscription_plan(
+    plan_id: str,
+    data: SubscriptionPlanUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    plan = await db.subscription_plans.find_one({"id": plan_id, "company_id": user["company_id"]})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plano nao encontrado")
+    update = {}
+    raw = data.model_dump(exclude_unset=True)
+    if "items" in raw and raw["items"] is not None:
+        update["items"] = [it.model_dump() if hasattr(it, "model_dump") else it for it in raw["items"]]
+        update["included_service_ids"] = [i["service_id"] for i in update["items"]]
+    for k in ["name", "price", "cycle_days", "description", "is_active"]:
+        if k in raw and raw[k] is not None:
+            update[k] = raw[k]
+    if "total_credits" in raw and raw["total_credits"] is not None:
+        update["total_credits"] = raw["total_credits"]
+        update["visits_per_month"] = raw["total_credits"]
+    if update:
+        await db.subscription_plans.update_one({"id": plan_id}, {"$set": update})
+    return await db.subscription_plans.find_one({"id": plan_id}, {"_id": 0})
 
 @router.delete("/subscription-plans/{plan_id}")
 async def delete_subscription_plan(
@@ -879,7 +978,9 @@ async def create_subscription(
         raise HTTPException(status_code=400, detail="Cliente ja possui assinatura ativa")
 
     now = datetime.now(timezone.utc)
-    next_billing = (now + timedelta(days=30)).isoformat()
+    cycle_days = plan.get("cycle_days", 30)
+    total_credits = plan.get("total_credits", plan.get("visits_per_month", 0))
+    end_date = (now + timedelta(days=cycle_days)).isoformat()
 
     sub = {
         "id": str(uuid.uuid4()),
@@ -887,9 +988,15 @@ async def create_subscription(
         "client_phone": data.client_phone,
         "client_name": client["name"],
         "plan_id": data.plan_id,
+        "plan_name": plan["name"],
         "status": "active",
-        "credits_remaining": plan["visits_per_month"],
-        "next_billing_date": next_billing,
+        "credits_total": total_credits,
+        "credits_used": 0,
+        "credits_remaining": total_credits,
+        "cycle_days": cycle_days,
+        "start_date": now.isoformat(),
+        "end_date": end_date,
+        "next_billing_date": end_date,  # legacy alias
         "created_at": now.isoformat()
     }
     await db.client_subscriptions.insert_one(sub)

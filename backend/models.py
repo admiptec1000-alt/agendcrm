@@ -150,6 +150,7 @@ class AppointmentCreate(BaseModel):
     date: str  # YYYY-MM-DD
     time: str  # HH:MM
     notes: Optional[str] = None
+    use_subscription: Optional[bool] = False
 
 class AppointmentUpdate(BaseModel):
     status: Optional[AppointmentStatus] = None

@@ -15,7 +15,7 @@ import {
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
 import WhatsAppConnectionsPage from '../CRM/WhatsAppConnectionsPage';
-import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
+import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
@@ -48,6 +48,7 @@ const FEATURE_META = {
   categorias:         { icon: 'FolderOpen',       label: 'Categorias', group: 'Catalogo' },
   servicos_produtos:  { icon: 'Scissors',         label: 'Servicos e Produtos', group: 'Catalogo' },
   assinaturas:        { icon: 'CreditCard',       label: 'Assinaturas', group: 'Catalogo' },
+  planos:             { icon: 'Tag',              label: 'Planos', group: 'Catalogo' },
   profissionais:      { icon: 'Briefcase',        label: 'Profissionais', group: 'Catalogo' },
   financeiro:         { icon: 'DollarSign',       label: 'Financeiro', group: 'Analise' },
   comissoes:          { icon: 'PieChart',         label: 'Comissoes', group: 'Analise' },
@@ -242,6 +243,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'servicos_produtos': return <ServicesPageFull />;
     case 'profissionais': return <ProfessionalsPageFull />;
     case 'assinaturas': return <SubscriptionsPageFull />;
+    case 'planos': return <PlanosPageFull />;
     case 'categorias': return <CategoriesPage />;
     case 'meu_site': return <MySitePage />;
     case 'financeiro': return <FinanceiroPage />;
@@ -330,7 +332,7 @@ const UserHeaderMenu = ({ user, logout }) => {
             </div>
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h3 className="text-base font-bold font-heading">Suspender Agenda</h3>
+                <h3 className="text-xl font-page-title">Suspender Agenda</h3>
                 <p className="text-xs text-slate-500">Escolha o tipo de suspensao</p>
               </div>
               <button onClick={() => setShowSuspend(false)} className="p-1.5 rounded-lg hover:bg-slate-100" data-testid="close-suspend-modal">
@@ -883,16 +885,20 @@ const ClientForm = ({ client, onSave }) => {
           />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <div className="relative">
-            <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-            <input
-              value={form.phone}
-              onChange={e => setForm({...form, phone: formatPhone(e.target.value)})}
-              placeholder="(99) 99999-9999"
-              className="input-field !pl-9"
-              data-testid="client-phone-input"
-              inputMode="tel"
-            />
+          <div>
+            <label htmlFor="client-phone" className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Telefone / WhatsApp</label>
+            <div className="relative">
+              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+              <input
+                id="client-phone"
+                value={form.phone}
+                onChange={e => setForm({...form, phone: formatPhone(e.target.value)})}
+                placeholder="(99) 99999-9999"
+                className="input-field !pl-9"
+                data-testid="client-phone-input"
+                inputMode="tel"
+              />
+            </div>
           </div>
           <div>
             <label htmlFor="client-birthdate" className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Data de Nascimento</label>
@@ -1379,7 +1385,7 @@ const AgendaPage = () => {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center" onClick={() => setConcludeApt(null)}>
           <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl" onClick={e => e.stopPropagation()} data-testid="conclude-modal">
             <div className="p-5 border-b border-slate-100">
-              <h3 className="text-base font-bold font-heading">Concluir Atendimento</h3>
+              <h3 className="text-xl font-page-title">Concluir Atendimento</h3>
               <p className="text-xs text-slate-500 mt-0.5">{concludeApt.customer_name} &middot; {concludeApt.service_name}</p>
             </div>
             <div className="p-5 space-y-4">
@@ -1476,7 +1482,7 @@ const EditAppointmentModal = ({ appointment, services, canEditPrice, onClose, on
       <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="edit-appointment-modal">
         <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white">
           <div>
-            <h3 className="text-base font-bold font-heading">Editar Agendamento</h3>
+            <h3 className="text-xl font-page-title">Editar Agendamento</h3>
             <p className="text-xs text-slate-500">{appointment.customer_name}</p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>
@@ -1643,7 +1649,7 @@ const MessageSchedulingPage = () => {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-5 border-b border-slate-200">
-              <h3 className="text-lg font-bold font-heading">Agendar Mensagem</h3>
+              <h3 className="text-xl font-page-title">Agendar Mensagem</h3>
               <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5 space-y-4">
@@ -3173,7 +3179,7 @@ const Modal = ({ title, onClose, children }) => (
   <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
     <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-bold font-heading text-slate-900">{title}</h3>
+        <h3 className="text-xl font-page-title text-slate-900">{title}</h3>
         <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
       </div>
       {children}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { publicAPI } from '../../services/api';
 import { useCompanyBranding } from '../../hooks/useCompanyBranding';
@@ -16,6 +16,8 @@ const PublicBooking = () => {
   const [loading, setLoading] = useState(true);
   const [clientLookup, setClientLookup] = useState(null);
   const [lookupDone, setLookupDone] = useState(false);
+  const [subscription, setSubscription] = useState(null);
+  const [useCredits, setUseCredits] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [bookingDone, setBookingDone] = useState(false);
   const [selectedService, setSelectedService] = useState(null);
@@ -53,32 +55,53 @@ const PublicBooking = () => {
   }, [slug, formData.professional_id]);
 
   const handlePhoneLookup = async (phone) => {
-    if (phone.length < 8) { setLookupDone(false); setClientLookup(null); return; }
+    if (phone.length < 8) { setLookupDone(false); setClientLookup(null); setSubscription(null); return; }
     try {
-      const res = await publicAPI.lookupClient(slug, phone);
-      if (res.data.found) {
-        setClientLookup(res.data);
-        setFormData(f => ({ ...f, customer_name: res.data.client.name, customer_email: res.data.client.email || '' }));
-        setLookupDone(true);
-        toast.success(`Cliente encontrado: ${res.data.client.name}`);
+      const [cRes, sRes] = await Promise.all([
+        publicAPI.lookupClient(slug, phone),
+        publicAPI.getSubscription(slug, phone).catch(() => ({ data: { has_subscription: false } }))
+      ]);
+      if (cRes.data.found) {
+        setClientLookup(cRes.data);
+        setFormData(f => ({ ...f, customer_name: cRes.data.client.name, customer_email: cRes.data.client.email || '' }));
+        toast.success(`Cliente encontrado: ${cRes.data.client.name}`);
       } else {
         setClientLookup(null);
-        setLookupDone(true);
       }
-    } catch (e) { setClientLookup(null); setLookupDone(true); }
+      setSubscription(sRes.data.has_subscription ? sRes.data : null);
+      if (sRes.data.has_subscription && sRes.data.status === 'active') {
+        toast.success(`Assinatura ativa: ${sRes.data.credits_remaining} créditos disponíveis`);
+      }
+      setLookupDone(true);
+    } catch (e) { setClientLookup(null); setSubscription(null); setLookupDone(true); }
   };
 
-  const getServicePrice = (service) => {
-    if (clientLookup?.subscription && clientLookup.included_service_ids?.includes(service.id)) {
-      return 0;
+  // Cost in credits for the currently selected service, if covered by the plan
+  const serviceCreditCost = useMemo(() => {
+    if (!subscription || subscription.status !== 'active' || !formData.service_id) return null;
+    const cost = subscription.service_costs?.[formData.service_id];
+    if (cost == null) return null;
+    if (subscription.credits_remaining < cost) return null;
+    return cost;
+  }, [subscription, formData.service_id]);
+
+  const willUseCredits = !!serviceCreditCost && useCredits;
+  const finalPrice = willUseCredits ? 0 : (selectedService?.price || 0);
+
+  // Helper: display price for a service card; 0/incluso if covered by active subscription
+  const getServicePrice = (svc) => {
+    if (!svc) return 0;
+    if (subscription && subscription.status === 'active') {
+      const cost = subscription.service_costs?.[svc.id];
+      if (cost != null && (subscription.credits_remaining ?? 0) >= cost) return 0;
     }
-    return service.price;
+    return svc.price || 0;
   };
 
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      const payload = { ...formData };
+      const payload = { ...formData, use_subscription: willUseCredits };
       if (!payload.customer_email) delete payload.customer_email;
       await publicAPI.createBooking(slug, payload);
       setBookingDone(true);
@@ -316,6 +339,29 @@ const PublicBooking = () => {
                   {lookupDone && !clientLookup && formData.customer_phone.length >= 10 && (
                     <p className="text-xs text-slate-500 mt-1">Novo cliente - preencha seus dados abaixo</p>
                   )}
+                  {subscription && (
+                    <div className={`mt-2 p-3 rounded-xl border ${
+                      subscription.status === 'active'
+                        ? 'bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-200'
+                        : 'bg-amber-50 border-amber-200'
+                    }`} data-testid="subscription-banner">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Sparkles className={`w-4 h-4 ${subscription.status === 'active' ? 'text-emerald-600' : 'text-amber-600'}`} />
+                        <p className={`text-xs font-bold ${subscription.status === 'active' ? 'text-emerald-800' : 'text-amber-800'}`}>
+                          {subscription.status === 'active' ? 'Assinante Ativo' : 'Assinatura Vencida'}
+                        </p>
+                      </div>
+                      <p className="text-xs text-slate-700">{subscription.plan_name}</p>
+                      {subscription.status === 'active' ? (
+                        <p className="text-xs text-slate-600">
+                          <b>{subscription.credits_remaining}</b> créditos disponíveis · válido até{' '}
+                          {subscription.end_date ? new Date(subscription.end_date).toLocaleDateString('pt-BR') : '-'}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-600">Os serviços serão cobrados no valor normal.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -342,12 +388,20 @@ const PublicBooking = () => {
                   <div className="flex justify-between text-sm"><span className="text-slate-600">Serviço</span><span className="font-medium">{selectedService?.name}</span></div>
                   <div className="flex justify-between text-sm"><span className="text-slate-600">Data</span><span className="font-medium">{formData.date}</span></div>
                   <div className="flex justify-between text-sm"><span className="text-slate-600">Horario</span><span className="font-medium">{formData.time}</span></div>
+                  {serviceCreditCost && subscription?.status === 'active' && (
+                    <div className="flex items-center gap-2 p-2 bg-emerald-50 rounded-lg border border-emerald-200 mt-1" data-testid="use-credits-toggle">
+                      <input type="checkbox" id="use-credits" checked={useCredits} onChange={e => setUseCredits(e.target.checked)} className="w-4 h-4" />
+                      <label htmlFor="use-credits" className="text-xs text-emerald-800 flex-1 cursor-pointer">
+                        Usar <b>{serviceCreditCost}</b> crédito{serviceCreditCost > 1 ? 's' : ''} da assinatura
+                      </label>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
                     <span className="text-slate-600 font-medium">Valor</span>
                     <span className="font-bold text-lg" style={{ color: primaryColor }}>
-                      {selectedService && getServicePrice(selectedService) === 0
+                      {willUseCredits
                         ? <span className="text-emerald-600">Incluso no Plano</span>
-                        : `R$ ${(selectedService?.price || 0).toFixed(2)}`}
+                        : `R$ ${finalPrice.toFixed(2)}`}
                     </span>
                   </div>
                 </div>

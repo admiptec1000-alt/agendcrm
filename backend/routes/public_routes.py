@@ -300,7 +300,42 @@ async def create_public_booking(
     
     if existing:
         raise HTTPException(status_code=400, detail="Horário já reservado")
-    
+
+    # === Subscription handling ===
+    from routes.scheduling_routes import _calc_sub_status
+    price = service["price"]
+    subscription_applied = False
+    credits_consumed = 0
+    use_subscription = getattr(data, "use_subscription", False)
+    client_sub = await db.client_subscriptions.find_one({
+        "company_id": page["company_id"],
+        "client_phone": data.customer_phone,
+        "status": "active"
+    })
+    if client_sub and _calc_sub_status(client_sub) == "active" and use_subscription:
+        plan = await db.subscription_plans.find_one({"id": client_sub["plan_id"]})
+        if plan:
+            cost = None
+            for item in plan.get("items", []):
+                if item.get("service_id") == data.service_id:
+                    cost = item.get("credits_per_use", 1)
+                    break
+            if cost is None and data.service_id in plan.get("included_service_ids", []):
+                cost = 1
+            if cost is not None and client_sub.get("credits_remaining", 0) >= cost:
+                price = 0.0
+                subscription_applied = True
+                credits_consumed = cost
+                await db.client_subscriptions.update_one(
+                    {"id": client_sub["id"]},
+                    {"$inc": {"credits_remaining": -cost, "credits_used": cost}}
+                )
+                updated = await db.client_subscriptions.find_one({"id": client_sub["id"]})
+                if updated and updated.get("credits_remaining", 0) <= 0:
+                    await db.client_subscriptions.update_one(
+                        {"id": client_sub["id"]}, {"$set": {"status": "expired"}}
+                    )
+
     appointment_id = str(uuid.uuid4())
     appointment = {
         "id": appointment_id,
@@ -315,13 +350,31 @@ async def create_public_booking(
         "date": data.date,
         "time": data.time,
         "duration": service["duration"],
-        "price": service["price"],
-        "status": AppointmentStatus.CONFIRMADO,
+        "price": price,
+        "original_price": service["price"],
+        "subscription_applied": subscription_applied,
+        "credits_consumed": credits_consumed,
+        "status": AppointmentStatus.PENDENTE,
         "notes": data.notes,
         "source": "public_booking",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.appointments.insert_one(appointment)
+
+    # Send WhatsApp + auto-tag confirmed
+    try:
+        from notifications import notify_appointment_created
+        import os as _os
+        base_url = _os.environ.get("FRONTEND_PUBLIC_URL", "")
+        sent = await notify_appointment_created(db, page["company_id"], appointment, base_url, slug)
+        if sent:
+            await db.appointments.update_one(
+                {"id": appointment_id},
+                {"$set": {"status": AppointmentStatus.CONFIRMADO, "whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            appointment["status"] = AppointmentStatus.CONFIRMADO
+    except Exception:
+        pass
     
     # Create/update client record
     company_id = page["company_id"]
@@ -349,7 +402,45 @@ async def create_public_booking(
     }
 
 
-# === MY APPOINTMENTS (public - by phone) ===
+@router.get("/booking/{slug}/subscription")
+async def get_public_subscription(
+    slug: str,
+    phone: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Check if a customer phone has an active subscription on this company.
+    Returns plan details + credits + per-service cost map."""
+    page = await find_booking_page(db, slug)
+    if not page:
+        raise HTTPException(status_code=404, detail="Pagina nao encontrada")
+    clean_phone = "".join(c for c in phone if c.isdigit()) or phone
+    sub = await db.client_subscriptions.find_one(
+        {"company_id": page["company_id"], "client_phone": {"$in": [phone, clean_phone]}},
+        {"_id": 0},
+        sort=[("created_at", -1)]
+    )
+    if not sub:
+        return {"has_subscription": False}
+    from routes.scheduling_routes import _calc_sub_status
+    status_now = _calc_sub_status(sub)
+    plan = await db.subscription_plans.find_one({"id": sub["plan_id"]}, {"_id": 0})
+    service_costs = {}
+    if plan:
+        for it in plan.get("items", []):
+            service_costs[it["service_id"]] = it.get("credits_per_use", 1)
+        for sid in plan.get("included_service_ids", []):
+            service_costs.setdefault(sid, 1)
+    return {
+        "has_subscription": True,
+        "status": status_now,
+        "plan_name": sub.get("plan_name"),
+        "credits_remaining": sub.get("credits_remaining", 0),
+        "credits_total": sub.get("credits_total", sub.get("credits_remaining", 0)),
+        "end_date": sub.get("end_date"),
+        "service_costs": service_costs,
+    }
+
+
 @router.get("/booking/{slug}/my-appointments/{phone}")
 async def get_my_appointments(
     slug: str,

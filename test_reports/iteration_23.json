@@ -1,0 +1,63 @@
+{
+  "summary": "Iteration 23 full-stack testing for SaaS Multi-tenant CRM Planos/Assinaturas + public booking with subscription credits + WhatsApp notify hook. Backend: 15/15 pytest PASSED (plans CRUD with items, subscriptions create with end_date + credits, public subscription lookup, public booking with use_subscription consuming credits, subscription auto-expire at 0 credits, public booking without subscription using full price, admin appointment create without WhatsApp). Frontend: Found 2 CRITICAL runtime ReferenceErrors that crashed entire pages (Planos + Public /boss/agenda). Fixed both and retested — all flows now render correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/public/booking/{slug}/subscription", "issue": "When credits reach 0, backend correctly flips status to 'expired'. However the public lookup still returns has_subscription=true with status='expired'. Frontend handles this but review spec said 'Para phone sem assinatura retorna {has_subscription: false}' — this is about never-subscribed phones (correctly handled)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PlanosPageFull (SchedulingPages.js)", "issue": "CRITICAL: ReferenceError: Tag is not defined. Lucide icon <Tag/> used at line 932 (empty-state) but missing from lucide-react import (line 4-8). Whole Planos page crashed with red overlay. FIXED: added Tag to import.", "selector": "[data-testid=planos-page]", "priority": "CRITICAL"},
+      {"component": "PublicBooking (Public/BookingPage.js)", "issue": "CRITICAL: ReferenceError: getServicePrice is not defined at line 197 (services.map). Public /boss/agenda completely broken with red overlay. FIXED: added getServicePrice helper that returns 0 when service is covered by active subscription with enough credits, else svc.price.", "selector": "[data-testid=step-service]", "priority": "CRITICAL"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Add Subscription modal (SchedulingPages.js ~828)", "issues": ["React warning: duplicate key '62999990099' when multiple clients share the same phone (existing test data from previous iterations). Main agent should dedupe or use client.id as key."]},
+      {"screen": "Build tooling", "issues": ["Persistent hydration warning: '<span data-ve-dynamic> cannot be a child of <option>' injected by x-ve-dynamic build instrumentation on <option> children in selects. Cosmetic only (carried from iter 22)."]}
+    ]
+  },
+  "passed_tests": [
+    "BACKEND 15/15: POST/PUT/DELETE /api/scheduling/subscription-plans with items[{service_id,credits_per_use}]; plan persisted + updated fields propagate",
+    "BACKEND: POST /api/scheduling/subscriptions → credits_total=plan.total_credits, credits_remaining=total, end_date ~ now+cycle_days (30 days)",
+    "BACKEND: GET /api/public/booking/boss/subscription?phone=X returns {has_subscription, status, plan_name, credits_remaining, credits_total, end_date, service_costs{sid:credits}}",
+    "BACKEND: phone without subscription → {has_subscription: false}",
+    "BACKEND: POST /api/public/booking/boss/book use_subscription=true → price=0, subscription_applied=true, credits_remaining decremented by credits_per_use",
+    "BACKEND: use_subscription=false → price=service.price",
+    "BACKEND: consuming last credit → subscription.status becomes 'expired'",
+    "BACKEND: POST /api/scheduling/appointments with no WA conn → 200 OK, status='pendente' (no exception from notify path)",
+    "BACKEND: login admin@boss.com.br/boss123 + GET /api/auth/me returns permissions=['*']",
+    "FRONTEND: After fix — Login → sidebar Catalogo → Planos renders [data-testid=planos-page]; add-plan-btn opens plan-modal; all 9 testids present (plan-name-input, plan-price-input, plan-cycle-input, plan-credits-input, plan-add-service, plan-add-credits, plan-add-item-btn, save-plan-btn, plan-item-{sid}, plan-item-credits-{sid})",
+    "FRONTEND: Assinaturas page renders [data-testid=subscriptions-page]; add-sub-btn opens add-sub-modal with sub-client-select, sub-plan-select, create-sub-btn testids",
+    "FRONTEND: After fix — /boss/agenda loads step-service with service cards + price (R$45.00); no red error overlay"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_23.py",
+    "/app/test_reports/pytest/iteration_23.xml"
+  ],
+  "action_items": [
+    "VERIFY my two frontend fixes are acceptable: (1) added `Tag` to lucide-react import in SchedulingPages.js; (2) added getServicePrice helper in BookingPage.js that returns 0 when subscription covers the service with enough credits, else svc.price.",
+    "Dedupe clients in sub-client-select <option> keys — currently uses phone as key which causes React dup-key warnings when multiple clients exist; prefer client.id.",
+    "Dashboard.js still exceeds 700-line guideline (carried from iter22). SchedulingPages.js is now 1241 lines — also consider split.",
+    "Consider adding a unit/integration test to catch undefined-reference crashes at build time (e.g., eslint no-undef rule + CI gate)."
+  ],
+  "critical_code_review_comments": [
+    "SchedulingPages.js line 4-8 import block needs `Tag` from lucide-react (was missing, caused full Planos page crash).",
+    "BookingPage.js line 197 referenced getServicePrice but never defined it. Now patched; main agent should verify semantics match intent (I treat 0 => covered by active plan with sufficient credits).",
+    "public_routes.py /booking/{slug}/book correctly checks client_sub + _calc_sub_status=='active' + use_subscription flag + enough credits before zeroing price. Good.",
+    "Subscription expire-when-zero logic duplicated in scheduling_routes.create_appointment and public_routes book endpoint — consider extracting to a shared helper in notifications.py or subscriptions.py.",
+    "sub-client-select uses client.phone as React key (line ~828 SchedulingPages.js) — duplicate phone entries in DB cause dup-key warning. Use client.id."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_23.py",
+    "/app/frontend/src/pages/Scheduling/SchedulingPages.js (added Tag to lucide-react import)",
+    "/app/frontend/src/pages/Public/BookingPage.js (added getServicePrice helper)"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% after 2 critical runtime-error fixes"},
+  "test_credentials": {"boss_company": "admin@boss.com.br / boss123 (/boss/login)"},
+  "seed_data_creation": "Backend pytest created + auto-cleaned: 1 test client, 2 test plans, 1 test subscription, 3 test appointments (all DELETE'd in test_cleanup fixture). No residual test data in DB.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 23 backend logic is solid (15/15). Fixed 2 critical frontend undefined-reference bugs that main agent shipped: `Tag` missing from lucide import in SchedulingPages.js, and `getServicePrice` helper missing in BookingPage.js. Main agent should review semantic correctness of getServicePrice implementation — I made it return 0 when active subscription covers the service with enough credits, else svc.price. WhatsApp notify path is correctly no-oping when no WA conn exists (tested). Review request's 'admin auto-confirm' behavior: create_appointment tries to send WhatsApp, if no conn returns False → status stays 'pendente'. When a WA conn is connected, status becomes 'confirmado' and whatsapp_notified_at is set. Public booking /boss/agenda step flow (1-5) wasn't e2e tested end-to-end because service list only has 1 service + fresh page each time; recommend follow-up test that walks through phone lookup → subscription-banner → use-credits-toggle.",
+  "rca of the issue": "Two critical runtime ReferenceErrors in main agent's shipped code: (1) PlanosPageFull uses lucide icon <Tag/> in empty-state card but Tag was never added to the lucide-react import at top of SchedulingPages.js → ReferenceError crashed entire Planos route. (2) PublicBooking.js calls getServicePrice(svc) inside services.map() at line 197 but the helper was never defined in the component → ReferenceError crashed entire /boss/agenda public booking page. Root cause: missing final wire-up pass on imports and helpers when introducing new features (subscription pricing display on service list). Mitigation: I patched both — added Tag to the lucide import and added a getServicePrice helper that returns 0 when the active subscription covers the service with enough credits, else svc.price. Both pages now render successfully on retest."
+}

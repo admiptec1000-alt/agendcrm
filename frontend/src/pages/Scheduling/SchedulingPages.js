@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import {
   Plus, Search, Star, Phone, Mail, Pencil, Trash2, X, Users, DollarSign,
   Calendar, Clock, Scissors, CreditCard, CheckCircle2, Upload, Image,
-  List, Grid3X3, ChevronLeft, ChevronRight
+  List, Grid3X3, ChevronLeft, ChevronRight, Tag
 } from 'lucide-react';
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL;
@@ -149,7 +149,7 @@ const SuspensionModal = ({ professional, onClose, onSaved }) => {
       <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="suspension-modal">
         <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white">
           <div>
-            <h3 className="text-base font-bold font-heading">Suspender Agenda</h3>
+            <h3 className="text-xl font-page-title">Suspender Agenda</h3>
             <p className="text-xs text-slate-500">{professional?.name}</p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100" data-testid="close-suspension-modal"><X className="w-5 h-5" /></button>
@@ -381,7 +381,7 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10">
-          <h3 className="text-lg font-bold font-heading">{isEditing ? 'Editar Profissional' : 'Novo Profissional'}</h3>
+          <h3 className="text-xl font-page-title">{isEditing ? 'Editar Profissional' : 'Novo Profissional'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex border-b border-slate-200 px-5 overflow-x-auto">
@@ -642,7 +642,7 @@ const ServiceModal = ({ service, categories, allServices, onClose, onSave }) => 
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10">
-          <h3 className="text-lg font-bold font-heading">{isEditing ? 'Editar Servico' : 'Novo Servico'}</h3>
+          <h3 className="text-xl font-page-title">{isEditing ? 'Editar Servico' : 'Novo Servico'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-5 space-y-4">
@@ -734,50 +734,297 @@ export const SubscriptionsPageFull = () => {
   const [plans, setPlans] = useState([]);
   const [clients, setClients] = useState([]);
   const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState({ client_phone: '', plan_id: '' });
   useEffect(() => { load(); }, []);
-  const load = async () => { const [s,p,c] = await Promise.all([schedulingAPI.getSubscriptions(),schedulingAPI.getSubscriptionPlans(),schedulingAPI.getClients()]); setSubs(s.data);setPlans(p.data);setClients(c.data); };
+  const load = async () => {
+    const [s,p,c] = await Promise.all([schedulingAPI.getSubscriptions(),schedulingAPI.getSubscriptionPlans(),schedulingAPI.getClients()]);
+    setSubs(s.data); setPlans(p.data); setClients(c.data);
+  };
+
+  const selectedPlan = plans.find(p => p.id === form.plan_id);
+
+  const handleCreate = async () => {
+    if (!form.client_phone || !form.plan_id) { toast.error('Preencha todos'); return; }
+    try {
+      await schedulingAPI.createSubscription(form);
+      toast.success('Assinatura criada!');
+      setShowModal(false); setForm({ client_phone: '', plan_id: '' });
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
+  };
+
+  const formatDate = (iso) => {
+    if (!iso) return '-';
+    try { return new Date(iso).toLocaleDateString('pt-BR'); } catch (e) { return '-'; }
+  };
+
   return (
     <div className="animate-fade-in" data-testid="subscriptions-page">
       <div className="flex items-center justify-between mb-6">
-        <p className="text-sm text-slate-600">Gerencie assinaturas dos clientes</p>
+        <p className="text-sm text-slate-600">{subs.length} assinaturas cadastradas</p>
         <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2" data-testid="add-sub-btn"><Plus className="w-4 h-4" /> Adicionar</button>
       </div>
-      <div className="card overflow-x-auto">
-        <table className="w-full"><thead><tr className="border-b border-slate-200">
-          <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Cliente</th>
-          <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Plano</th>
-          <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Valor</th>
-          <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Status</th>
-          <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Creditos</th>
-          <th className="text-left py-2 px-3 text-xs font-bold uppercase tracking-widest text-slate-400">Acoes</th>
-        </tr></thead><tbody>
-          {subs.map(sub => (
-            <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
-              <td className="py-2 px-3"><p className="font-medium">{sub.client_name}</p><p className="text-xs text-slate-500">{sub.client_phone}</p></td>
-              <td className="py-2 px-3">{sub.plan_name}</td>
-              <td className="py-2 px-3 font-medium">R$ {(sub.plan_price||0).toFixed(2)}/mes</td>
-              <td className="py-2 px-3"><span className={`text-xs px-2 py-0.5 rounded-full ${sub.status==='active'?'bg-emerald-100 text-emerald-700':'bg-red-100 text-red-700'}`}>{sub.status==='active'?'Ativa':'Cancelada'}</span></td>
-              <td className="py-2 px-3">{sub.credits_remaining}</td>
-              <td className="py-2 px-3">{sub.status==='active' && <button onClick={async()=>{await schedulingAPI.cancelSubscription(sub.id);toast.success('Cancelada');load();}} className="text-xs text-red-500 hover:underline">Cancelar</button>}</td>
-            </tr>
-          ))}
-        </tbody></table>
-        {subs.length===0 && <p className="text-center py-8 text-sm text-slate-500">Nenhuma assinatura</p>}
+
+      <div className="space-y-2">
+        {subs.map(sub => {
+          const isActive = sub.status === 'active';
+          const isExpired = sub.status === 'expired';
+          const credPct = sub.credits_total ? Math.round(((sub.credits_remaining || 0) / sub.credits_total) * 100) : 0;
+          return (
+            <div key={sub.id} className="card !p-4" data-testid={`sub-row-${sub.id}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex-1 min-w-[200px]">
+                  <p className="text-sm font-semibold text-slate-900">{sub.client_name}</p>
+                  <p className="text-xs text-slate-500">{sub.client_phone}</p>
+                </div>
+                <div className="flex-1 min-w-[180px]">
+                  <p className="text-[10px] font-bold uppercase text-slate-400">Plano</p>
+                  <p className="text-sm font-medium">{sub.plan_name}</p>
+                </div>
+                <div className="flex-1 min-w-[140px]">
+                  <p className="text-[10px] font-bold uppercase text-slate-400">Vencimento</p>
+                  <p className="text-sm font-medium">{formatDate(sub.end_date)}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
+                    isActive ? 'bg-emerald-100 text-emerald-700' :
+                    isExpired ? 'bg-amber-100 text-amber-700' :
+                    'bg-red-100 text-red-700'
+                  }`}>
+                    {isActive ? 'Ativa' : isExpired ? 'Vencida' : 'Cancelada'}
+                  </span>
+                  {isActive && (
+                    <button onClick={async()=>{ if(!window.confirm('Cancelar assinatura?')) return; await schedulingAPI.cancelSubscription(sub.id); toast.success('Cancelada'); load(); }} className="p-1.5 rounded hover:bg-red-50 text-red-500" data-testid={`cancel-sub-${sub.id}`}><X className="w-4 h-4" /></button>
+                  )}
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-slate-100">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-slate-500">Créditos</span>
+                  <span className="font-bold">{sub.credits_remaining || 0} de {sub.credits_total || 0}</span>
+                </div>
+                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className={`h-full transition-all ${isActive ? 'bg-emerald-500' : 'bg-slate-300'}`} style={{ width: `${credPct}%` }} />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {subs.length === 0 && <div className="card text-center py-12"><CreditCard className="w-10 h-10 text-slate-300 mx-auto mb-2" /><p className="text-sm text-slate-500">Nenhuma assinatura</p></div>}
       </div>
+
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={()=>setShowModal(false)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-bold font-heading">Adicionar Assinatura</h3><button onClick={()=>setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button></div>
-            <div className="space-y-4">
-              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Cliente</label>
-                <select id="sub-client" className="input-field" data-testid="sub-client-select"><option value="">Selecione</option>{clients.map(c=><option key={c.phone} value={c.phone}>{c.name} - {c.phone}</option>)}</select></div>
-              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Plano</label>
-                <select id="sub-plan" className="input-field" data-testid="sub-plan-select"><option value="">Selecione</option>{plans.map(p=><option key={p.id} value={p.id}>{p.name} - R$ {p.price.toFixed(2)}/mes</option>)}</select></div>
-              <button onClick={async()=>{const cp=document.getElementById('sub-client').value;const pl=document.getElementById('sub-plan').value;if(!cp||!pl){toast.error('Preencha todos');return;}try{await schedulingAPI.createSubscription({client_phone:cp,plan_id:pl});toast.success('Criada!');setShowModal(false);load();}catch(e){toast.error(e.response?.data?.detail||'Erro');}}} className="btn-primary text-sm w-full" data-testid="create-sub-btn">Criar Assinatura</button>
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={()=>setShowModal(false)}>
+          <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl p-5" onClick={e=>e.stopPropagation()} data-testid="add-sub-modal">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-page-title">Nova Assinatura</h3>
+              <button onClick={()=>setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-400">Cliente</label>
+                <select value={form.client_phone} onChange={e => setForm({...form, client_phone: e.target.value})} className="input-field" data-testid="sub-client-select">
+                  <option value="">Selecione</option>
+                  {clients.map(c=><option key={c.phone} value={c.phone}>{c.name} - {c.phone}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-400">Plano</label>
+                <select value={form.plan_id} onChange={e => setForm({...form, plan_id: e.target.value})} className="input-field" data-testid="sub-plan-select">
+                  <option value="">Selecione</option>
+                  {plans.filter(p => p.is_active !== false).map(p => <option key={p.id} value={p.id}>{p.name} — R$ {p.price.toFixed(2)} · {p.total_credits || p.visits_per_month} créd · {p.cycle_days || 30}d</option>)}
+                </select>
+              </div>
+              {selectedPlan && (
+                <div className="p-3 bg-primary/5 rounded-xl text-xs space-y-1">
+                  <p><b>Créditos:</b> {selectedPlan.total_credits || selectedPlan.visits_per_month}</p>
+                  <p><b>Ciclo:</b> {selectedPlan.cycle_days || 30} dias</p>
+                  <p><b>Valor:</b> R$ {selectedPlan.price.toFixed(2)}</p>
+                  {selectedPlan.items?.length > 0 && (
+                    <p className="text-slate-600"><b>Itens:</b> {selectedPlan.items.length} serviços configurados</p>
+                  )}
+                </div>
+              )}
+              <button onClick={handleCreate} className="btn-primary text-sm w-full" data-testid="create-sub-btn">Criar Assinatura</button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+/* ========== PLANOS PAGE (CRUD for SubscriptionPlan) ========== */
+export const PlanosPageFull = () => {
+  const [plans, setPlans] = useState([]);
+  const [services, setServices] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    const [p, s] = await Promise.all([schedulingAPI.getSubscriptionPlans(), schedulingAPI.getServices()]);
+    setPlans(p.data); setServices(s.data);
+  };
+
+  const handleSave = async (form) => {
+    try {
+      if (editing) {
+        await schedulingAPI.updateSubscriptionPlan(editing.id, form);
+        toast.success('Plano atualizado');
+      } else {
+        await schedulingAPI.createSubscriptionPlan(form);
+        toast.success('Plano criado');
+      }
+      setShowModal(false); setEditing(null); load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Excluir este plano?')) return;
+    try { await schedulingAPI.deleteSubscriptionPlan(id); toast.success('Excluido'); load(); }
+    catch (e) { toast.error('Erro'); }
+  };
+
+  return (
+    <div className="animate-fade-in" data-testid="planos-page">
+      <div className="flex items-center justify-between mb-6">
+        <p className="text-sm text-slate-600">{plans.length} planos cadastrados</p>
+        <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary flex items-center gap-2" data-testid="add-plan-btn">
+          <Plus className="w-4 h-4" /> Novo Plano
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {plans.map(plan => (
+          <div key={plan.id} className="card !p-4" data-testid={`plan-card-${plan.id}`}>
+            <div className="flex items-start justify-between mb-2">
+              <div>
+                <p className="text-lg font-page-title text-slate-900">{plan.name}</p>
+                <p className="text-xs text-slate-500">{plan.cycle_days || 30} dias · {plan.total_credits || plan.visits_per_month} créditos</p>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${plan.is_active !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                {plan.is_active !== false ? 'Ativo' : 'Inativo'}
+              </span>
+            </div>
+            <p className="text-2xl font-bold text-primary mb-3">R$ {plan.price.toFixed(2)}</p>
+            <div className="space-y-1 mb-3 max-h-28 overflow-y-auto text-xs">
+              {(plan.items || []).map((it, i) => {
+                const svc = services.find(s => s.id === it.service_id);
+                return (
+                  <div key={i} className="flex justify-between p-1.5 bg-slate-50 rounded">
+                    <span className="truncate">{svc?.name || it.service_id}</span>
+                    <span className="font-bold text-primary ml-2">{it.credits_per_use}c</span>
+                  </div>
+                );
+              })}
+              {(!plan.items || plan.items.length === 0) && <p className="text-[11px] text-slate-400 italic">Sem itens configurados</p>}
+            </div>
+            <div className="flex gap-2 pt-2 border-t border-slate-100">
+              <button onClick={() => { setEditing(plan); setShowModal(true); }} className="flex-1 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 font-medium" data-testid={`edit-plan-${plan.id}`}>
+                <Pencil className="w-3 h-3 inline mr-1" /> Editar
+              </button>
+              <button onClick={() => handleDelete(plan.id)} className="py-1.5 px-3 text-xs rounded-lg border border-red-200 text-red-500 hover:bg-red-50" data-testid={`delete-plan-${plan.id}`}>
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        ))}
+        {plans.length === 0 && <div className="col-span-full card text-center py-12"><Tag className="w-10 h-10 text-slate-300 mx-auto mb-2" /><p className="text-sm text-slate-500">Nenhum plano cadastrado</p><p className="text-xs text-slate-400 mt-1">Crie planos para oferecer assinaturas aos seus clientes</p></div>}
+      </div>
+      {showModal && <PlanoModal plan={editing} services={services} onClose={() => { setShowModal(false); setEditing(null); }} onSave={handleSave} />}
+    </div>
+  );
+};
+
+const PlanoModal = ({ plan, services, onClose, onSave }) => {
+  const [form, setForm] = useState({
+    name: plan?.name || '',
+    price: plan?.price || 0,
+    cycle_days: plan?.cycle_days || 30,
+    total_credits: plan?.total_credits || plan?.visits_per_month || 0,
+    description: plan?.description || '',
+    is_active: plan?.is_active ?? true,
+    items: plan?.items || [],
+  });
+  const [newSvc, setNewSvc] = useState({ service_id: '', credits_per_use: 1 });
+
+  const addItem = () => {
+    if (!newSvc.service_id) return;
+    if (form.items.some(i => i.service_id === newSvc.service_id)) { toast.error('Serviço ja adicionado'); return; }
+    setForm(f => ({ ...f, items: [...f.items, { service_id: newSvc.service_id, credits_per_use: Math.max(1, parseInt(newSvc.credits_per_use) || 1) }] }));
+    setNewSvc({ service_id: '', credits_per_use: 1 });
+  };
+
+  const removeItem = (id) => setForm(f => ({ ...f, items: f.items.filter(i => i.service_id !== id) }));
+
+  const updateItemCredits = (id, credits) => setForm(f => ({
+    ...f,
+    items: f.items.map(i => i.service_id === id ? { ...i, credits_per_use: Math.max(1, parseInt(credits) || 1) } : i)
+  }));
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()} data-testid="plan-modal">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="text-xl font-page-title">{plan ? 'Editar Plano' : 'Novo Plano'}</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Nome do Plano</label>
+            <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Ex: Plano Mensal VIP" className="input-field text-sm" data-testid="plan-name-input" />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Valor (R$)</label>
+              <input type="number" step="0.01" value={form.price} onChange={e => setForm({...form, price: parseFloat(e.target.value) || 0})} className="input-field text-sm" data-testid="plan-price-input" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Ciclo (dias)</label>
+              <input type="number" value={form.cycle_days} onChange={e => setForm({...form, cycle_days: parseInt(e.target.value) || 30})} className="input-field text-sm" data-testid="plan-cycle-input" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Créditos</label>
+              <input type="number" value={form.total_credits} onChange={e => setForm({...form, total_credits: parseInt(e.target.value) || 0})} className="input-field text-sm" data-testid="plan-credits-input" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Descrição (opcional)</label>
+            <input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Ex: Inclui corte e barba ilimitados" className="input-field text-sm" />
+          </div>
+
+          <div className="border-t border-slate-100 pt-3">
+            <label className="text-[10px] font-bold uppercase text-slate-400 block mb-2">Serviços/Produtos e Créditos por Uso</label>
+            <div className="space-y-1.5 mb-2">
+              {form.items.map(item => {
+                const svc = services.find(s => s.id === item.service_id);
+                return (
+                  <div key={item.service_id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg" data-testid={`plan-item-${item.service_id}`}>
+                    <span className="flex-1 text-sm truncate">{svc?.name || item.service_id}</span>
+                    <input type="number" min="1" value={item.credits_per_use} onChange={e => updateItemCredits(item.service_id, e.target.value)} className="w-16 text-center text-sm input-field !py-1" data-testid={`plan-item-credits-${item.service_id}`} />
+                    <span className="text-xs text-slate-500">créditos</span>
+                    <button onClick={() => removeItem(item.service_id)} className="p-1 text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+                  </div>
+                );
+              })}
+              {form.items.length === 0 && <p className="text-[11px] text-slate-400 italic">Nenhum serviço adicionado</p>}
+            </div>
+            <div className="flex gap-2">
+              <select value={newSvc.service_id} onChange={e => setNewSvc({...newSvc, service_id: e.target.value})} className="input-field text-sm flex-1" data-testid="plan-add-service">
+                <option value="">Selecione um serviço/produto</option>
+                {services.filter(s => !form.items.some(i => i.service_id === s.id)).map(s => <option key={s.id} value={s.id}>{s.name} — R$ {s.price.toFixed(2)}</option>)}
+              </select>
+              <input type="number" min="1" value={newSvc.credits_per_use} onChange={e => setNewSvc({...newSvc, credits_per_use: e.target.value})} className="w-16 text-center input-field text-sm" title="Creditos por uso" data-testid="plan-add-credits" />
+              <button onClick={addItem} className="btn-secondary text-xs px-3" data-testid="plan-add-item-btn">Add</button>
+            </div>
+          </div>
+        </div>
+        <div className="p-4 border-t border-slate-100">
+          <button onClick={() => form.name && form.total_credits > 0 && onSave(form)} className="btn-primary w-full text-sm" data-testid="save-plan-btn">
+            Salvar Plano
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -990,4 +1237,4 @@ const SC = ({ label, value, icon, color = 'text-slate-600' }) => (
   <div className="card !p-4"><div className="flex items-center justify-between"><div><p className="text-xs text-slate-500 mb-1">{label}</p><p className="text-xl font-bold font-heading text-slate-900">{value}</p></div><div className={color}>{icon}</div></div></div>
 );
 
-export default { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, CalendarPageFull };
+export default { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull };

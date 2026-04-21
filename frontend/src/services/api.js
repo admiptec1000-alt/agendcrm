@@ -118,6 +118,7 @@ export const schedulingAPI = {
   lookupClient: (phone) => api.get(`/scheduling/clients/lookup/${phone}`),
   getSubscriptionPlans: () => api.get('/scheduling/subscription-plans'),
   createSubscriptionPlan: (data) => api.post('/scheduling/subscription-plans', data),
+  updateSubscriptionPlan: (id, data) => api.put(`/scheduling/subscription-plans/${id}`, data),
   deleteSubscriptionPlan: (id) => api.delete(`/scheduling/subscription-plans/${id}`),
   getSubscriptions: () => api.get('/scheduling/subscriptions'),
   createSubscription: (data) => api.post('/scheduling/subscriptions', data),
@@ -158,6 +159,7 @@ export const publicAPI = {
   lookupClient: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/client-lookup/${phone}`),
   getIndoorDisplay: (slug) => axios.get(`${API_URL}/public/indoor/${slug}`),
   getMyAppointments: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/my-appointments/${phone}`),
+  getSubscription: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/subscription`, { params: { phone } }),
   cancelMyAppointment: (slug, appointmentId) => axios.put(`${API_URL}/public/booking/${slug}/my-appointments/${appointmentId}/cancel`),
 };
 
