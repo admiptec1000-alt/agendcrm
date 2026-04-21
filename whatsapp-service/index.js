@@ -13,7 +13,7 @@ app.use(express.json());
 
 const logger = pino({ level: 'warn' });
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8001';
-const PORT = process.env.WA_PORT || 3002;
+const PORT = process.env.PORT || process.env.WA_PORT || 3002;
 const AUTH_DIR = path.join(__dirname, 'auth_sessions');
 
 // Store connections per company
