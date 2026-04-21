@@ -457,6 +457,7 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "categorias", "label": "Categorias", "category": "Catalogo"},
     {"feature_key": "servicos_produtos", "label": "Servicos e Produtos", "category": "Catalogo"},
     {"feature_key": "assinaturas", "label": "Assinaturas", "category": "Catalogo"},
+    {"feature_key": "planos", "label": "Planos", "category": "Catalogo"},
     {"feature_key": "profissionais", "label": "Profissionais", "category": "Catalogo"},
     {"feature_key": "financeiro", "label": "Financeiro", "category": "Analise"},
     {"feature_key": "comissoes", "label": "Comissoes", "category": "Analise"},
@@ -472,9 +473,27 @@ ALL_SYSTEM_FEATURES = [
 ]
 
 @router.get("/all-features")
-async def list_all_features(user: dict = Depends(get_current_user)):
-    """List all system features for permission profile editor."""
-    return ALL_SYSTEM_FEATURES
+async def list_all_features(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """List features for permission profile editor.
+    Returns only features ENABLED by the Super Admin for this company's business type.
+    Permission-only features (edit_appointment*) are always included regardless of features toggle.
+    """
+    permission_only_keys = {"edit_appointment", "edit_appointment_price"}
+
+    # Load company features (set by Super Admin toggles)
+    company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0, "features": 1})
+    enabled_keys = set()
+    for f in (company or {}).get("features", []):
+        if f.get("enabled"):
+            enabled_keys.add(f["feature_key"])
+
+    return [
+        f for f in ALL_SYSTEM_FEATURES
+        if f["feature_key"] in enabled_keys or f["feature_key"] in permission_only_keys
+    ]
 
 class CompanyUserCreate(BaseModel):
     name: str
