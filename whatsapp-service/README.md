@@ -14,7 +14,7 @@ Este serviço **NÃO é deployado** junto com o backend FastAPI no Emergent. Voc
    - **Build Command**: `yarn install`
    - **Start Command**: `node index.js`
    - **Environment Variables**:
-     - `FASTAPI_URL` = URL do seu backend em produção (ex: `https://on.8ip.com.br`)
+     - `FASTAPI_URL` = URL do seu backend em produção (ex: `https://agentcrm.8ip.com.br`)
 3. Render expõe automaticamente a porta via `process.env.PORT`
 4. Copie a URL pública gerada (ex: `https://boss-whatsapp.onrender.com`)
 
