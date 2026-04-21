@@ -121,8 +121,23 @@ async def get_connection_qr(
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(f"{WA_SERVICE_URL}/instances/{conn_id}/qr")
                 data = resp.json()
-            return {"qr": data.get("qr"), "qr_base64": data.get("qr_base64"), "status": data.get("status", "disconnected")}
-        except Exception:
+                node_status = data.get("status", "disconnected")
+
+                # Self-heal: if DB thinks connection is waiting_qr/connecting but Node has no instance,
+                # trigger a new connect so Baileys re-emits the QR.
+                if (
+                    conn.get("status") in ("waiting_qr", "connecting")
+                    and node_status in ("not_found", "disconnected")
+                    and not data.get("qr_base64")
+                ):
+                    try:
+                        await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/connect")
+                    except Exception as e:
+                        logger.warning(f"Self-heal connect failed for {conn_id}: {e}")
+
+            return {"qr": data.get("qr"), "qr_base64": data.get("qr_base64"), "status": node_status}
+        except Exception as e:
+            logger.error(f"WhatsApp QR proxy error: {e}")
             return {"qr": None, "qr_base64": None, "status": "error"}
     return {"qr": None, "qr_base64": None, "status": conn.get("status")}
 

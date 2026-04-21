@@ -30,6 +30,7 @@ class ClientCreate(BaseModel):
     name: str
     phone: str
     email: Optional[str] = None
+    birth_date: Optional[str] = None  # YYYY-MM-DD
     notes: Optional[str] = None
 
 # === APPOINTMENTS ===
@@ -742,6 +743,7 @@ async def create_client(
         "name": data.name,
         "phone": data.phone,
         "email": data.email,
+        "birth_date": data.birth_date,
         "notes": data.notes,
         "total_appointments": 0,
         "created_at": datetime.now(timezone.utc).isoformat()

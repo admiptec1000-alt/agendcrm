@@ -9,7 +9,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield
+  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -707,6 +707,31 @@ const ClientsPage = () => {
 
                   {c.notes && <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg">{c.notes}</p>}
 
+                  {/* Client info */}
+                  {c.birth_date && (() => {
+                    const bd = new Date(c.birth_date);
+                    if (isNaN(bd)) return null;
+                    const today = new Date();
+                    let age = today.getFullYear() - bd.getFullYear();
+                    const m = today.getMonth() - bd.getMonth();
+                    if (m < 0 || (m === 0 && today.getDate() < bd.getDate())) age--;
+                    const formatted = bd.toLocaleDateString('pt-BR');
+                    const upcoming = (() => {
+                      const thisYr = new Date(today.getFullYear(), bd.getMonth(), bd.getDate());
+                      const diffDays = Math.ceil((thisYr - today) / 86400000);
+                      if (diffDays >= 0 && diffDays <= 30) return `Aniversário em ${diffDays} dias`;
+                      return null;
+                    })();
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 flex items-center gap-1.5">
+                          <Calendar className="w-3 h-3" /> {formatted} · {age} anos
+                        </span>
+                        {upcoming && <span className="px-2.5 py-1 rounded-full bg-pink-100 text-pink-700 font-semibold">🎂 {upcoming}</span>}
+                      </div>
+                    );
+                  })()}
+
                   {/* Inline Booking Form */}
                   {isBookingHere && (
                     <div className="bg-primary/5 border border-primary/20 rounded-xl p-3" data-testid={`inline-booking-${c.id}`}>
@@ -755,14 +780,126 @@ const ClientsPage = () => {
 };
 
 const ClientForm = ({ client, onSave }) => {
-  const [form, setForm] = useState({ name: client?.name || '', phone: client?.phone || '', email: client?.email || '', notes: client?.notes || '' });
+  const [form, setForm] = useState({
+    name: client?.name || '',
+    phone: client?.phone || '',
+    email: client?.email || '',
+    birth_date: client?.birth_date || '',
+    notes: client?.notes || ''
+  });
+
+  const formatPhone = (v) => {
+    const digits = v.replace(/\D/g, '').slice(0, 11);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 7) return `(${digits.slice(0,2)}) ${digits.slice(2)}`;
+    if (digits.length <= 10) return `(${digits.slice(0,2)}) ${digits.slice(2,6)}-${digits.slice(6)}`;
+    return `(${digits.slice(0,2)}) ${digits.slice(2,7)}-${digits.slice(7)}`;
+  };
+
+  const age = useMemo(() => {
+    if (!form.birth_date) return null;
+    const bd = new Date(form.birth_date);
+    if (isNaN(bd)) return null;
+    const today = new Date();
+    let a = today.getFullYear() - bd.getFullYear();
+    const m = today.getMonth() - bd.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < bd.getDate())) a--;
+    return a;
+  }, [form.birth_date]);
+
+  const initials = (form.name || '?').split(' ').slice(0,2).map(p => p[0]).join('').toUpperCase();
+  const isValid = form.name.trim().length >= 2 && form.phone.replace(/\D/g,'').length >= 10;
+
   return (
-    <div className="space-y-3">
-      <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Nome completo" className="input-field" data-testid="client-name-input" />
-      <input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} placeholder="Telefone" className="input-field" data-testid="client-phone-input" />
-      <input value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="Email (opcional)" className="input-field" type="email" />
-      <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} placeholder="Observacoes" className="input-field" rows={2} />
-      <div className="flex justify-end"><button onClick={() => form.name && form.phone && onSave(form)} className="btn-primary text-sm" data-testid="save-client-btn">Salvar</button></div>
+    <div className="space-y-4" data-testid="client-form">
+      {/* Preview card */}
+      <div className="flex items-center gap-3 p-3 rounded-2xl bg-gradient-to-br from-primary/8 to-primary/2 border border-primary/15">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-primary/60 text-white font-bold text-lg flex items-center justify-center shadow-sm">
+          {initials}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-slate-900 truncate">{form.name || 'Novo cliente'}</p>
+          <p className="text-xs text-slate-500 truncate">{form.phone || 'Informe o contato abaixo'}</p>
+          {age !== null && age >= 0 && age < 120 && (
+            <span className="inline-block mt-1 text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">{age} anos</span>
+          )}
+        </div>
+      </div>
+
+      {/* Dados principais */}
+      <div className="space-y-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Dados Principais</p>
+        <div className="relative">
+          <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          <input
+            value={form.name}
+            onChange={e => setForm({...form, name: e.target.value})}
+            placeholder="Nome completo"
+            className="input-field !pl-9"
+            data-testid="client-name-input"
+            autoFocus
+          />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="relative">
+            <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+            <input
+              value={form.phone}
+              onChange={e => setForm({...form, phone: formatPhone(e.target.value)})}
+              placeholder="(99) 99999-9999"
+              className="input-field !pl-9"
+              data-testid="client-phone-input"
+              inputMode="tel"
+            />
+          </div>
+          <div className="relative">
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+            <input
+              type="date"
+              value={form.birth_date}
+              onChange={e => setForm({...form, birth_date: e.target.value})}
+              className="input-field !pl-9"
+              data-testid="client-birthdate-input"
+              max={new Date().toISOString().split('T')[0]}
+            />
+          </div>
+        </div>
+        <div className="relative">
+          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          <input
+            value={form.email}
+            onChange={e => setForm({...form, email: e.target.value})}
+            placeholder="Email (opcional)"
+            className="input-field !pl-9"
+            type="email"
+            data-testid="client-email-input"
+          />
+        </div>
+      </div>
+
+      {/* Observações */}
+      <div className="space-y-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Observações</p>
+        <textarea
+          value={form.notes}
+          onChange={e => setForm({...form, notes: e.target.value})}
+          placeholder="Preferências, alergias, detalhes relevantes..."
+          className="input-field text-sm"
+          rows={3}
+          data-testid="client-notes-input"
+        />
+      </div>
+
+      <div className="flex justify-end pt-2 border-t border-slate-100">
+        <button
+          onClick={() => isValid && onSave(form)}
+          disabled={!isValid}
+          className="btn-primary text-sm flex items-center gap-2"
+          data-testid="save-client-btn"
+        >
+          <Check className="w-4 h-4" /> Salvar Cliente
+        </button>
+      </div>
     </div>
   );
 };
@@ -1751,26 +1888,46 @@ const STATUS_COLOR = { connected: 'bg-emerald-500', disconnected: 'bg-slate-400'
 const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) => {
   const [qrData, setQrData] = useState(null);
   const [polling, setPolling] = useState(false);
+  const [pollingAttempts, setPollingAttempts] = useState(0);
 
   useEffect(() => {
     if (conn.status === 'waiting_qr' || conn.status === 'connecting') {
       setPolling(true);
-      const interval = setInterval(async () => {
+      let attempts = 0;
+      const fetchQR = async () => {
         try {
+          attempts++;
+          setPollingAttempts(attempts);
           const res = await channelsAPI.getConnectionQR(conn.id);
           if (res.data.status === 'connected') {
             setPolling(false); setQrData(null); onRefresh();
-            clearInterval(interval);
+            return true; // stop
           } else if (res.data.qr_base64) {
             setQrData(res.data.qr_base64);
           }
         } catch (e) {}
+        return false;
+      };
+      // Immediate first poll (don't wait 3s)
+      fetchQR();
+      const interval = setInterval(async () => {
+        const done = await fetchQR();
+        if (done) clearInterval(interval);
       }, 3000);
       return () => clearInterval(interval);
     } else {
-      setPolling(false); setQrData(null);
+      setPolling(false); setQrData(null); setPollingAttempts(0);
     }
   }, [conn.status, conn.id]);
+
+  const handleForceReconnect = async () => {
+    setQrData(null); setPollingAttempts(0);
+    try {
+      await channelsAPI.connectChannel(conn.id);
+      toast.success('Reiniciando conexao...');
+      onRefresh();
+    } catch (e) { toast.error('Erro ao reconectar'); }
+  };
 
   return (
     <div className="card !p-5" data-testid={`conn-${conn.id}`}>
@@ -1803,13 +1960,21 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
         <div className="mt-4 p-4 bg-slate-50 rounded-xl text-center">
           {qrData ? (
             <div>
-              <img src={qrData} alt="QR Code" className="w-48 h-48 mx-auto rounded-lg" />
+              <img src={qrData} alt="QR Code" className="w-48 h-48 mx-auto rounded-lg" data-testid={`qr-img-${conn.id}`} />
               <p className="text-xs text-slate-500 mt-2">Abra o WhatsApp &gt; Aparelhos conectados &gt; Conectar</p>
+              <button onClick={handleForceReconnect} className="mt-2 text-[11px] text-primary font-medium hover:underline" data-testid={`reconnect-${conn.id}`}>
+                QR expirou? Gerar novo
+              </button>
             </div>
           ) : (
             <div className="py-6">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2" />
-              <p className="text-xs text-slate-500">Gerando QR Code...</p>
+              <p className="text-xs text-slate-500">Gerando QR Code...{pollingAttempts > 1 ? ` (tentativa ${pollingAttempts})` : ''}</p>
+              {pollingAttempts >= 4 && (
+                <button onClick={handleForceReconnect} className="mt-3 text-xs text-primary font-medium hover:underline" data-testid={`retry-connect-${conn.id}`}>
+                  Demorando demais? Clique para reconectar
+                </button>
+              )}
             </div>
           )}
         </div>

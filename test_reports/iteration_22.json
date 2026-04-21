@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 22 full-stack testing: (1) Backend ClientCreate birth_date persistence (create/update/list), (2) Backend QR self-heal GET /api/channels/connections/{id}/qr, (3) FRONTEND modernized ClientForm with preview card + age chip + icons + auto-phone-format + disabled save validation + birth_date chip on expanded client card, (4) Conexoes page UI regression, (5) Regression on auth + core endpoints + 31 features. 10/10 backend pytest passed. Frontend UI flows all verified: login -> clientes shortcut -> add-client-btn -> modal with 6 testids -> phone auto-formatted (11) 98778-1527 -> age '40 anos' preview chip (1985-07-15) -> save enabled only when name>=2 AND phone>=10 digits -> on save: client appears in list, auto-expanded with '15/07/1985 · 40 anos' chip, inline booking form open. Conexoes page: tab Canais default, WhatsApp Boss card rendered with Conectar button.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/scheduling/clients", "issue": "birth_date is Optional[str] with no Pydantic validation; accepts any format like '1990/01/01'. Works as specified (frontend handles formatting) but consider validating YYYY-MM-DD on backend for consistency."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "BookFromClientForm (inline after client save)", "issues": ["React hydration warning: '<span> cannot be a child of <option>' -- dynamic tooling is injecting debug <span> into <option> elements via static-imported attributes; cosmetic warning only, does not affect functionality. Likely x-ve-dynamic instrumentation from build tooling, not application code."]}
+    ]
+  },
+  "passed_tests": [
+    "BACKEND: POST /api/auth/login admin returns permissions=['*']",
+    "BACKEND: GET /api/scheduling/appointments, /services, /professionals all return 200 arrays",
+    "BACKEND: POST /api/scheduling/clients with birth_date='1985-07-15' persists and returns it; GET list includes it",
+    "BACKEND: PUT /api/scheduling/clients/{id} updates birth_date from '1985-07-15' to '1990-12-01'",
+    "BACKEND: POST /api/scheduling/clients without birth_date -> birth_date=null",
+    "BACKEND: POST /api/scheduling/clients with birth_date='1990/01/01' accepted as-is (Optional[str])",
+    "BACKEND: GET /api/channels/connections/{id}/qr for existing WhatsApp conn returns {qr_base64, status} with valid status string (self-heal path exercised)",
+    "BACKEND: GET /api/channels/connections/__unknown__/qr -> 404",
+    "BACKEND: GET /api/scheduling/all-features returns >=31 features",
+    "FRONTEND: Login /boss/login -> /boss/painel with toast 'Login realizado!'",
+    "FRONTEND: home-shortcut-clientes navigates to clients page",
+    "FRONTEND: add-client-btn opens 'Novo Cliente' modal with 6 required testids (client-name-input, client-phone-input, client-birthdate-input, client-email-input, client-notes-input, save-client-btn)",
+    "FRONTEND: save-client-btn disabled when name<2 OR phone<10 digits; enabled when both valid",
+    "FRONTEND: client-phone-input auto-formats to '(99) 99999-9999' mask",
+    "FRONTEND: ClientForm preview card shows avatar + name + phone + age chip '40 anos' for birth_date 1985-07-15",
+    "FRONTEND: Saving valid client closes modal, client appears in list, auto-expands",
+    "FRONTEND: Expanded client card shows '15/07/1985 · 40 anos' chip (pt-BR date formatting)",
+    "FRONTEND: Inline 'Novo Agendamento' form opens below saved client",
+    "FRONTEND: Conexoes sidebar navigation works; tab 'Canais' default; 'WhatsApp Boss' connection card with 'Conectar' button + Instagram add button rendered"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_22.py",
+    "/app/test_reports/pytest/iteration_22.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "channels_routes.get_connection_qr self-heal: when node_status is 'not_found' or 'disconnected' AND conn.status is waiting_qr/connecting AND no qr_base64, it POSTs /instances/{id}/connect but still returns the ORIGINAL data (qr=null). Frontend polling must retry — OK, but consider awaiting the connect for ~1s and re-fetching /qr in the same request for faster first-QR display.",
+    "scheduling_routes.update_client uses exclude_unset but then filters out None values (line 761: `if v is not None`). This means user CANNOT clear birth_date by sending birth_date=null; they'd have to omit field entirely (which exclude_unset already skips). Today this is fine (UI sends ''/date), but if UI adds a 'clear birth_date' action, update logic needs adjustment.",
+    "Dashboard.js is 3298 lines — exceeds 700-line guideline. Recommend splitting ClientForm, BookFromClientForm, ConnectionCard, TemplateEditor, EditAppointmentModal into /components/ files.",
+    "Minor React hydration warning: inside BookFromClientForm select options there's a <span data-ve-dynamic> injected by build tooling that makes <span> a child of <option>. Investigate if editor/debug tooling is the source; if yes, strip x-* attributes from <option> children in production build."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_22.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (all requested flows verified)"},
+  "test_credentials": {"boss_company": "admin@boss.com.br / boss123 (/boss/login)"},
+  "seed_data_creation": "Backend pytest created+cleaned TEST_iter22_* clients via fixtures. UI test created TEST_iter22_UI_781527 client — cleaned up post-test via DELETE /api/scheduling/clients/{id}.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 22 validates: (a) ClientCreate model adds birth_date Optional[str], persisted in create/update/list; (b) QR self-heal triggers POST /connect when Node has no instance; (c) Modernized ClientForm with icons (User/Phone/Calendar/Mail), phone mask '(99) 99999-9999', live preview card (avatar+name+phone+age), client-validation disable save<2chars name or <10digit phone; (d) Client expansion shows birth_date chip + age + optional 🎂 anniversary chip if within 30 days; (e) Conexoes page Canais tab + ConnectionCard (pollingAttempts=4 triggers retry-connect-{id}). Boss company slug='boss'. Only 1 WhatsApp conn ('WhatsApp Boss') — do not create more in prod preview.",
+  "rca of the issue": "N/A — no bugs found. Both user-reported issues (QR polling infinite loop + add birth_date to client) have been resolved in this iteration. QR self-heal adds auto-reconnect to Node service when DB thinks it's waiting but Node has no instance. Frontend ClientForm rewrite adds birth_date with pt-BR formatting + age calc + anniversary detection."
+}
