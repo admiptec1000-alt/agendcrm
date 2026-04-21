@@ -1265,6 +1265,9 @@ const AgendaPage = () => {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
+  // New appointment modal
+  const [showNewApt, setShowNewApt] = useState(false);
+
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
@@ -1330,6 +1333,22 @@ const AgendaPage = () => {
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao concluir'); }
   };
 
+  const handleCreateAppointment = async ({ customer, booking }) => {
+    try {
+      await schedulingAPI.createAppointment({
+        customer_name: customer.name,
+        customer_phone: customer.phone,
+        customer_email: customer.email || undefined,
+        ...booking,
+      });
+      toast.success('Agendamento criado!');
+      setShowNewApt(false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro ao agendar');
+    }
+  };
+
   // Metrics (global, not affected by filters)
   const totalCount = appointments.length;
   const todayCount = appointments.filter(a => a.date === today).length;
@@ -1349,6 +1368,17 @@ const AgendaPage = () => {
 
   return (
     <div className="animate-fade-in" data-testid="agenda-page">
+      {/* Header with Agendar button */}
+      <div className="flex items-center justify-end mb-4">
+        <button
+          onClick={() => setShowNewApt(true)}
+          className="btn-primary flex items-center gap-2 text-sm"
+          data-testid="agenda-new-btn"
+        >
+          <Plus className="w-4 h-4" /> Agendar
+        </button>
+      </div>
+
       {/* 4 Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <MetricCard
@@ -1577,7 +1607,268 @@ const AgendaPage = () => {
           </div>
         </div>
       )}
+
+      {/* New Appointment Modal */}
+      {showNewApt && (
+        <NewAppointmentModal
+          services={services}
+          professionals={professionals}
+          onClose={() => setShowNewApt(false)}
+          onSave={handleCreateAppointment}
+        />
+      )}
     </div>
+  );
+};
+
+/* ========== NEW APPOINTMENT MODAL (pick or create client + book) ========== */
+const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
+  const [step, setStep] = useState('pick'); // 'pick' (search/existing) | 'new' (create client)
+  const [clients, setClients] = useState([]);
+  const [searchCli, setSearchCli] = useState('');
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [loadingClients, setLoadingClients] = useState(false);
+
+  // new client inline form
+  const [newClient, setNewClient] = useState({ name: '', phone: '', email: '' });
+
+  // booking form
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [book, setBook] = useState({ service_id: '', professional_id: '', date: todayStr, time: '' });
+
+  const formatPhone = (v) => {
+    const d = v.replace(/\D/g,'').slice(0,11);
+    if (d.length <= 2) return d;
+    if (d.length <= 7) return `(${d.slice(0,2)}) ${d.slice(2)}`;
+    if (d.length <= 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+    return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setLoadingClients(true);
+      try {
+        const res = await schedulingAPI.getClients({ search: searchCli || undefined });
+        if (!cancelled) setClients(res.data.slice(0, 8));
+      } catch { /* noop */ }
+      if (!cancelled) setLoadingClients(false);
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [searchCli]);
+
+  const pickExisting = (c) => {
+    setSelectedClient({ name: c.name, phone: c.phone, email: c.email || '', id: c.id });
+  };
+
+  const handleSubmit = async () => {
+    let customer = null;
+    if (step === 'new') {
+      if (!newClient.name.trim() || newClient.phone.replace(/\D/g,'').length < 10) {
+        toast.error('Informe nome e telefone validos'); return;
+      }
+      try {
+        const created = await schedulingAPI.createClient(newClient);
+        customer = { name: created.data.name, phone: created.data.phone, email: created.data.email };
+        toast.success('Cliente cadastrado!');
+      } catch (e) {
+        toast.error(e.response?.data?.detail || 'Erro ao cadastrar cliente'); return;
+      }
+    } else {
+      if (!selectedClient) { toast.error('Selecione um cliente'); return; }
+      customer = selectedClient;
+    }
+    if (!book.service_id || !book.professional_id || !book.date || !book.time) {
+      toast.error('Preencha servico, profissional, data e hora'); return;
+    }
+    onSave({ customer, booking: book });
+  };
+
+  const ready = (step === 'new'
+      ? (newClient.name.trim().length >= 2 && newClient.phone.replace(/\D/g,'').length >= 10)
+      : !!selectedClient
+    ) && book.service_id && book.professional_id && book.date && book.time;
+
+  return createPortal(
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div
+        className="bg-white w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-hidden flex flex-col"
+        onClick={e => e.stopPropagation()}
+        data-testid="new-appointment-modal"
+      >
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+          <div>
+            <h3 className="text-xl font-page-title text-slate-900">Novo Agendamento</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Escolha um cliente ou cadastre um novo</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100" data-testid="new-apt-close">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 p-5 space-y-5">
+          {/* Step toggle */}
+          <div className="flex gap-2 p-1 rounded-xl bg-slate-100">
+            <button
+              onClick={() => { setStep('pick'); }}
+              className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${step==='pick' ? 'bg-white text-primary shadow-sm' : 'text-slate-500'}`}
+              data-testid="step-pick"
+            >
+              Cliente existente
+            </button>
+            <button
+              onClick={() => { setStep('new'); setSelectedClient(null); }}
+              className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${step==='new' ? 'bg-white text-primary shadow-sm' : 'text-slate-500'}`}
+              data-testid="step-new"
+            >
+              Novo cliente
+            </button>
+          </div>
+
+          {/* Step content */}
+          {step === 'pick' ? (
+            <div className="space-y-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={searchCli}
+                  onChange={e => setSearchCli(e.target.value)}
+                  placeholder="Buscar por nome ou telefone"
+                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  data-testid="new-apt-client-search"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                {loadingClients && <p className="text-xs text-slate-400 text-center py-3">Buscando...</p>}
+                {!loadingClients && clients.length === 0 && (
+                  <div className="text-center py-4">
+                    <p className="text-xs text-slate-500">Nenhum cliente encontrado</p>
+                    <button onClick={() => setStep('new')} className="text-xs font-semibold text-primary mt-1">
+                      + Cadastrar novo
+                    </button>
+                  </div>
+                )}
+                {clients.map(c => {
+                  const sel = selectedClient?.id === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => pickExisting(c)}
+                      className={`w-full flex items-center gap-3 p-2.5 rounded-lg border transition-all text-left ${sel ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300'}`}
+                      data-testid={`new-apt-client-opt-${c.id}`}
+                    >
+                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/30 to-primary/60 text-white font-bold text-xs flex items-center justify-center flex-shrink-0">
+                        {(c.name || '?').substring(0,2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-slate-900 truncate">{c.name}</p>
+                        <p className="text-[11px] text-slate-500 truncate">{c.phone}</p>
+                      </div>
+                      {sel && <Check className="w-4 h-4 text-primary flex-shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="relative">
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  value={newClient.name}
+                  onChange={e => setNewClient({...newClient, name: e.target.value})}
+                  placeholder="Nome completo"
+                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  data-testid="new-apt-newc-name"
+                  autoFocus
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    value={newClient.phone}
+                    onChange={e => setNewClient({...newClient, phone: formatPhone(e.target.value)})}
+                    placeholder="(99) 99999-9999"
+                    inputMode="tel"
+                    className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    data-testid="new-apt-newc-phone"
+                  />
+                </div>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="email"
+                    value={newClient.email}
+                    onChange={e => setNewClient({...newClient, email: e.target.value})}
+                    placeholder="Email (opcional)"
+                    className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    data-testid="new-apt-newc-email"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Booking section */}
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Detalhes do Agendamento</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select
+                value={book.service_id}
+                onChange={e => setBook({...book, service_id: e.target.value})}
+                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                data-testid="new-apt-service"
+              >
+                <option value="">Servico...</option>
+                {services.filter(s => s.is_active).map(s => (
+                  <option key={s.id} value={s.id}>{s.name} - R$ {s.price?.toFixed(2)}</option>
+                ))}
+              </select>
+              <select
+                value={book.professional_id}
+                onChange={e => setBook({...book, professional_id: e.target.value})}
+                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                data-testid="new-apt-prof"
+              >
+                <option value="">Profissional...</option>
+                {professionals.filter(p => p.is_active).map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={book.date}
+                onChange={e => setBook({...book, date: e.target.value})}
+                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                data-testid="new-apt-date"
+              />
+              <input
+                type="time"
+                value={book.time}
+                onChange={e => setBook({...book, time: e.target.value})}
+                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                data-testid="new-apt-time"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-2 p-4 border-t border-slate-100 flex-shrink-0">
+          <button onClick={onClose} className="btn-secondary flex-1 text-sm" data-testid="new-apt-cancel">Cancelar</button>
+          <button
+            onClick={handleSubmit}
+            disabled={!ready}
+            className="btn-primary flex-1 text-sm disabled:opacity-50"
+            data-testid="new-apt-save"
+          >
+            <Check className="w-4 h-4 inline mr-1" /> Criar Agendamento
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 };
 
