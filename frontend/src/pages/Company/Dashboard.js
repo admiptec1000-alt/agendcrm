@@ -894,16 +894,20 @@ const ClientForm = ({ client, onSave }) => {
               inputMode="tel"
             />
           </div>
-          <div className="relative">
-            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-            <input
-              type="date"
-              value={form.birth_date}
-              onChange={e => setForm({...form, birth_date: e.target.value})}
-              className="input-field !pl-9"
-              data-testid="client-birthdate-input"
-              max={new Date().toISOString().split('T')[0]}
-            />
+          <div>
+            <label htmlFor="client-birthdate" className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Data de Nascimento</label>
+            <div className="relative">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+              <input
+                id="client-birthdate"
+                type="date"
+                value={form.birth_date}
+                onChange={e => setForm({...form, birth_date: e.target.value})}
+                className="input-field !pl-9"
+                data-testid="client-birthdate-input"
+                max={new Date().toISOString().split('T')[0]}
+              />
+            </div>
           </div>
         </div>
         <div className="relative">
