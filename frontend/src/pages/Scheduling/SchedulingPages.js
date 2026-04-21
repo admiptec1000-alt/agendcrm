@@ -825,7 +825,7 @@ export const SubscriptionsPageFull = () => {
                 <label className="text-xs font-bold uppercase text-slate-400">Cliente</label>
                 <select value={form.client_phone} onChange={e => setForm({...form, client_phone: e.target.value})} className="input-field" data-testid="sub-client-select">
                   <option value="">Selecione</option>
-                  {clients.map(c=><option key={c.phone} value={c.phone}>{c.name} - {c.phone}</option>)}
+                  {clients.map(c=><option key={c.id} value={c.phone}>{c.name} - {c.phone}</option>)}
                 </select>
               </div>
               <div>
