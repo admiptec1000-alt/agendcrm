@@ -10,7 +10,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User
+  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -64,11 +64,16 @@ const FEATURE_META = {
 
 const CompanyDashboard = () => {
   const { user, logout } = useAuth();
-  const [activePage, setActivePage] = useState('dashboard');
+  const [activePage, setActivePage] = useState('agenda');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [bookingPage, setBookingPage] = useState(null);
+  const [showMenuSheet, setShowMenuSheet] = useState(false);
+  // Per-user setting: default is DISABLED on mobile. Admins can enable from settings.
+  const [sidebarEnabledMobile, setSidebarEnabledMobile] = useState(() => {
+    try { return localStorage.getItem('sidebar_enabled_mobile') === '1'; } catch { return false; }
+  });
 
   const API_BASE = process.env.REACT_APP_BACKEND_URL;
   const logoUrl = bookingPage?.logo_url ? `${API_BASE}${bookingPage.logo_url}` : null;
@@ -202,9 +207,11 @@ const CompanyDashboard = () => {
       <main className={`flex-1 ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-60'} transition-all duration-200`}>
         <header className="glass border-b border-slate-200 sticky top-0 z-30 px-4 lg:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100" data-testid="mobile-menu-btn">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
-            </button>
+            {sidebarEnabledMobile && (
+              <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100" data-testid="mobile-menu-btn">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+              </button>
+            )}
             {logoUrl && (
               <img src={logoUrl} alt="Logo" className="w-8 h-8 rounded-lg object-cover flex-shrink-0 border border-slate-200 hidden sm:block" data-testid="header-logo" />
             )}
@@ -215,10 +222,35 @@ const CompanyDashboard = () => {
           <UserHeaderMenu user={user} logout={logout} />
         </header>
 
-        <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-4 lg:p-6 max-w-full overflow-x-hidden'}>
+        <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-4 lg:p-6 pb-24 lg:pb-6 max-w-full overflow-x-hidden'}>
           <PageContent page={activePage} hasFeature={hasFeature} setActivePage={setActivePage} menuGroups={menuGroups} />
         </div>
       </main>
+
+      {/* Mobile Bottom Navigation (hidden on desktop) */}
+      <MobileBottomNav
+        activePage={activePage}
+        setActivePage={setActivePage}
+        onOpenMenu={() => setShowMenuSheet(true)}
+        hasFeature={hasFeature}
+      />
+
+      {/* Mobile menu sheet (all options) */}
+      {showMenuSheet && (
+        <MobileMenuSheet
+          menuGroups={menuGroups}
+          activePage={activePage}
+          onPick={(key) => { setActivePage(key); setShowMenuSheet(false); }}
+          onClose={() => setShowMenuSheet(false)}
+          sidebarEnabledMobile={sidebarEnabledMobile}
+          onToggleSidebar={(v) => {
+            setSidebarEnabledMobile(v);
+            try { localStorage.setItem('sidebar_enabled_mobile', v ? '1' : '0'); } catch { /* ignore */ }
+            if (v) setMobileSidebarOpen(true);
+          }}
+          onLogout={logout}
+        />
+      )}
 
       {/* Onboarding Wizard */}
       {showOnboarding && (
@@ -229,6 +261,127 @@ const CompanyDashboard = () => {
 };
 
 /* ========== PAGE ROUTER ========== */
+/* ========== MOBILE BOTTOM NAV ========== */
+const MobileBottomNav = ({ activePage, setActivePage, onOpenMenu, hasFeature }) => {
+  const items = [
+    { key: 'agenda', label: 'Agenda', icon: CalendarCheck, feat: 'agenda' },
+    { key: 'clientes', label: 'Clientes', icon: Users, feat: 'clientes' },
+    { key: '__menu', label: 'Menu', icon: Menu, action: onOpenMenu, always: true },
+    { key: 'conexoes', label: 'Notificacoes', icon: Bell, feat: 'conexoes' },
+    { key: 'financeiro', label: 'Financeiro', icon: DollarSign, feat: 'financeiro' },
+  ];
+
+  return (
+    <nav
+      className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40 flex items-stretch justify-around px-1 pt-1 pb-[env(safe-area-inset-bottom,0)]"
+      data-testid="mobile-bottom-nav"
+    >
+      {items.map(item => {
+        // Hide items the user doesn't have access to (but always show Menu)
+        if (!item.always && item.feat && !hasFeature(item.feat)) {
+          return <div key={item.key} className="flex-1" />;
+        }
+        const Icon = item.icon;
+        const isActive = !item.action && activePage === item.key;
+        const isMenu = item.key === '__menu';
+        return (
+          <button
+            key={item.key}
+            onClick={() => (item.action ? item.action() : setActivePage(item.key))}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 transition-colors ${
+              isActive ? 'text-[var(--primary-color)]' : 'text-slate-500'
+            }`}
+            data-testid={`bottom-nav-${item.key}`}
+          >
+            {isMenu ? (
+              <span className="w-10 h-10 rounded-full bg-[var(--primary-color)]/10 flex items-center justify-center">
+                <Icon className="w-5 h-5 text-[var(--primary-color)]" />
+              </span>
+            ) : (
+              <Icon className="w-5 h-5" />
+            )}
+            <span className="text-[10px] font-medium">{item.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+};
+
+/* ========== MOBILE MENU SHEET (all options as cards) ========== */
+const MobileMenuSheet = ({ menuGroups, activePage, onPick, onClose, sidebarEnabledMobile, onToggleSidebar, onLogout }) => {
+  const { user } = useAuth();
+  return (
+    <div
+      className="fixed inset-0 bg-slate-900/40 z-50 lg:hidden flex items-end"
+      onClick={onClose}
+      data-testid="mobile-menu-sheet"
+    >
+      <div
+        className="w-full bg-white rounded-t-3xl max-h-[90vh] overflow-hidden flex flex-col animate-slide-up"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-page-title text-slate-900">{user?.company?.name || 'Menu'}</h3>
+            <p className="text-[11px] text-slate-500">Todas as opcoes do sistema</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="overflow-y-auto flex-1 p-4">
+          {Object.entries(menuGroups).map(([groupName, items]) => (
+            <div key={groupName} className="mb-5">
+              <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400 px-1 mb-2">{groupName}</p>
+              <div className="grid grid-cols-2 gap-2">
+                {items.map(it => {
+                  const Icon = ICON_MAP[it.icon] || LayoutDashboard;
+                  const active = activePage === it.key;
+                  return (
+                    <button
+                      key={it.key}
+                      onClick={() => onPick(it.key)}
+                      className={`flex flex-col items-center justify-center gap-1.5 py-4 rounded-xl border transition-all ${
+                        active
+                          ? 'border-[var(--primary-color)] bg-[var(--primary-color)]/5 text-[var(--primary-color)]'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                      }`}
+                      data-testid={`menu-sheet-${it.key}`}
+                    >
+                      <Icon className="w-6 h-6" />
+                      <span className="text-xs font-medium">{it.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="p-3 border-t border-slate-100 space-y-2 bg-slate-50">
+          <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white">
+            <span className="text-sm text-slate-700">Menu lateral expansivel no mobile</span>
+            <input
+              type="checkbox"
+              checked={sidebarEnabledMobile}
+              onChange={e => onToggleSidebar(e.target.checked)}
+              className="w-5 h-5 rounded text-[var(--primary-color)]"
+              data-testid="sidebar-mobile-toggle"
+            />
+          </label>
+          <button
+            onClick={() => { onClose(); onLogout(); }}
+            className="w-full btn-secondary text-sm flex items-center justify-center gap-2"
+          >
+            <LogOut className="w-4 h-4" /> Sair
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
   switch (page) {
     case 'dashboard': return <DashboardPage setActivePage={setActivePage} menuGroups={menuGroups} />;
@@ -2984,6 +3137,25 @@ const MySitePage = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Form fields on public page */}
+      <div className="card">
+        <h3 className="font-semibold text-slate-900 mb-3">Campos do formulario publico</h3>
+        <p className="text-xs text-slate-500 mb-4">Escolha quais campos o cliente vera ao agendar</p>
+        <label className="flex items-center justify-between gap-3 p-3 bg-slate-50 rounded-lg cursor-pointer">
+          <div>
+            <p className="text-sm font-medium text-slate-800">Exibir campo Email</p>
+            <p className="text-xs text-slate-500 mt-0.5">Quando desligado, apenas Telefone e Nome aparecem para o cliente</p>
+          </div>
+          <input
+            type="checkbox"
+            checked={page?.show_email_field !== false}
+            onChange={(e) => handleColorSave('show_email_field', e.target.checked)}
+            className="w-5 h-5 rounded text-[var(--primary-color)] focus:ring-primary"
+            data-testid="show-email-toggle"
+          />
+        </label>
       </div>
     </div>
   );

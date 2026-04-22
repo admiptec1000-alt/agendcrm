@@ -216,6 +216,7 @@ class BookingPageUpdate(BaseModel):
     seo_description: Optional[str] = None
     custom_domain: Optional[str] = None
     slug: Optional[str] = None
+    show_email_field: Optional[bool] = None
 
 # Quick Response Models
 class QuickResponseCreate(BaseModel):

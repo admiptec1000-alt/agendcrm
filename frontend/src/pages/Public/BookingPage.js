@@ -145,9 +145,8 @@ const PublicBooking = () => {
   const steps = [
     { n: 1, label: 'Serviço' },
     { n: 2, label: 'Profissional' },
-    { n: 3, label: 'Data' },
-    { n: 4, label: 'Horario' },
-    { n: 5, label: 'Dados' },
+    { n: 3, label: 'Data & Hora' },
+    { n: 4, label: 'Dados' },
   ];
 
   return (
@@ -276,44 +275,25 @@ const PublicBooking = () => {
             </div>
           )}
 
-          {/* Step 3: Date */}
+          {/* Step 3: Date + Time (combined) */}
           {step === 3 && (
             <div data-testid="step-date">
-              <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Escolha a Data</h2>
-              <p className="text-sm text-slate-500 mb-6">Selecione o dia do agendamento</p>
-              <input type="date" value={formData.date} onChange={e => { setFormData({...formData, date: e.target.value, time: ''}); loadSlots(e.target.value); }}
-                min={new Date().toISOString().split('T')[0]}
-                className="input-field text-lg" data-testid="date-picker" />
-              <div className="flex gap-2 mt-6">
-                <button onClick={() => setStep(2)} className="btn-secondary text-sm flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Voltar</button>
-                <button onClick={() => formData.date && setStep(4)} disabled={!formData.date} className="btn-primary text-sm" style={{ background: primaryColor }}>Proximo</button>
-              </div>
+              <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Escolha Data e Horario</h2>
+              <p className="text-sm text-slate-500 mb-4">Horarios disponiveis — use as setas ou clique na data</p>
+              <DateHourPicker
+                formData={formData}
+                setFormData={setFormData}
+                availableSlots={availableSlots}
+                loadSlots={loadSlots}
+                primaryColor={primaryColor}
+                onPicked={(slot) => { setFormData(f => ({...f, time: slot})); setStep(4); }}
+              />
+              <button onClick={() => setStep(2)} className="btn-secondary mt-4 text-sm flex items-center gap-1" data-testid="back-from-date"><ArrowLeft className="w-4 h-4" /> Voltar</button>
             </div>
           )}
 
-          {/* Step 4: Time */}
+          {/* Step 4: Customer Data */}
           {step === 4 && (
-            <div data-testid="step-time">
-              <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Escolha o Horario</h2>
-              <p className="text-sm text-slate-500 mb-6">Horarios disponiveis para {formData.date}</p>
-              <div className="grid grid-cols-4 gap-2">
-                {availableSlots.map(slot => (
-                  <button key={slot} onClick={() => { setFormData({...formData, time: slot}); setStep(5); }}
-                    data-testid={`slot-${slot}`}
-                    className={`py-2.5 rounded-lg text-sm font-medium border-2 transition-all ${
-                      formData.time === slot ? 'text-white border-transparent' : 'border-slate-200 text-slate-700 hover:border-primary/50'
-                    }`} style={formData.time === slot ? { background: primaryColor } : {}}>
-                    {slot}
-                  </button>
-                ))}
-                {availableSlots.length === 0 && <p className="col-span-4 text-center py-8 text-slate-500">Nenhum horario disponivel</p>}
-              </div>
-              <button onClick={() => setStep(3)} className="btn-secondary mt-4 text-sm flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Voltar</button>
-            </div>
-          )}
-
-          {/* Step 5: Customer Data */}
-          {step === 5 && (
             <div data-testid="step-data">
               <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Seus Dados</h2>
               <p className="text-sm text-slate-500 mb-6">Informe seu telefone para identificacao</p>
@@ -373,14 +353,16 @@ const PublicBooking = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-sm font-medium text-slate-700 mb-1 block">Email (opcional)</label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                    <input type="email" value={formData.customer_email} onChange={e => setFormData({...formData, customer_email: e.target.value})}
-                      className="input-field pl-10" placeholder="seu@email.com" data-testid="email-input" />
+                {pageData?.page?.show_email_field !== false && (
+                  <div>
+                    <label className="text-sm font-medium text-slate-700 mb-1 block">Email (opcional)</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input type="email" value={formData.customer_email} onChange={e => setFormData({...formData, customer_email: e.target.value})}
+                        className="input-field pl-10" placeholder="seu@email.com" data-testid="email-input" />
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Summary */}
                 <div className="bg-slate-50 rounded-xl p-4 space-y-2">
@@ -407,7 +389,7 @@ const PublicBooking = () => {
                 </div>
               </div>
               <div className="flex gap-2 mt-6">
-                <button onClick={() => setStep(4)} className="btn-secondary text-sm flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Voltar</button>
+                <button onClick={() => setStep(3)} className="btn-secondary text-sm flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Voltar</button>
                 <button onClick={handleSubmit} disabled={!formData.customer_name || !formData.customer_phone || submitting}
                   className="btn-primary flex-1 text-sm" style={{ background: primaryColor }} data-testid="confirm-booking-btn">
                   {submitting ? 'Agendando...' : 'Confirmar Agendamento'}
@@ -504,6 +486,131 @@ const MyAppointmentsModal = ({ slug, primaryColor, onClose }) => {
             })}
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const DateHourPicker = ({ formData, setFormData, availableSlots, loadSlots, primaryColor, onPicked }) => {
+  const today = new Date().toISOString().split('T')[0];
+  const current = formData.date || today;
+  const [showNative, setShowNative] = React.useState(false);
+  const nativeRef = React.useRef(null);
+
+  // On mount: if no date set, preload today and fetch slots
+  React.useEffect(() => {
+    if (!formData.date) {
+      setFormData(f => ({ ...f, date: today, time: '' }));
+      loadSlots(today);
+    } else {
+      loadSlots(formData.date);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const shift = (days) => {
+    const d = new Date(current + 'T00:00:00');
+    d.setDate(d.getDate() + days);
+    const iso = d.toISOString().split('T')[0];
+    if (iso < today) return; // can't go before today
+    setFormData(f => ({ ...f, date: iso, time: '' }));
+    loadSlots(iso);
+  };
+
+  const onDateChange = (iso) => {
+    if (!iso) return;
+    setFormData(f => ({ ...f, date: iso, time: '' }));
+    loadSlots(iso);
+    setShowNative(false);
+  };
+
+  const prettyDate = React.useMemo(() => {
+    const d = new Date(current + 'T00:00:00');
+    return d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  }, [current]);
+
+  const openPicker = () => {
+    // Prefer native picker on mobile via showPicker API, fallback to input
+    try {
+      if (nativeRef.current?.showPicker) { nativeRef.current.showPicker(); return; }
+    } catch { /* ignore */ }
+    setShowNative(s => !s);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-100">
+        <button
+          onClick={() => shift(-1)}
+          disabled={current <= today}
+          className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 disabled:opacity-30 disabled:cursor-not-allowed"
+          data-testid="date-prev"
+          aria-label="Dia anterior"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <button
+          onClick={openPicker}
+          className="flex-1 px-3 py-1.5 rounded-lg hover:bg-slate-50 flex items-center justify-center gap-2 text-slate-800 font-semibold"
+          data-testid="date-opener"
+        >
+          <span className="capitalize">{prettyDate}</span>
+          <Calendar className="w-4 h-4 text-slate-400" />
+        </button>
+        <button
+          onClick={() => shift(1)}
+          className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+          data-testid="date-next"
+          aria-label="Proximo dia"
+        >
+          <ArrowLeft className="w-5 h-5 rotate-180" />
+        </button>
+      </div>
+      {/* hidden native date input for showPicker */}
+      <input
+        ref={nativeRef}
+        type="date"
+        value={current}
+        min={today}
+        onChange={e => onDateChange(e.target.value)}
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        data-testid="date-native"
+      />
+      {/* Fallback visible picker for browsers without showPicker */}
+      {showNative && (
+        <div className="px-3 pt-2">
+          <input
+            type="date"
+            value={current}
+            min={today}
+            onChange={e => onDateChange(e.target.value)}
+            className="input-field text-sm"
+            autoFocus
+          />
+        </div>
+      )}
+      <div className="p-3">
+        {availableSlots.length === 0 ? (
+          <p className="text-center py-10 text-sm text-slate-500">Nenhum horario disponivel neste dia</p>
+        ) : (
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2" data-testid="slot-grid">
+            {availableSlots.map(slot => (
+              <button
+                key={slot}
+                onClick={() => onPicked(slot)}
+                className={`py-3 rounded-xl text-sm font-bold transition-all ${
+                  formData.time === slot ? 'text-white' : 'bg-slate-900 text-white hover:opacity-90'
+                }`}
+                style={formData.time === slot ? { background: primaryColor } : {}}
+                data-testid={`slot-${slot}`}
+              >
+                {slot}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
