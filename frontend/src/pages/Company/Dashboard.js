@@ -3758,6 +3758,43 @@ const IndoorSettingsPage = () => {
               <input type="number" value={settings?.slide_duration || 10} onChange={e => handleSave({ slide_duration: parseInt(e.target.value) || 10 })}
                 className="input-field" min={5} max={120} data-testid="slide-duration" />
             </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700 mb-2 block">Layout da agenda</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSave({ layout: 'grid' })}
+                  className={`p-3 rounded-xl border-2 transition-all text-left ${
+                    (settings?.layout || 'grid') === 'grid' ? 'border-primary bg-primary/5' : 'border-slate-200'
+                  }`}
+                  data-testid="layout-grid"
+                >
+                  <div className="flex gap-1 mb-2">
+                    <div className="w-full h-3 bg-slate-300 rounded" />
+                    <div className="w-full h-3 bg-slate-300 rounded" />
+                    <div className="w-full h-3 bg-slate-300 rounded" />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-900">Lista (grade)</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Todos os agendamentos juntos</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSave({ layout: 'columns' })}
+                  className={`p-3 rounded-xl border-2 transition-all text-left ${
+                    settings?.layout === 'columns' ? 'border-primary bg-primary/5' : 'border-slate-200'
+                  }`}
+                  data-testid="layout-columns"
+                >
+                  <div className="grid grid-cols-3 gap-1 mb-2">
+                    <div className="h-6 bg-slate-300 rounded" />
+                    <div className="h-6 bg-slate-300 rounded" />
+                    <div className="h-6 bg-slate-300 rounded" />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-900">Colunas</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Uma coluna por profissional</p>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

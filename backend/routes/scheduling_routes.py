@@ -1289,6 +1289,7 @@ class IndoorSettingsUpdate(BaseModel):
     enabled: Optional[bool] = None
     slide_duration: Optional[int] = None  # seconds
     media_links: Optional[List[str]] = None  # URLs to images/videos
+    layout: Optional[str] = None  # 'grid' | 'columns'
 
 @router.get("/indoor")
 async def get_indoor_settings(

@@ -367,3 +367,74 @@ async def reset_company_admin_password(
     )
     return {"message": f"Senha resetada para {admin_user.get('email', 'admin')}", "email": admin_user.get("email")}
 
+
+# === GLOBAL INDOOR (vídeos exibidos em TODAS as TVs indoor) ===
+from pydantic import BaseModel as _BM
+
+
+class GlobalIndoorUpdate(_BM):
+    media_links: List[str]
+
+
+@router.get("/indoor-global")
+async def get_global_indoor(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin)
+):
+    doc = await db.global_indoor.find_one({"_id": "settings"})
+    if not doc:
+        return {"media_links": []}
+    return {"media_links": doc.get("media_links", [])}
+
+
+@router.put("/indoor-global")
+async def update_global_indoor(
+    data: GlobalIndoorUpdate,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin)
+):
+    await db.global_indoor.update_one(
+        {"_id": "settings"},
+        {"$set": {"media_links": data.media_links, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    return {"media_links": data.media_links}
+
+
+@router.get("/companies/{company_id}/indoor")
+async def get_company_indoor_for_super(
+    company_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin)
+):
+    """Super admin reads a company's indoor configuration."""
+    settings = await db.indoor_settings.find_one({"company_id": company_id}, {"_id": 0})
+    if not settings:
+        return {"enabled": True, "slide_duration": 10, "media_links": [], "layout": "grid"}
+    return settings
+
+
+@router.put("/companies/{company_id}/indoor")
+async def update_company_indoor_for_super(
+    company_id: str,
+    payload: dict,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin)
+):
+    """Super admin updates a company's indoor configuration directly."""
+    allowed = {k: v for k, v in payload.items() if k in ("enabled", "slide_duration", "media_links", "layout")}
+    existing = await db.indoor_settings.find_one({"company_id": company_id})
+    if existing:
+        await db.indoor_settings.update_one({"company_id": company_id}, {"$set": allowed})
+    else:
+        await db.indoor_settings.insert_one({
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "enabled": True,
+            "slide_duration": 10,
+            "media_links": [],
+            "layout": "grid",
+            **allowed
+        })
+    return await db.indoor_settings.find_one({"company_id": company_id}, {"_id": 0})
+

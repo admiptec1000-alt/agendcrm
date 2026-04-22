@@ -6,7 +6,8 @@ import {
   LogOut, Building, Users, TrendingUp, DollarSign, Settings,
   Plus, Pencil, Trash2, X, ChevronRight, Search, LayoutGrid,
   Briefcase, BarChart3, Eye, Check, Scissors, Stethoscope,
-  Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe
+  Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe,
+  Monitor, ExternalLink, Tv, Link as LinkIcon
 } from 'lucide-react';
 
 const iconMap = {
@@ -54,6 +55,7 @@ const SuperAdminDashboard = () => {
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { key: 'companies', label: 'Empresas', icon: Building },
     { key: 'business-types', label: 'Tipos de Negocio', icon: Briefcase },
+    { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
   ];
 
@@ -161,6 +163,7 @@ const SuperAdminDashboard = () => {
               }}
             />
           )}
+          {activeTab === 'indoor' && <IndoorTab companies={companies} />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>
       </main>
@@ -301,6 +304,7 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                   </td>
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-1">
+                      <CompanyLinksDropdown company={company} />
                       <button onClick={() => onEdit(company)} data-testid={`edit-company-${company.id}`}
                         className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
                         <Pencil className="w-4 h-4" />
@@ -380,6 +384,298 @@ const SettingsTab = () => (
     <p className="text-sm text-slate-500">Em breve: configuracoes globais do sistema, integrações, notificacoes.</p>
   </div>
 );
+
+/* ========== INDOOR TAB (Super Admin) ========== */
+const CompanyLinksDropdown = ({ company }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+  const slug = company.subdomain || company.slug || (company.name || '').toLowerCase().replace(/\s/g, '');
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    if (open) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const links = [
+    { key: 'painel', label: 'Painel Admin', path: `/${slug}/painel`, hint: 'Acesso administrativo' },
+    { key: 'booking', label: 'Agenda Publica', path: `/${slug}`, hint: 'Pagina de agendamento do cliente' },
+    { key: 'indoor', label: 'TV Indoor', path: `/${slug}/indoor`, hint: 'Tela da recepcao' },
+  ];
+
+  const copy = async (url) => {
+    try { await navigator.clipboard.writeText(url); toast.success('Link copiado!'); }
+    catch { toast.error('Falha ao copiar'); }
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
+        title="Links da empresa"
+        data-testid={`company-links-${company.id}`}
+      >
+        <LinkIcon className="w-4 h-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-72 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
+          <div className="px-3 py-2 border-b border-slate-100 bg-slate-50">
+            <p className="text-[10px] uppercase tracking-widest font-bold text-slate-500">Links da empresa</p>
+            <p className="text-xs font-semibold text-slate-800 truncate">{company.name}</p>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {links.map(l => {
+              const fullUrl = `${origin}${l.path}`;
+              return (
+                <div key={l.key} className="p-2.5 hover:bg-slate-50" data-testid={`link-${l.key}-${company.id}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-slate-900">{l.label}</p>
+                      <p className="text-[10px] text-slate-500">{l.hint}</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => copy(fullUrl)}
+                        className="p-1.5 rounded-md hover:bg-slate-200 text-slate-500 hover:text-slate-800"
+                        title="Copiar"
+                      >
+                        <LinkIcon className="w-3.5 h-3.5" />
+                      </button>
+                      <a
+                        href={fullUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1.5 rounded-md hover:bg-slate-200 text-slate-500 hover:text-slate-800"
+                        title="Abrir"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-400 truncate mt-1 font-mono">{l.path}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const IndoorTab = ({ companies }) => {
+  const [globalLinks, setGlobalLinks] = useState([]);
+  const [newGlobal, setNewGlobal] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [expandedCompany, setExpandedCompany] = useState(null);
+
+  useEffect(() => {
+    superAdminAPI.getGlobalIndoor()
+      .then(r => setGlobalLinks(r.data.media_links || []))
+      .catch(() => setGlobalLinks([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const saveGlobal = async (links) => {
+    try {
+      await superAdminAPI.updateGlobalIndoor({ media_links: links });
+      setGlobalLinks(links);
+      toast.success('Midia global salva');
+    } catch (e) {
+      toast.error('Erro ao salvar');
+    }
+  };
+
+  const addGlobal = () => {
+    const v = newGlobal.trim();
+    if (!v) return;
+    saveGlobal([...globalLinks, v]);
+    setNewGlobal('');
+  };
+
+  const removeGlobal = (idx) => saveGlobal(globalLinks.filter((_, i) => i !== idx));
+
+  if (loading) return <div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary" /></div>;
+
+  return (
+    <div className="animate-fade-in space-y-6">
+      {/* GLOBAL MEDIA */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-lg font-semibold font-heading text-slate-900">Midias Globais</h3>
+            <p className="text-xs text-slate-500">Exibidas em TODAS as TVs indoor, intercalando com o conteudo local</p>
+          </div>
+          <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary font-semibold">{globalLinks.length}</span>
+        </div>
+        <div className="flex gap-2 mb-3">
+          <input
+            value={newGlobal}
+            onChange={e => setNewGlobal(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addGlobal()}
+            placeholder="YouTube, Google Drive, Vimeo ou URL direta .mp4"
+            className="input-field flex-1"
+            data-testid="global-media-input"
+          />
+          <button onClick={addGlobal} className="btn-primary text-sm" data-testid="global-media-add">Adicionar</button>
+        </div>
+        <div className="space-y-1.5">
+          {globalLinks.map((link, i) => (
+            <div key={`g-${i}`} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+              <LinkIcon className="w-4 h-4 text-slate-400 flex-shrink-0" />
+              <span className="text-xs text-slate-700 truncate flex-1">{link}</span>
+              <a href={link} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-primary"><ExternalLink className="w-4 h-4" /></a>
+              <button onClick={() => removeGlobal(i)} className="text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button>
+            </div>
+          ))}
+          {globalLinks.length === 0 && (
+            <p className="text-xs text-slate-400 text-center py-6">Nenhuma midia global</p>
+          )}
+        </div>
+      </div>
+
+      {/* PER-COMPANY INDOOR */}
+      <div className="card">
+        <h3 className="text-lg font-semibold font-heading text-slate-900 mb-3">Indoor por Empresa</h3>
+        <p className="text-xs text-slate-500 mb-4">Clique em uma empresa para editar as midias locais e o link publico</p>
+        <div className="space-y-2">
+          {companies.map(c => (
+            <CompanyIndoorRow
+              key={c.id}
+              company={c}
+              expanded={expandedCompany === c.id}
+              onToggle={() => setExpandedCompany(expandedCompany === c.id ? null : c.id)}
+            />
+          ))}
+          {companies.length === 0 && <p className="text-xs text-slate-400 text-center py-6">Nenhuma empresa</p>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CompanyIndoorRow = ({ company, expanded, onToggle }) => {
+  const [data, setData] = useState(null);
+  const [newLink, setNewLink] = useState('');
+  const [loading, setLoading] = useState(false);
+  const slug = company.subdomain || company.slug || company.name?.toLowerCase().replace(/\s/g, '');
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+
+  useEffect(() => {
+    if (!expanded) return;
+    setLoading(true);
+    superAdminAPI.getCompanyIndoor(company.id)
+      .then(r => setData(r.data))
+      .catch(() => setData({ media_links: [], layout: 'grid', slide_duration: 10 }))
+      .finally(() => setLoading(false));
+  }, [expanded, company.id]);
+
+  const save = async (patch) => {
+    try {
+      const r = await superAdminAPI.updateCompanyIndoor(company.id, patch);
+      setData(r.data);
+      toast.success('Atualizado');
+    } catch { toast.error('Erro ao salvar'); }
+  };
+
+  const addLink = () => {
+    const v = newLink.trim();
+    if (!v) return;
+    save({ media_links: [...(data?.media_links || []), v] });
+    setNewLink('');
+  };
+
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden" data-testid={`company-indoor-${company.id}`}>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between p-3 hover:bg-slate-50 text-left"
+      >
+        <div className="flex items-center gap-3">
+          <Tv className="w-5 h-5 text-slate-400" />
+          <div>
+            <p className="font-semibold text-sm text-slate-900">{company.name}</p>
+            <p className="text-[11px] text-slate-500">/{slug}/indoor</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <a
+            href={`${origin}/${slug}/indoor`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            className="text-xs text-primary hover:underline flex items-center gap-1"
+          >
+            <ExternalLink className="w-3 h-3" /> Abrir
+          </a>
+          <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </div>
+      </button>
+      {expanded && (
+        <div className="p-3 border-t border-slate-200 bg-slate-50 space-y-3">
+          {loading ? (
+            <p className="text-xs text-slate-500">Carregando...</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Duracao (s)</label>
+                  <input
+                    type="number"
+                    value={data?.slide_duration || 10}
+                    onChange={e => save({ slide_duration: parseInt(e.target.value) || 10 })}
+                    className="input-field !py-1.5 text-sm"
+                    min={5}
+                    max={120}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Layout</label>
+                  <select
+                    value={data?.layout || 'grid'}
+                    onChange={e => save({ layout: e.target.value })}
+                    className="input-field !py-1.5 text-sm"
+                  >
+                    <option value="grid">Lista</option>
+                    <option value="columns">Colunas por profissional</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Adicionar midia local</label>
+                <div className="flex gap-2">
+                  <input
+                    value={newLink}
+                    onChange={e => setNewLink(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && addLink()}
+                    placeholder="URL de video/imagem"
+                    className="input-field !py-1.5 flex-1 text-sm"
+                  />
+                  <button onClick={addLink} className="btn-primary text-sm">+</button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                {(data?.media_links || []).map((l, i) => (
+                  <div key={`cl-${i}`} className="flex items-center gap-2 p-1.5 bg-white rounded">
+                    <span className="text-xs text-slate-700 truncate flex-1">{l}</span>
+                    <button
+                      onClick={() => save({ media_links: data.media_links.filter((_, idx) => idx !== i) })}
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+                {(data?.media_links || []).length === 0 && <p className="text-[11px] text-slate-400 text-center py-2">Nenhuma midia local</p>}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 /* ========== COMPANY MODAL ========== */
 const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) => {

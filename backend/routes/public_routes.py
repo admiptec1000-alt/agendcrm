@@ -519,11 +519,15 @@ async def get_indoor_display(
     ).sort("time", 1).to_list(1000)
 
     indoor = await db.indoor_settings.find_one({"company_id": company_id}, {"_id": 0})
+    # Global indoor media controlled by Super Admin — displayed across ALL companies.
+    global_doc = await db.global_indoor.find_one({"_id": "settings"}, {"_id": 0})
+    global_media = (global_doc or {}).get("media_links", [])
 
     return {
         "company_name": company["name"] if company else "",
         "logo_url": company.get("logo_url") if company else None,
         "appointments": appointments,
-        "indoor_settings": indoor or {"slide_duration": 10, "media_links": []},
+        "indoor_settings": indoor or {"slide_duration": 10, "media_links": [], "layout": "grid"},
+        "global_media_links": global_media,
         "date": today
     }

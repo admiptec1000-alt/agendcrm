@@ -71,7 +71,12 @@ export const superAdminAPI = {
   createBusinessType: (data) => api.post('/super-admin/business-types', data),
   updateBusinessType: (id, data) => api.put(`/super-admin/business-types/${id}`, data),
   deleteBusinessType: (id) => api.delete(`/super-admin/business-types/${id}`),
-  getAllFeatures: () => api.get('/super-admin/features')
+  getAllFeatures: () => api.get('/super-admin/features'),
+  // Indoor management
+  getGlobalIndoor: () => api.get('/super-admin/indoor-global'),
+  updateGlobalIndoor: (data) => api.put('/super-admin/indoor-global', data),
+  getCompanyIndoor: (companyId) => api.get(`/super-admin/companies/${companyId}/indoor`),
+  updateCompanyIndoor: (companyId, data) => api.put(`/super-admin/companies/${companyId}/indoor`, data)
 };
 
 // CRM API
