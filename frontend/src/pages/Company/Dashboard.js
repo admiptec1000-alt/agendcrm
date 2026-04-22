@@ -2794,7 +2794,7 @@ const CategoriesPage = () => {
                 title="Editar"
                 data-testid={`edit-category-${c.id}`}
               >
-                <Edit2 className="w-4 h-4" />
+                <Pencil className="w-4 h-4" />
               </button>
               <button
                 onClick={() => handleDelete(c)}
