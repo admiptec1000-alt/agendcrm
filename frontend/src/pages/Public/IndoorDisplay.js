@@ -13,7 +13,9 @@ function detectMediaKind(url) {
     const id = ytMatch[1];
     return {
       kind: 'iframe',
-      src: `https://www.youtube.com/embed/${id}?autoplay=1&mute=1&controls=0&rel=0&modestbranding=1&playsinline=1&loop=1&playlist=${id}`,
+      // enablejsapi=1 lets us postMessage play commands to force autoplay
+      src: `https://www.youtube.com/embed/${id}?autoplay=1&mute=1&controls=0&rel=0&modestbranding=1&playsinline=1&loop=1&playlist=${id}&enablejsapi=1`,
+      provider: 'youtube',
     };
   }
   // Vimeo
@@ -22,15 +24,16 @@ function detectMediaKind(url) {
     return {
       kind: 'iframe',
       src: `https://player.vimeo.com/video/${vmMatch[1]}?autoplay=1&muted=1&loop=1&background=1`,
+      provider: 'vimeo',
     };
   }
   // Google Drive: convert /view to /preview
   if (u.includes('drive.google.com')) {
     const idMatch = u.match(/\/d\/([a-zA-Z0-9_-]+)/);
     if (idMatch) {
-      return { kind: 'iframe', src: `https://drive.google.com/file/d/${idMatch[1]}/preview` };
+      return { kind: 'iframe', src: `https://drive.google.com/file/d/${idMatch[1]}/preview`, provider: 'drive' };
     }
-    return { kind: 'iframe', src: u.replace(/\/view.*/, '/preview') };
+    return { kind: 'iframe', src: u.replace(/\/view.*/, '/preview'), provider: 'drive' };
   }
   // Direct video file
   if (/\.(mp4|webm|ogg|mov)(\?|$)/i.test(u)) {
@@ -42,17 +45,44 @@ function detectMediaKind(url) {
 
 const MediaSlide = ({ url }) => {
   const m = detectMediaKind(url);
+  const iframeRef = React.useRef(null);
+
+  // Force-start playback once the iframe loads — works around browser autoplay
+  // policies that sometimes ignore the URL param `autoplay=1`.
+  React.useEffect(() => {
+    if (m.kind !== 'iframe' || !iframeRef.current) return;
+    const iframe = iframeRef.current;
+    const send = () => {
+      try {
+        if (m.provider === 'youtube') {
+          iframe.contentWindow?.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+        } else if (m.provider === 'vimeo') {
+          iframe.contentWindow?.postMessage(JSON.stringify({ method: 'play' }), '*');
+        }
+      } catch { /* silent */ }
+    };
+    const onLoad = () => {
+      // send immediately and twice more to cover the Ready event race
+      send();
+      setTimeout(send, 400);
+      setTimeout(send, 1200);
+    };
+    iframe.addEventListener('load', onLoad);
+    return () => iframe.removeEventListener('load', onLoad);
+  }, [m.kind, m.provider, m.src]);
+
   if (m.kind === 'video') {
     return <video src={m.src} autoPlay muted loop playsInline className="w-full h-screen object-cover" />;
   }
   if (m.kind === 'iframe') {
     return (
       <iframe
+        ref={iframeRef}
         src={m.src}
         title="Media"
         className="w-full h-screen"
         frameBorder="0"
-        allow="autoplay; encrypted-media; fullscreen"
+        allow="autoplay; encrypted-media; fullscreen; accelerometer; gyroscope"
         allowFullScreen
       />
     );
@@ -113,6 +143,18 @@ const IndoorDisplay = () => {
   const [data, setData] = useState(null);
   const [showMedia, setShowMedia] = useState(false);
   const [currentMediaIndex, setCurrentMediaIndex] = useState(0);
+  // Some browsers (especially mobile/TV Safari) block iframe autoplay until the
+  // user has interacted once with the page. We show a one-time overlay that
+  // satisfies that gesture requirement, then all subsequent slides autoplay.
+  const [unlocked, setUnlocked] = useState(() => {
+    try { return sessionStorage.getItem('indoor_unlocked') === '1'; } catch { return false; }
+  });
+  const unlockPlayback = () => {
+    try { sessionStorage.setItem('indoor_unlocked', '1'); } catch { /* ignore */ }
+    // Try to request fullscreen which doubles as the user gesture for autoplay
+    try { document.documentElement.requestFullscreen?.(); } catch { /* ignore */ }
+    setUnlocked(true);
+  };
 
   const load = useCallback(() => {
     publicAPI.getIndoorDisplay(slug).then(r => setData(r.data)).catch(() => {});
@@ -151,6 +193,31 @@ const IndoorDisplay = () => {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white" />
+      </div>
+    );
+  }
+
+  // First-time unlock overlay — required by mobile/TV Safari autoplay policies.
+  if (!unlocked) {
+    return (
+      <div
+        className="min-h-screen bg-slate-900 text-white flex items-center justify-center cursor-pointer p-6"
+        onClick={unlockPlayback}
+        data-testid="indoor-unlock"
+      >
+        <div className="text-center max-w-lg">
+          <div className="w-20 h-20 mx-auto rounded-full bg-white/10 flex items-center justify-center mb-6">
+            <svg className="w-10 h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+          </div>
+          <h1 className="text-3xl font-bold font-heading mb-3">Iniciar Apresentacao</h1>
+          <p className="text-slate-400 mb-6">Toque em qualquer lugar da tela para comecar. A partir daqui, os videos e imagens alternarao automaticamente sem pausa.</p>
+          <button
+            onClick={unlockPlayback}
+            className="px-8 py-3 bg-primary text-white rounded-full font-semibold hover:bg-primary/90 transition"
+          >
+            Iniciar agora
+          </button>
+        </div>
       </div>
     );
   }
