@@ -2739,30 +2739,90 @@ const ProfessionalsPage = () => {
 const CategoriesPage = () => {
   const [items, setItems] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: '', description: '' });
-  useEffect(() => { schedulingAPI.getCategories().then(r => setItems(r.data)).catch(() => {}); }, []);
+
+  const load = () => schedulingAPI.getCategories().then(r => setItems(r.data)).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  const openNew = () => { setEditing(null); setForm({ name: '', description: '' }); setShowAdd(true); };
+  const openEdit = (c) => { setEditing(c); setForm({ name: c.name || '', description: c.description || '' }); setShowAdd(true); };
+
   const handleSave = async () => {
-    await schedulingAPI.createCategory(form);
-    toast.success('Categoria criada!');
-    setShowAdd(false);
-    schedulingAPI.getCategories().then(r => setItems(r.data));
+    if (!form.name.trim()) { toast.error('Informe o nome'); return; }
+    try {
+      if (editing) {
+        await schedulingAPI.updateCategory(editing.id, form);
+        toast.success('Categoria atualizada!');
+      } else {
+        await schedulingAPI.createCategory(form);
+        toast.success('Categoria criada!');
+      }
+      setShowAdd(false); setEditing(null);
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao salvar'); }
   };
+
+  const handleDelete = async (c) => {
+    if (!window.confirm(`Excluir a categoria "${c.name}"?\nServicos que usam essa categoria ficarao sem categoria.`)) return;
+    try {
+      await schedulingAPI.deleteCategory(c.id);
+      toast.success('Categoria excluida!');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao excluir'); }
+  };
+
   return (
     <div className="animate-fade-in" data-testid="categories-page">
       <div className="flex items-center justify-between mb-4">
         <p className="text-slate-600 text-sm">{items.length} categorias</p>
-        <button onClick={() => setShowAdd(true)} className="btn-primary text-sm flex items-center gap-2"><Plus className="w-4 h-4" /> Nova Categoria</button>
+        <button onClick={openNew} className="btn-primary text-sm flex items-center gap-2" data-testid="new-category-btn">
+          <Plus className="w-4 h-4" /> Nova Categoria
+        </button>
       </div>
       <div className="grid gap-3">
-        {items.map(c => <div key={c.id} className="card !p-4"><p className="font-medium text-sm">{c.name}</p>{c.description && <p className="text-xs text-slate-500 mt-1">{c.description}</p>}</div>)}
+        {items.map(c => (
+          <div key={c.id} className="card !p-4 flex items-center justify-between gap-3" data-testid={`category-${c.id}`}>
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-sm truncate">{c.name}</p>
+              {c.description && <p className="text-xs text-slate-500 mt-1 truncate">{c.description}</p>}
+            </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                onClick={() => openEdit(c)}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+                title="Editar"
+                data-testid={`edit-category-${c.id}`}
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => handleDelete(c)}
+                className="p-2 rounded-lg hover:bg-red-50 text-red-500"
+                title="Excluir"
+                data-testid={`delete-category-${c.id}`}
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+        {items.length === 0 && (
+          <div className="card !p-6 text-center text-sm text-slate-500">
+            Nenhuma categoria cadastrada.
+          </div>
+        )}
       </div>
       {showAdd && (
-        <Modal title="Nova Categoria" onClose={() => setShowAdd(false)}>
+        <Modal title={editing ? 'Editar Categoria' : 'Nova Categoria'} onClose={() => { setShowAdd(false); setEditing(null); }}>
           <div className="space-y-3">
-            <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Nome" className="input-field" />
-            <input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Descricao" className="input-field" />
+            <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Nome" className="input-field" data-testid="category-name-input" />
+            <input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Descricao (opcional)" className="input-field" />
           </div>
-          <div className="flex justify-end gap-2 mt-4"><button onClick={() => setShowAdd(false)} className="btn-secondary text-sm">Cancelar</button><button onClick={handleSave} className="btn-primary text-sm">Salvar</button></div>
+          <div className="flex justify-end gap-2 mt-4">
+            <button onClick={() => { setShowAdd(false); setEditing(null); }} className="btn-secondary text-sm">Cancelar</button>
+            <button onClick={handleSave} className="btn-primary text-sm" data-testid="save-category-btn">Salvar</button>
+          </div>
         </Modal>
       )}
     </div>

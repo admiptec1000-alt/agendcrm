@@ -81,7 +81,7 @@ export function useCompanyBranding({ slug, name, logoUrl, themeColor }) {
       manifestLink.rel = 'manifest';
       document.head.appendChild(manifestLink);
     }
-    manifestLink.setAttribute('crossorigin', 'use-credentials');
+    manifestLink.removeAttribute('crossorigin');
     manifestLink.href = `/api/public/manifest/${slug}`;
   }, [slug, name, logoUrl, themeColor]);
 }

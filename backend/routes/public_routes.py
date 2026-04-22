@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+import json
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
 from models import AppointmentCreate, AppointmentStatus
@@ -59,19 +60,22 @@ async def get_dynamic_manifest(
 
     primary_color = (page or {}).get("primary_color") or "#4F46E5"
 
-    return JSONResponse(content={
-        "id": f"/{slug}/painel",
-        "short_name": short_name,
-        "name": company_name,
-        "icons": icons,
-        "start_url": f"/{slug}/painel",
-        "scope": f"/{slug}/",
-        "display": "standalone",
-        "orientation": "portrait",
-        "theme_color": primary_color,
-        "background_color": "#F8FAFC",
-        "description": f"{company_name} - Agendamento e Gestao"
-    })
+    return Response(
+        content=json.dumps({
+            "id": f"/{slug}/painel",
+            "short_name": short_name,
+            "name": company_name,
+            "icons": icons,
+            "start_url": f"/{slug}/painel",
+            "scope": f"/{slug}/",
+            "display": "standalone",
+            "orientation": "portrait",
+            "theme_color": primary_color,
+            "background_color": "#F8FAFC",
+            "description": f"{company_name} - Agendamento e Gestao"
+        }),
+        media_type="application/manifest+json"
+    )
 
 
 @router.get("/booking/{slug}/client-lookup/{phone}")
@@ -237,17 +241,18 @@ async def get_availability(
                 suspension_windows.append((sh * 60 + sm, eh * 60 + em))
 
         prof_hours = (prof.get("working_hours") or {}).get(day_key)
-        if prof_hours:
-            if not prof_hours.get("active", True):
-                continue
-            start, end = prof_hours["start"], prof_hours["end"]
-        else:
-            start, end = biz_hours["start"], biz_hours["end"]
+        if prof_hours and not prof_hours.get("active", True):
+            continue
 
-        start_h, start_m = map(int, start.split(":"))
-        end_h, end_m = map(int, end.split(":"))
-        start_min = start_h * 60 + start_m
-        end_min = end_h * 60 + end_m
+        # Resolve shifts: multi-shift list > single (start,end) > business hours fallback
+        shifts = []
+        if prof_hours and prof_hours.get("shifts"):
+            shifts = [(s["start"], s["end"]) for s in prof_hours["shifts"] if s.get("start") and s.get("end")]
+        if not shifts:
+            if prof_hours and prof_hours.get("start") and prof_hours.get("end"):
+                shifts = [(prof_hours["start"], prof_hours["end"])]
+            else:
+                shifts = [(biz_hours["start"], biz_hours["end"])]
 
         existing = await db.appointments.find({
             "company_id": company_id, "professional_id": pid, "date": date,
@@ -260,14 +265,19 @@ async def get_availability(
         # Merge partial-day suspension windows into booked intervals
         booked.extend(suspension_windows)
 
-        current = start_min
-        while current + duration <= end_min:
-            slot_end = current + duration
-            conflict = any(not (slot_end <= bs or current >= be) for bs, be in booked)
-            if not conflict:
-                h, m = divmod(current, 60)
-                all_slots.add(f"{h:02d}:{m:02d}")
-            current += 30
+        for shift_start, shift_end in shifts:
+            sh, sm = map(int, shift_start.split(":"))
+            eh, em = map(int, shift_end.split(":"))
+            start_min = sh * 60 + sm
+            end_min = eh * 60 + em
+            current = start_min
+            while current + duration <= end_min:
+                slot_end = current + duration
+                conflict = any(not (slot_end <= bs or current >= be) for bs, be in booked)
+                if not conflict:
+                    h, m = divmod(current, 60)
+                    all_slots.add(f"{h:02d}:{m:02d}")
+                current += 30
 
     return {"date": date, "available_slots": sorted(all_slots)}
 

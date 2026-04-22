@@ -377,6 +377,73 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
     }));
   };
 
+  // --- Shift helpers (dual-shift support) ---
+  const getDayShifts = (dayKey) => {
+    const d = form.working_hours[dayKey] || {};
+    if (Array.isArray(d.shifts) && d.shifts.length) return d.shifts;
+    // legacy single shift
+    return [{ start: d.start || '08:00', end: d.end || '18:00' }];
+  };
+  const hasBreak = (dayKey) => getDayShifts(dayKey).length >= 2;
+
+  const setShift = (dayKey, idx, field, value) => {
+    setForm(f => {
+      const day = f.working_hours[dayKey] || {};
+      const shifts = (Array.isArray(day.shifts) && day.shifts.length)
+        ? day.shifts.map((s, i) => ({ ...s }))
+        : [{ start: day.start || '08:00', end: day.end || '18:00' }];
+      if (!shifts[idx]) shifts[idx] = { start: '13:00', end: '18:00' };
+      shifts[idx][field] = value;
+      // Keep legacy start/end for first shift (backwards compat with pre-shift data)
+      const newDay = { ...day, shifts, start: shifts[0]?.start, end: shifts[shifts.length - 1]?.end };
+      return { ...f, working_hours: { ...f.working_hours, [dayKey]: newDay } };
+    });
+  };
+
+  const toggleBreak = (dayKey, enabled) => {
+    setForm(f => {
+      const day = f.working_hours[dayKey] || {};
+      let shifts;
+      if (enabled) {
+        const first = (Array.isArray(day.shifts) && day.shifts[0]) || { start: day.start || '08:00', end: '12:00' };
+        shifts = [
+          { start: first.start || '08:00', end: first.end || '12:00' },
+          { start: '13:00', end: day.end || '18:00' },
+        ];
+      } else {
+        const first = (Array.isArray(day.shifts) && day.shifts[0]) || {};
+        const last = (Array.isArray(day.shifts) && day.shifts[day.shifts.length - 1]) || {};
+        shifts = [{ start: first.start || day.start || '08:00', end: last.end || day.end || '18:00' }];
+      }
+      const newDay = { ...day, shifts, start: shifts[0].start, end: shifts[shifts.length - 1].end };
+      return { ...f, working_hours: { ...f.working_hours, [dayKey]: newDay } };
+    });
+  };
+
+  const replicateFirstActiveDay = () => {
+    // Find the first active day and copy its config to all other active days
+    const entries = Object.entries(form.working_hours);
+    const source = entries.find(([, d]) => d?.active);
+    if (!source) { toast.error('Ative pelo menos um dia para replicar'); return; }
+    const [, src] = source;
+    const template = {
+      active: true,
+      shifts: Array.isArray(src.shifts) && src.shifts.length ? src.shifts.map(s => ({ ...s })) : undefined,
+      start: src.start,
+      end: src.end,
+    };
+    setForm(f => {
+      const updated = { ...f.working_hours };
+      Object.keys(updated).forEach(k => {
+        if (updated[k]?.active) {
+          updated[k] = { ...template, active: true };
+        }
+      });
+      return { ...f, working_hours: updated };
+    });
+    toast.success('Horarios replicados para todos os dias ativos');
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -469,29 +536,78 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
           )}
           {tab === 'hours' && (
             <div className="space-y-2">
-              <p className="text-xs text-slate-500 mb-2">Defina os horarios de trabalho para cada dia. Se nao definido, usara o horario do estabelecimento.</p>
-              {Object.entries(DAY_LABELS).map(([key, label]) => (
-                <div key={key} className="flex items-center gap-3 p-2 bg-slate-50 rounded-lg" data-testid={`hours-${key}`}>
-                  <label className="flex items-center gap-2 w-24 cursor-pointer">
-                    <input type="checkbox" checked={form.working_hours[key]?.active ?? false}
-                      onChange={e => updateDayHours(key, 'active', e.target.checked)}
-                      className="w-4 h-4 text-primary rounded" />
-                    <span className="text-sm font-medium text-slate-700">{label}</span>
-                  </label>
-                  {form.working_hours[key]?.active && (
-                    <div className="flex items-center gap-2">
-                      <input type="time" value={form.working_hours[key]?.start || '08:00'}
-                        onChange={e => updateDayHours(key, 'start', e.target.value)}
-                        className="input-field !py-1 text-sm" />
-                      <span className="text-xs text-slate-400">ate</span>
-                      <input type="time" value={form.working_hours[key]?.end || '18:00'}
-                        onChange={e => updateDayHours(key, 'end', e.target.value)}
-                        className="input-field !py-1 text-sm" />
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <p className="text-xs text-slate-500 flex-1">
+                  Defina os horarios de trabalho. Ative <b>"Tem intervalo"</b> para configurar um segundo turno (ex: 08:00-12:00 e 13:00-18:00).
+                </p>
+                <button
+                  type="button"
+                  onClick={replicateFirstActiveDay}
+                  className="text-xs font-semibold text-primary hover:underline whitespace-nowrap flex-shrink-0"
+                  data-testid="replicate-hours-btn"
+                  title="Copia o 1º dia ativo para todos os demais dias ativos"
+                >
+                  Replicar p/ todos
+                </button>
+              </div>
+              {Object.entries(DAY_LABELS).map(([key, label]) => {
+                const day = form.working_hours[key] || {};
+                const shifts = getDayShifts(key);
+                const withBreak = hasBreak(key);
+                return (
+                  <div key={key} className="p-2.5 bg-slate-50 rounded-lg" data-testid={`hours-${key}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={day.active ?? false}
+                          onChange={e => updateDayHours(key, 'active', e.target.checked)}
+                          className="w-4 h-4 text-primary rounded" />
+                        <span className="text-sm font-medium text-slate-700">{label}</span>
+                      </label>
+                      {day.active && (
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={withBreak}
+                            onChange={e => toggleBreak(key, e.target.checked)}
+                            className="w-3.5 h-3.5 text-primary rounded"
+                            data-testid={`break-toggle-${key}`}
+                          />
+                          Tem intervalo
+                        </label>
+                      )}
+                      {!day.active && <span className="text-xs text-slate-400">Folga</span>}
                     </div>
-                  )}
-                  {!form.working_hours[key]?.active && <span className="text-xs text-slate-400">Folga</span>}
-                </div>
-              ))}
+                    {day.active && (
+                      <div className="mt-2 space-y-1.5">
+                        {/* First shift */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-slate-400 w-12">{withBreak ? '1º TURNO' : 'HORARIO'}</span>
+                          <input type="time" value={shifts[0]?.start || '08:00'}
+                            onChange={e => setShift(key, 0, 'start', e.target.value)}
+                            className="input-field !py-1 text-sm" />
+                          <span className="text-xs text-slate-400">ate</span>
+                          <input type="time" value={shifts[0]?.end || (withBreak ? '12:00' : '18:00')}
+                            onChange={e => setShift(key, 0, 'end', e.target.value)}
+                            className="input-field !py-1 text-sm" />
+                        </div>
+                        {/* Second shift */}
+                        {withBreak && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-slate-400 w-12">2º TURNO</span>
+                            <input type="time" value={shifts[1]?.start || '13:00'}
+                              onChange={e => setShift(key, 1, 'start', e.target.value)}
+                              className="input-field !py-1 text-sm" />
+                            <span className="text-xs text-slate-400">ate</span>
+                            <input type="time" value={shifts[1]?.end || '18:00'}
+                              onChange={e => setShift(key, 1, 'end', e.target.value)}
+                              className="input-field !py-1 text-sm" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {tab === 'suspensions' && (

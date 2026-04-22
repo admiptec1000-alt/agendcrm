@@ -837,6 +837,49 @@ async def create_category(
     await db.categories.insert_one(category)
     return {k: v for k, v in category.items() if k != "_id"}
 
+
+@router.put("/categories/{category_id}")
+async def update_category(
+    category_id: str,
+    data: CategoryCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    updated = {
+        "name": data.name,
+        "description": data.description,
+    }
+    result = await db.categories.update_one(
+        {"id": category_id, "company_id": user["company_id"]},
+        {"$set": updated}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Categoria nao encontrada")
+    category = await db.categories.find_one(
+        {"id": category_id, "company_id": user["company_id"]}, {"_id": 0}
+    )
+    return category
+
+
+@router.delete("/categories/{category_id}")
+async def delete_category(
+    category_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    # If any service still references this category, clear the link instead of
+    # failing, so the admin isn't blocked by legacy data.
+    await db.services.update_many(
+        {"company_id": user["company_id"], "category_id": category_id},
+        {"$set": {"category_id": None}}
+    )
+    result = await db.categories.delete_one(
+        {"id": category_id, "company_id": user["company_id"]}
+    )
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Categoria nao encontrada")
+    return {"ok": True}
+
 # === CLIENTS ===
 @router.get("/clients")
 async def list_clients(
@@ -1309,13 +1352,25 @@ def get_suspension_intervals(prof: dict, date_str: str) -> list:
 
 
 def get_working_hours(prof: dict, day_key: str, biz_start: str, biz_end: str):
-    """Get professional working hours, falling back to business hours."""
+    """Get professional working hours, falling back to business hours.
+
+    Supports three formats (backwards-compatible):
+    1. None / missing -> defaults to (biz_start, biz_end)
+    2. {"active": false} -> returns None (day off)
+    3. {"start": "08:00", "end": "18:00"} -> single shift
+    4. {"shifts": [{"start": "08:00","end":"12:00"}, {"start":"13:00","end":"18:00"}]}
+       -> multi-shift (returns list of tuples)
+    """
     prof_hours = (prof.get("working_hours") or {}).get(day_key)
-    if prof_hours:
-        if not prof_hours.get("active", True):
-            return None
-        return prof_hours["start"], prof_hours["end"]
-    return biz_start, biz_end
+    if prof_hours is None:
+        return biz_start, biz_end
+    if not prof_hours.get("active", True):
+        return None
+    if prof_hours.get("shifts"):
+        shifts = [(s["start"], s["end"]) for s in prof_hours["shifts"] if s.get("start") and s.get("end")]
+        if shifts:
+            return shifts  # list signals multi-shift
+    return prof_hours.get("start", biz_start), prof_hours.get("end", biz_end)
 
 
 def calculate_available_slots(start: str, end: str, duration: int, booked: list) -> set:
@@ -1399,6 +1454,9 @@ async def get_smart_availability(
         booked = await get_booked_intervals(db, company_id, pid, date)
         # Add partial-day suspensions as blocked intervals
         booked.extend(get_suspension_intervals(prof, date))
-        all_slots |= calculate_available_slots(hours[0], hours[1], duration, booked)
+        # hours is either (start, end) for single shift or a list of tuples for multi-shift
+        shifts = hours if isinstance(hours, list) else [hours]
+        for s, e in shifts:
+            all_slots |= calculate_available_slots(s, e, duration, booked)
 
     return {"date": date, "available_slots": sorted(all_slots), "duration": duration}

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'agentcrm-v2';
+const CACHE_NAME = 'agentcrm-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
