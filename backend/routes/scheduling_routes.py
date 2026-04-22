@@ -61,7 +61,7 @@ def _calc_sub_status(sub: dict) -> str:
 async def _load_user_perms(db: AsyncIOMotorDatabase, user: dict) -> list:
     """Return the list of permission feature_keys granted to this user via
     permission_profile_id. Admins get ['*'] implicitly (callers should check
-    is_admin separately)."""
+    is_admin separately). Expands legacy verb-like permissions too."""
     if user.get("role") in ("company_admin", "super_admin"):
         return ["*"]
     pid = user.get("permission_profile_id")
@@ -71,7 +71,18 @@ async def _load_user_perms(db: AsyncIOMotorDatabase, user: dict) -> list:
         {"id": pid, "company_id": user["company_id"]},
         {"_id": 0, "permissions": 1}
     )
-    return (pp or {}).get("permissions", []) or []
+    raw = (pp or {}).get("permissions", []) or []
+    # Inline expansion of legacy aliases (kept in sync with auth_routes)
+    aliases = {
+        "ver_proprios_atendimentos": ["dashboard", "agenda", "own_appointments_only"],
+        "concluir_atendimento": ["agenda"],
+        "registrar_pagamento": ["agenda", "financeiro"],
+    }
+    out = set(raw)
+    for p in list(out):
+        if p in aliases:
+            out.update(aliases[p])
+    return sorted(out)
 
 
 async def _resolve_own_professional_id(db: AsyncIOMotorDatabase, user: dict) -> Optional[str]:

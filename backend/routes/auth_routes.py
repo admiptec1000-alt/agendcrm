@@ -16,6 +16,26 @@ load_dotenv()
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+
+# Legacy permission aliases — when admins created profiles manually before the
+# feature catalog was locked, they used verb-like names. Map them to concrete
+# menu feature_keys so the sidebar/home actually shows something useful.
+LEGACY_PERMISSION_ALIASES = {
+    "ver_proprios_atendimentos": ["dashboard", "agenda", "own_appointments_only"],
+    "concluir_atendimento": ["agenda"],
+    "registrar_pagamento": ["agenda", "financeiro"],
+}
+
+
+def expand_legacy_permissions(perms: list) -> list:
+    """Expand legacy verb-like permissions into real feature_keys."""
+    out = set(perms or [])
+    for p in list(out):
+        if p in LEGACY_PERMISSION_ALIASES:
+            out.update(LEGACY_PERMISSION_ALIASES[p])
+    return sorted(out)
+
+
 @router.post("/super-admin/login", response_model=TokenResponse)
 async def super_admin_login(
     credentials: LoginRequest,
@@ -87,13 +107,14 @@ async def company_login(
             {"_id": 0, "permissions": 1, "name": 1}
         )
         if pp:
-            user_data["permissions"] = pp.get("permissions", [])
+            user_data["permissions"] = expand_legacy_permissions(pp.get("permissions", []))
             user_data["permission_profile_name"] = pp.get("name")
 
     return TokenResponse(
         access_token=access_token,
         user=user_data
     )
+
 
 @router.post("/register", response_model=TokenResponse)
 async def register_company(
@@ -206,7 +227,7 @@ async def get_current_user_info(
             {"_id": 0, "permissions": 1, "name": 1}
         )
         if pp:
-            user["permissions"] = pp.get("permissions", [])
+            user["permissions"] = expand_legacy_permissions(pp.get("permissions", []))
             user["permission_profile_name"] = pp.get("name")
     elif user.get("role") == "company_admin":
         user["permissions"] = ["*"]  # Admin sees all

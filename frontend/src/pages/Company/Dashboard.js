@@ -83,7 +83,14 @@ const CompanyDashboard = () => {
 
   const enabledFeatures = useMemo(() => {
     const feats = user?.company?.features || [];
-    return feats.filter(f => f.enabled).map(f => f.feature_key);
+    const companyEnabled = feats.filter(f => f.enabled).map(f => f.feature_key);
+    // Admins see everything the company has enabled
+    const isAdmin = user?.role === 'company_admin' || user?.role === 'super_admin';
+    const perms = user?.permissions || [];
+    if (isAdmin || perms.includes('*')) return companyEnabled;
+    // Non-admins: intersection between company-enabled AND user's profile permissions.
+    // Fail-closed: if the user has no permission profile assigned, they see nothing.
+    return companyEnabled.filter(k => perms.includes(k));
   }, [user]);
 
   // Check onboarding status on mount
