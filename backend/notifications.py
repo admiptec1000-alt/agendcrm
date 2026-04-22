@@ -65,14 +65,32 @@ async def _get_active_whatsapp_conn(db: AsyncIOMotorDatabase, company_id: str) -
     )
 
 
+def _normalize_br_phone(phone: str) -> str:
+    """Normalize a Brazilian phone number to E.164 digits (55DD9XXXXXXXX).
+
+    Accepts inputs like '(62) 99432-0308', '62994320308', '5562994320308'.
+    Adds the country code 55 when missing. Returns digits only (no +).
+    """
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if not digits:
+        return ""
+    # Already E.164 Brazil (12 or 13 digits starting with 55)
+    if digits.startswith("55") and len(digits) in (12, 13):
+        return digits
+    # Local BR format: 10 digits (DDD + 8) or 11 digits (DDD + 9)
+    if len(digits) in (10, 11):
+        return "55" + digits
+    # Unknown format -> return as-is; Baileys will reject if invalid
+    return digits
+
+
 async def _send_via_baileys(conn_id: str, phone: str, message: str) -> bool:
     """Send message via the Node Baileys microservice. Fire-and-forget.
     Returns True only when the microservice confirms the message was dispatched.
     """
     if not phone or not message:
         return False
-    # Normalize phone: keep digits only
-    clean = "".join(c for c in phone if c.isdigit())
+    clean = _normalize_br_phone(phone)
     if not clean:
         return False
     try:
