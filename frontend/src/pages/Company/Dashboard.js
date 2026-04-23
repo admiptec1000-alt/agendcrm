@@ -242,12 +242,6 @@ const CompanyDashboard = () => {
           activePage={activePage}
           onPick={(key) => { setActivePage(key); setShowMenuSheet(false); }}
           onClose={() => setShowMenuSheet(false)}
-          sidebarEnabledMobile={sidebarEnabledMobile}
-          onToggleSidebar={(v) => {
-            setSidebarEnabledMobile(v);
-            try { localStorage.setItem('sidebar_enabled_mobile', v ? '1' : '0'); } catch { /* ignore */ }
-            if (v) setMobileSidebarOpen(true);
-          }}
           onLogout={logout}
         />
       )}
@@ -416,8 +410,8 @@ const ProfessionalStories = ({ professionals, activeId, onPick }) => {
   );
 
   return (
-    <div className="mb-4 -mx-1 px-1" data-testid="professional-stories">
-      <div className="flex items-center gap-3 overflow-x-auto pb-1 scrollbar-hide">
+    <div className="mb-4" data-testid="professional-stories">
+      <div className="flex items-center gap-3 overflow-x-auto pb-1 scrollbar-hide -mx-4 lg:-mx-6 px-4 lg:px-6">
         <Circle
           isAll
           active={activeId === 'todos'}
@@ -486,7 +480,7 @@ const MobileBottomNav = ({ activePage, setActivePage, onOpenMenu, hasFeature }) 
 };
 
 /* ========== MOBILE MENU SHEET (all options as cards) ========== */
-const MobileMenuSheet = ({ menuGroups, activePage, onPick, onClose, sidebarEnabledMobile, onToggleSidebar, onLogout }) => {
+const MobileMenuSheet = ({ menuGroups, activePage, onPick, onClose, onLogout }) => {
   const { user } = useAuth();
   return (
     <div
@@ -535,17 +529,7 @@ const MobileMenuSheet = ({ menuGroups, activePage, onPick, onClose, sidebarEnabl
             </div>
           ))}
         </div>
-        <div className="p-3 border-t border-slate-100 space-y-2 bg-slate-50">
-          <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white">
-            <span className="text-sm text-slate-700">Menu lateral expansivel no mobile</span>
-            <input
-              type="checkbox"
-              checked={sidebarEnabledMobile}
-              onChange={e => onToggleSidebar(e.target.checked)}
-              className="w-5 h-5 rounded text-[var(--primary-color)]"
-              data-testid="sidebar-mobile-toggle"
-            />
-          </label>
+        <div className="p-3 border-t border-slate-100 bg-slate-50">
           <button
             onClick={() => { onClose(); onLogout(); }}
             className="w-full btn-secondary text-sm flex items-center justify-center gap-2"
@@ -1596,6 +1580,8 @@ const AgendaPage = () => {
   const [appointments, setAppointments] = useState([]);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
+  // Quick filter is driven by the week strip (view date). Default = show the
+  // appointments of the selected day from the strip.
   const [filter, setFilter] = useState('hoje');
   const [concludeApt, setConcludeApt] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState('');
@@ -1807,17 +1793,6 @@ const AgendaPage = () => {
             </div>
           </div>
         )}
-      </div>
-
-      {/* Filter pills - scrollable */}
-      <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide">
-        {FILTERS.map(f => (
-          <button key={f.key} onClick={() => setFilter(f.key)}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${filter===f.key ? 'bg-primary text-white shadow-sm' : 'bg-slate-100 text-slate-600'}`}
-            data-testid={`filter-${f.key}`}>
-            {f.label}{typeof f.count === 'number' ? ` (${f.count})` : ''}
-          </button>
-        ))}
       </div>
 
       {/* Appointment list */}
@@ -3659,6 +3634,38 @@ const NotificacoesPage = () => {
 };
 
 /* ========== CONFIG ========== */
+/* ========== MOBILE PREFERENCES (in Config) ========== */
+const MobilePreferencesCard = () => {
+  const [enabled, setEnabled] = useState(() => {
+    try { return localStorage.getItem('sidebar_enabled_mobile') === '1'; } catch { return false; }
+  });
+  const toggle = (v) => {
+    setEnabled(v);
+    try { localStorage.setItem('sidebar_enabled_mobile', v ? '1' : '0'); } catch { /* ignore */ }
+    toast.success('Preferencia salva. Recarregue a pagina para ver o efeito.');
+  };
+  return (
+    <div className="card max-w-2xl mb-6" data-testid="mobile-prefs-card">
+      <h3 className="font-semibold text-slate-900 mb-1">Preferencias do Mobile</h3>
+      <p className="text-xs text-slate-500 mb-4">Controla como o painel se comporta em celulares e tablets pequenos.</p>
+      <label className="flex items-center justify-between gap-3 p-3 bg-slate-50 rounded-lg cursor-pointer">
+        <div>
+          <p className="text-sm font-medium text-slate-800">Menu lateral expansivel no mobile</p>
+          <p className="text-xs text-slate-500 mt-0.5">Quando desligado (padrao), o rodape com 5 atalhos substitui o menu lateral. Quando ligado, um botao hamburger reaparece no topo para abrir o menu completo.</p>
+        </div>
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={e => toggle(e.target.checked)}
+          className="w-5 h-5 rounded text-[var(--primary-color)]"
+          data-testid="sidebar-mobile-toggle"
+        />
+      </label>
+    </div>
+  );
+};
+
+
 const ConfigPage = () => {
   const { user } = useAuth();
   const [businessHours, setBusinessHours] = useState(null);
@@ -3717,6 +3724,9 @@ const ConfigPage = () => {
 
   return (
     <div className="animate-fade-in" data-testid="config-page">
+      {/* Mobile Preferences */}
+      <MobilePreferencesCard />
+
       {/* Logo Global */}
       <div className="card max-w-2xl mb-6" data-testid="config-logo-section">
         <h3 className="font-semibold text-slate-900 mb-2">Logomarca Global</h3>
