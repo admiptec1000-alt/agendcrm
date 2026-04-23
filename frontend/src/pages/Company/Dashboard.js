@@ -10,7 +10,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -261,6 +261,122 @@ const CompanyDashboard = () => {
 };
 
 /* ========== PAGE ROUTER ========== */
+/* ========== WEEK DATE STRIP ========== */
+const WeekDateStrip = ({ viewDate, onPick }) => {
+  const [open, setOpen] = useState(false);
+  const nativeRef = React.useRef(null);
+
+  const parse = (iso) => new Date(iso + 'T00:00:00');
+  const fmt = (d) => d.toISOString().split('T')[0];
+  const current = parse(viewDate);
+
+  // Build 7-day window centered on viewDate (3 before, view, 3 after)
+  const days = [];
+  for (let i = -3; i <= 3; i++) {
+    const d = new Date(current);
+    d.setDate(d.getDate() + i);
+    days.push(d);
+  }
+
+  const shift = (n) => {
+    const d = new Date(current);
+    d.setDate(d.getDate() + n);
+    onPick(fmt(d));
+  };
+
+  const monthYear = current.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const weekLabels = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
+  const todayIso = new Date().toISOString().split('T')[0];
+
+  const openPicker = () => {
+    try { if (nativeRef.current?.showPicker) { nativeRef.current.showPicker(); return; } } catch { /* ignore */ }
+    setOpen(o => !o);
+  };
+
+  return (
+    <div className="mb-4" data-testid="week-date-strip">
+      <div className="flex items-center justify-between mb-2">
+        <button
+          onClick={openPicker}
+          className="flex items-center gap-1.5 text-base font-semibold text-slate-900 font-page-title capitalize"
+          data-testid="week-month-opener"
+        >
+          {monthYear}
+          <ChevronDown className="w-4 h-4 text-slate-500" />
+        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => shift(-7)}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+            data-testid="week-prev"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onPick(todayIso)}
+            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+            data-testid="week-today"
+          >
+            Hoje
+          </button>
+          <button
+            onClick={() => shift(7)}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+            data-testid="week-next"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+      {/* hidden native date input for showPicker */}
+      <input
+        ref={nativeRef}
+        type="date"
+        value={viewDate}
+        onChange={(e) => { if (e.target.value) { onPick(e.target.value); setOpen(false); } }}
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+      />
+      {open && (
+        <div className="mb-2">
+          <input
+            type="date"
+            value={viewDate}
+            onChange={(e) => { onPick(e.target.value); setOpen(false); }}
+            className="input-field text-sm"
+            autoFocus
+          />
+        </div>
+      )}
+      <div className="grid grid-cols-7 gap-1">
+        {days.map(d => {
+          const iso = fmt(d);
+          const isSel = iso === viewDate;
+          const isToday = iso === todayIso;
+          return (
+            <button
+              key={iso}
+              onClick={() => onPick(iso)}
+              className={`flex flex-col items-center py-2 rounded-xl text-xs font-medium transition-all ${
+                isSel
+                  ? 'bg-[var(--primary-color)] text-white shadow'
+                  : isToday
+                  ? 'bg-slate-100 text-slate-800'
+                  : 'text-slate-500 hover:bg-slate-50'
+              }`}
+              data-testid={`week-day-${iso}`}
+            >
+              <span className="text-[10px] uppercase tracking-wider opacity-80">{weekLabels[d.getDay()]}</span>
+              <span className={`text-lg font-bold leading-tight ${isSel ? '' : 'text-slate-900'}`}>{d.getDate()}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 /* ========== PROFESSIONAL STORIES (Instagram-like filter) ========== */
 const ProfessionalStories = ({ professionals, activeId, onPick }) => {
   const actives = (professionals || []).filter(p => p.is_active !== false);
@@ -1496,7 +1612,10 @@ const AgendaPage = () => {
   // New appointment modal
   const [showNewApt, setShowNewApt] = useState(false);
 
+  // Visible date (for the week-strip header). Defaults to today.
   const today = new Date().toISOString().split('T')[0];
+  const [viewDate, setViewDate] = useState(today);
+  const [showAdvFilters, setShowAdvFilters] = useState(false);
 
   useEffect(() => {
     load();
@@ -1505,9 +1624,9 @@ const AgendaPage = () => {
   }, []);
   const load = async () => { const r = await schedulingAPI.getAppointments(); setAppointments(r.data); };
 
-  // Quick pill filter (Hoje / Pendentes / Confirmados / Concluidos / Todos)
+  // Quick pill filter. 'hoje' now means "the date selected in the header strip".
   const byPill = (a) => {
-    if (filter === 'hoje') return a.date === today;
+    if (filter === 'hoje') return a.date === viewDate;
     if (filter === 'pendentes') return a.status === 'pendente';
     if (filter === 'confirmados') return a.status === 'confirmado';
     if (filter === 'concluidos') return a.status === 'concluido';
@@ -1595,57 +1714,12 @@ const AgendaPage = () => {
   ];
 
   return (
-    <div className="animate-fade-in" data-testid="agenda-page">
-      {/* Header with Agendar button */}
-      <div className="flex items-center justify-end mb-4">
-        <button
-          onClick={() => setShowNewApt(true)}
-          className="btn-primary flex items-center gap-2 text-sm"
-          data-testid="agenda-new-btn"
-        >
-          <Plus className="w-4 h-4" /> Agendar
-        </button>
-      </div>
-
-      {/* 4 Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <MetricCard
-          label="Total Geral"
-          value={totalCount}
-          subtitle="Todos os agendamentos"
-          icon={<Users className="w-6 h-6" />}
-          iconBg="bg-blue-50"
-          iconColor="text-blue-600"
-          testId="metric-total"
-        />
-        <MetricCard
-          label="Hoje"
-          value={todayCount}
-          subtitle={todayStr}
-          icon={<CalendarCheck className="w-6 h-6" />}
-          iconBg="bg-violet-50"
-          iconColor="text-violet-600"
-          testId="metric-today"
-        />
-        <MetricCard
-          label="Concluidos"
-          value={concludedCount}
-          subtitle="Total finalizado"
-          icon={<Check className="w-6 h-6" />}
-          iconBg="bg-emerald-50"
-          iconColor="text-emerald-600"
-          testId="metric-concluded"
-        />
-        <MetricCard
-          label="Taxa Conclusao"
-          value={`${conclusionRate}%`}
-          subtitle="Eficiencia geral"
-          icon={<Sparkles className="w-6 h-6" />}
-          iconBg="bg-orange-50"
-          iconColor="text-orange-600"
-          testId="metric-rate"
-        />
-      </div>
+    <div className="animate-fade-in relative" data-testid="agenda-page">
+      {/* Week date strip header */}
+      <WeekDateStrip
+        viewDate={viewDate}
+        onPick={(iso) => { setViewDate(iso); setFilter('hoje'); }}
+      />
 
       {/* Stories-style professional filter */}
       <ProfessionalStories
@@ -1654,68 +1728,83 @@ const AgendaPage = () => {
         onPick={(id) => setProfessionalFilter(id)}
       />
 
-      {/* Advanced Filters Card */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 mb-4 shadow-sm" data-testid="agenda-filters-card">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
-          <div className="relative lg:col-span-2">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              placeholder="Buscar por cliente, servico ou profissional"
-              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-              data-testid="agenda-search"
-            />
-          </div>
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-            className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            data-testid="agenda-status-filter"
+      {/* Collapsible Advanced Filters */}
+      <div className="mb-3">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <button
+            type="button"
+            onClick={() => setShowAdvFilters(s => !s)}
+            className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
+            data-testid="toggle-adv-filters"
           >
-            <option value="todos">Todos os status</option>
-            <option value="pendente">Pendente</option>
-            <option value="confirmado">Confirmado</option>
-            <option value="concluido">Concluido</option>
-            <option value="cancelado">Cancelado</option>
-          </select>
-          <select
-            value={professionalFilter}
-            onChange={e => setProfessionalFilter(e.target.value)}
-            className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            data-testid="agenda-prof-filter"
-          >
-            <option value="todos">Todos profissionais</option>
-            {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <div className="grid grid-cols-2 gap-2 lg:col-span-1">
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={e => setDateFrom(e.target.value)}
-              className="px-2 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-              data-testid="agenda-date-from"
-              placeholder="De"
-            />
-            <input
-              type="date"
-              value={dateTo}
-              onChange={e => setDateTo(e.target.value)}
-              className="px-2 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-              data-testid="agenda-date-to"
-              placeholder="Ate"
-            />
-          </div>
-        </div>
-        {hasAnyAdvFilter && (
-          <div className="mt-2 flex justify-end">
+            <Filter className="w-3.5 h-3.5" />
+            Filtros {hasAnyAdvFilter && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary" />}
+            <ChevronRight className={`w-3.5 h-3.5 transition-transform ${showAdvFilters ? 'rotate-90' : ''}`} />
+          </button>
+          {hasAnyAdvFilter && (
             <button
               onClick={clearFilters}
               className="text-xs text-slate-500 hover:text-primary font-medium flex items-center gap-1"
               data-testid="agenda-clear-filters"
             >
-              <X className="w-3 h-3" /> Limpar filtros
+              <X className="w-3 h-3" /> Limpar
             </button>
+          )}
+        </div>
+        {showAdvFilters && (
+          <div
+            className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm animate-fade-in"
+            data-testid="agenda-filters-card"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+              <div className="relative lg:col-span-2">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                  placeholder="Buscar por cliente, servico ou profissional"
+                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  data-testid="agenda-search"
+                />
+              </div>
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                data-testid="agenda-status-filter"
+              >
+                <option value="todos">Todos os status</option>
+                <option value="pendente">Pendente</option>
+                <option value="confirmado">Confirmado</option>
+                <option value="concluido">Concluido</option>
+                <option value="cancelado">Cancelado</option>
+              </select>
+              <select
+                value={professionalFilter}
+                onChange={e => setProfessionalFilter(e.target.value)}
+                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                data-testid="agenda-prof-filter"
+              >
+                <option value="todos">Todos profissionais</option>
+                {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <div className="grid grid-cols-2 gap-2 lg:col-span-1">
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={e => setDateFrom(e.target.value)}
+                  className="px-2 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  data-testid="agenda-date-from"
+                />
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                  className="px-2 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  data-testid="agenda-date-to"
+                />
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1869,6 +1958,16 @@ const AgendaPage = () => {
           onSave={handleCreateAppointment}
         />
       )}
+
+      {/* Floating Action Button (Novo agendamento) */}
+      <button
+        onClick={() => setShowNewApt(true)}
+        className="fixed right-4 bottom-24 lg:bottom-8 z-30 w-14 h-14 rounded-full bg-[var(--primary-color)] text-white shadow-xl hover:shadow-2xl flex items-center justify-center transition-all hover:scale-105 active:scale-95"
+        data-testid="agenda-new-btn"
+        title="Novo agendamento"
+      >
+        <Plus className="w-6 h-6" />
+      </button>
     </div>
   );
 };
