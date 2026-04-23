@@ -526,8 +526,26 @@ const DateHourPicker = ({ formData, setFormData, availableSlots, loadSlots, prim
 
   const prettyDate = React.useMemo(() => {
     const d = new Date(current + 'T00:00:00');
-    return d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+    // Compact format: dd/mm/aa
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(-2);
+    const weekdayShort = d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+    return `${weekdayShort} ${dd}/${mm}/${yy}`;
   }, [current]);
+
+  // Filter out past time slots when selected date is today
+  const displayedSlots = React.useMemo(() => {
+    if (current !== today) return availableSlots;
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    return availableSlots.filter(slot => {
+      const parts = (slot || '').split(':');
+      if (parts.length < 2) return true;
+      const slotMinutes = (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+      return slotMinutes > nowMinutes;
+    });
+  }, [availableSlots, current, today]);
 
   const openPicker = () => {
     // Prefer native picker on mobile via showPicker API, fallback to input
@@ -592,11 +610,11 @@ const DateHourPicker = ({ formData, setFormData, availableSlots, loadSlots, prim
         </div>
       )}
       <div className="p-3">
-        {availableSlots.length === 0 ? (
+        {displayedSlots.length === 0 ? (
           <p className="text-center py-10 text-sm text-slate-500">Nenhum horario disponivel neste dia</p>
         ) : (
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2" data-testid="slot-grid">
-            {availableSlots.map(slot => (
+            {displayedSlots.map(slot => (
               <button
                 key={slot}
                 onClick={() => onPicked(slot)}

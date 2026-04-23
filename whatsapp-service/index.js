@@ -44,6 +44,13 @@ async function createConnection(instanceId) {
     defaultQueryTimeoutMs: 0,
     keepAliveIntervalMs: 25000,
     retryRequestDelayMs: 500,
+    // Mark device online on connect so WhatsApp server treats us as active
+    // (helps avoid "Aguardando mensagem..." prekey placeholder on recipients)
+    markOnlineOnConnect: true,
+    syncFullHistory: false,
+    // Return empty message body for retry requests so Baileys can handle
+    // pre-key re-sends without throwing and leaving recipient on placeholder
+    getMessage: async () => ({ conversation: '' }),
   });
 
   const instance = {
@@ -170,10 +177,68 @@ app.post('/instances/:id/send', async (req, res) => {
   }
   const { phone, message } = req.body;
   try {
-    const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
-    await instance.sock.sendMessage(jid, { text: message });
-    res.json({ success: true });
+    // Resolve the correct JID using onWhatsApp() so WhatsApp accepts the
+    // number as registered. This prevents "Aguardando mensagem..." (phantom
+    // pre-key placeholder) and the Indonesia +62 mis-interpretation that
+    // happens when we send to a malformed/unresolved JID.
+    let targetJid = null;
+    if (phone && !phone.includes('@')) {
+      const candidates = [];
+      const digits = String(phone).replace(/\D/g, '');
+      // Primary: as provided (normalized Brazilian format)
+      candidates.push(digits);
+      // Fallback 1: remove leading 55 if present
+      if (digits.startsWith('55') && digits.length >= 12) {
+        candidates.push(digits.slice(2));
+      }
+      // Fallback 2: add 55 if not present
+      if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) {
+        candidates.push('55' + digits);
+      }
+      // Fallback 3: 12-digit BR missing the leading 5 (e.g. 5562XXXXXXXXX stripped)
+      if (digits.length === 12 && digits.startsWith('62')) {
+        candidates.push('55' + digits);
+      }
+      // Fallback 4: BR 9th digit variants — add/remove the mobile "9"
+      if (digits.length === 13 && digits.startsWith('55')) {
+        const withoutNine = digits.slice(0, 4) + digits.slice(5);
+        candidates.push(withoutNine);
+      } else if (digits.length === 12 && digits.startsWith('55')) {
+        // Add the 9th digit after DDD
+        candidates.push(digits.slice(0, 4) + '9' + digits.slice(4));
+      }
+
+      const seen = new Set();
+      const uniqueCandidates = candidates.filter(c => {
+        if (!c || seen.has(c)) return false;
+        seen.add(c);
+        return true;
+      });
+
+      for (const cand of uniqueCandidates) {
+        try {
+          const results = await instance.sock.onWhatsApp(cand);
+          if (Array.isArray(results) && results.length > 0) {
+            const hit = results.find(r => r?.exists) || results[0];
+            if (hit?.jid) { targetJid = hit.jid; break; }
+          }
+        } catch (e) {
+          console.warn(`[${req.params.id}] onWhatsApp failed for ${cand}:`, e.message);
+        }
+      }
+
+      if (!targetJid) {
+        // Last resort: use the first candidate with s.whatsapp.net (legacy behavior)
+        targetJid = `${uniqueCandidates[0] || digits}@s.whatsapp.net`;
+      }
+    } else {
+      targetJid = phone;
+    }
+
+    await instance.sock.sendMessage(targetJid, { text: message });
+    res.json({ success: true, jid: targetJid });
   } catch (e) {
+    console.error(`[${req.params.id}] send error:`, e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
