@@ -431,6 +431,14 @@ const MyAppointmentsModal = ({ slug, primaryColor, onClose }) => {
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao cancelar'); }
   };
 
+  const handleConfirm = async (id) => {
+    try {
+      await publicAPI.confirmMyAppointment(slug, id);
+      setAppointments(a => a.map(apt => apt.id === id ? { ...apt, status: 'confirmado' } : apt));
+      toast.success('Agendamento confirmado!');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao confirmar'); }
+  };
+
   const STATUS = { confirmado: { bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'Confirmado' }, pendente: { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Pendente' }, cancelado: { bg: 'bg-red-100', text: 'text-red-700', label: 'Cancelado' }, concluido: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Concluido' } };
 
   return (
@@ -465,15 +473,27 @@ const MyAppointmentsModal = ({ slug, primaryColor, onClose }) => {
             )}
             {appointments.map(apt => {
               const st = STATUS[apt.status] || STATUS.pendente;
+              const isPending = apt.status === 'pendente';
               return (
                 <div key={apt.id} className="p-4 border border-slate-200 rounded-xl" data-testid={`my-apt-${apt.id}`}>
                   <div className="flex items-start justify-between mb-2">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-bold" style={{ color: primaryColor }}>{apt.date?.split('-').reverse().join('/')} - {apt.time}</p>
                       <p className="text-sm font-medium text-slate-900">{apt.service_name}</p>
                       <p className="text-xs text-slate-500">{apt.professional_name}</p>
                     </div>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${st.bg} ${st.text}`}>{st.label}</span>
+                    {isPending ? (
+                      <button
+                        onClick={() => handleConfirm(apt.id)}
+                        className="flex-shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm hover:opacity-90 transition-opacity"
+                        style={{ background: primaryColor }}
+                        data-testid={`confirm-my-apt-${apt.id}`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Confirmar
+                      </button>
+                    ) : (
+                      <span className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium ${st.bg} ${st.text}`}>{st.label}</span>
+                    )}
                   </div>
                   {apt.price > 0 && <p className="text-xs text-slate-500">R$ {apt.price.toFixed(2)}</p>}
                   {apt.status !== 'cancelado' && apt.status !== 'concluido' && (

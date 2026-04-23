@@ -124,7 +124,7 @@ const CompanyDashboard = () => {
   const hasFeature = (key) => enabledFeatures.includes(key);
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex">
+    <div className="min-h-screen bg-[#F8FAFC] flex overflow-x-hidden">
       {/* Mobile overlay */}
       {mobileSidebarOpen && <div className="fixed inset-0 bg-slate-900/50 z-30 lg:hidden" onClick={() => setMobileSidebarOpen(false)} />}
 
@@ -204,7 +204,7 @@ const CompanyDashboard = () => {
       </aside>
 
       {/* Main Content */}
-      <main className={`flex-1 ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-60'} transition-all duration-200`}>
+      <main className={`flex-1 min-w-0 ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-60'} transition-all duration-200`}>
         <header className="glass border-b border-slate-200 sticky top-0 z-30 px-4 lg:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             {sidebarEnabledMobile && (
@@ -1805,9 +1805,9 @@ const AgendaPage = () => {
             <div key={a.id}
               className={`rounded-xl border overflow-hidden ${APT_STATUS_CARD[a.status] || 'bg-white border-slate-200'} ${isCancelled ? 'opacity-70' : ''}`}
               data-testid={`agenda-item-${a.id}`}>
-              <div className="flex items-stretch">
+              <div className="flex flex-wrap sm:flex-nowrap items-stretch">
                 <div className={`w-1 flex-shrink-0 ${APT_STATUS_DOT[a.status] || 'bg-slate-300'}`} />
-                <div className="flex-1 px-3 py-3 min-w-0">
+                <div className="flex-1 basis-full sm:basis-auto px-3 py-3 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-bold text-primary tabular-nums leading-none">{a.time}</span>
                     <span className="text-[11px] text-slate-400 leading-none">{a.date?.split('-').reverse().join('/')}</span>
@@ -1819,7 +1819,7 @@ const AgendaPage = () => {
                   </p>
                   {a.payment_method && <p className="text-[10px] text-emerald-600 font-medium mt-0.5">{a.payment_method.replace('_', ' ')}</p>}
                 </div>
-                <div className="flex items-center px-2 flex-shrink-0 gap-1">
+                <div className="flex items-center justify-end w-full sm:w-auto px-2 pb-2 sm:py-0 sm:pb-0 flex-shrink-0 gap-1 border-t sm:border-t-0 border-slate-200/60 sm:border-transparent">
                   {!isCancelled && !isDone && canEdit && (
                     <button onClick={() => setEditApt(a)} className="p-1.5 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10" data-testid={`agenda-edit-${a.id}`} title="Editar">
                       <Pencil className="w-3.5 h-3.5" />

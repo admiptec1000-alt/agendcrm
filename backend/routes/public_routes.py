@@ -569,6 +569,31 @@ async def cancel_my_appointment(
     return {"message": "Agendamento cancelado"}
 
 
+@router.put("/booking/{slug}/my-appointments/{appointment_id}/confirm")
+async def confirm_my_appointment(
+    slug: str,
+    appointment_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    page = await find_booking_page(db, slug)
+    if not page:
+        raise HTTPException(status_code=404, detail="Pagina nao encontrada")
+
+    apt = await db.appointments.find_one({"id": appointment_id, "company_id": page["company_id"]})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Agendamento nao encontrado")
+    if apt.get("status") in ["cancelado", "concluido"]:
+        raise HTTPException(status_code=400, detail="Agendamento ja finalizado")
+    if apt.get("status") == "confirmado":
+        return {"message": "Agendamento ja confirmado"}
+
+    await db.appointments.update_one(
+        {"id": appointment_id},
+        {"$set": {"status": "confirmado", "confirmed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"message": "Agendamento confirmado"}
+
+
 # === INDOOR PUBLIC DISPLAY ===
 @router.get("/indoor/{slug}")
 async def get_indoor_display(

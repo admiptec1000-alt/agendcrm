@@ -169,6 +169,7 @@ export const publicAPI = {
   getMyAppointments: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/my-appointments/${phone}`),
   getSubscription: (slug, phone) => axios.get(`${API_URL}/public/booking/${slug}/subscription`, { params: { phone } }),
   cancelMyAppointment: (slug, appointmentId) => axios.put(`${API_URL}/public/booking/${slug}/my-appointments/${appointmentId}/cancel`),
+  confirmMyAppointment: (slug, appointmentId) => axios.put(`${API_URL}/public/booking/${slug}/my-appointments/${appointmentId}/confirm`),
 };
 
 // WhatsApp API
