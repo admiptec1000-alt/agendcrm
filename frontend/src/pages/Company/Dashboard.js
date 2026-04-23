@@ -2054,7 +2054,7 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
           </button>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-5 space-y-5">
+        <div className="overflow-y-auto overflow-x-hidden flex-1 p-5 space-y-5 min-w-0">
           {/* Step toggle */}
           <div className="flex gap-2 p-1 rounded-xl bg-slate-100">
             <button
@@ -2196,13 +2196,13 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
           )}
 
           {/* Booking section */}
-          <div>
+          <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Detalhes do Agendamento</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
               <select
                 value={book.service_id}
                 onChange={e => setBook({...book, service_id: e.target.value})}
-                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full min-w-0 px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
                 data-testid="new-apt-service"
               >
                 <option value="">Servico...</option>
@@ -2213,7 +2213,7 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
               <select
                 value={book.professional_id}
                 onChange={e => setBook({...book, professional_id: e.target.value})}
-                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full min-w-0 px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
                 data-testid="new-apt-prof"
               >
                 <option value="">Profissional...</option>
@@ -2225,14 +2225,14 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
                 type="date"
                 value={book.date}
                 onChange={e => setBook({...book, date: e.target.value})}
-                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full min-w-0 px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
                 data-testid="new-apt-date"
               />
               <input
                 type="time"
                 value={book.time}
                 onChange={e => setBook({...book, time: e.target.value})}
-                className="px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full min-w-0 px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
                 data-testid="new-apt-time"
               />
             </div>
