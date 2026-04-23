@@ -10,7 +10,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu
+  ChevronLeft, ChevronRight, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -1693,6 +1693,21 @@ const AgendaPage = () => {
                     <button onClick={() => openConclude(a)}
                       className="px-2.5 py-1.5 rounded-lg bg-primary text-white text-[11px] font-semibold active:scale-95 transition-transform"
                       data-testid={`agenda-conclude-${a.id}`}>Concluir</button>
+                  )}
+                  {!isCancelled && !isDone && (
+                    <button
+                      onClick={() => {
+                        const phone = (a.customer_phone || '').replace(/\D/g, '');
+                        const normalized = phone.startsWith('55') ? phone : `55${phone}`;
+                        const msg = encodeURIComponent(`Ola ${a.customer_name}, sobre seu agendamento de ${a.service_name} no dia ${a.date.split('-').reverse().join('/')} as ${a.time}:`);
+                        window.open(`https://wa.me/${normalized}?text=${msg}`, '_blank');
+                      }}
+                      className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-50"
+                      title="Enviar WhatsApp"
+                      data-testid={`agenda-wa-${a.id}`}
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                    </button>
                   )}
                   {!isCancelled && !isDone && (
                     <button onClick={() => handleStatusChange(a.id, 'cancelado')}

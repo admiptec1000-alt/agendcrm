@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, HTMLResponse
 import json
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
@@ -335,6 +335,10 @@ async def create_public_booking(
     })
     if client_sub and _calc_sub_status(client_sub) == "active" and use_subscription:
         plan = await db.subscription_plans.find_one({"id": client_sub["plan_id"]})
+        # Respect weekday restriction (fall back to normal price if not allowed)
+        from routes.scheduling_routes import _plan_allows_weekday
+        if plan and not _plan_allows_weekday(plan, data.date):
+            plan = None
         if plan:
             cost = None
             for item in plan.get("items", []):
@@ -378,11 +382,14 @@ async def create_public_booking(
         "status": AppointmentStatus.PENDENTE,
         "notes": data.notes,
         "source": "public_booking",
+        "confirm_token": str(uuid.uuid4()),
+        "cancel_token": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.appointments.insert_one(appointment)
 
-    # Send WhatsApp + auto-tag confirmed
+    # Send WhatsApp welcome notification (fire-and-forget).
+    # IMPORTANT: status stays PENDENTE until the client clicks the confirm link.
     try:
         from notifications import notify_appointment_created
         import os as _os
@@ -391,9 +398,8 @@ async def create_public_booking(
         if sent:
             await db.appointments.update_one(
                 {"id": appointment_id},
-                {"$set": {"status": AppointmentStatus.CONFIRMADO, "whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
+                {"$set": {"whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
             )
-            appointment["status"] = AppointmentStatus.CONFIRMADO
     except Exception:
         pass
     
@@ -421,6 +427,70 @@ async def create_public_booking(
         "message": "Agendamento realizado com sucesso!",
         "appointment": {k: v for k, v in appointment.items() if k != "_id"}
     }
+
+
+def _render_status_page(title: str, message: str, color: str) -> HTMLResponse:
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>
+  body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}}
+  .card{{max-width:420px;width:100%;background:#1e293b;border-radius:24px;padding:40px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4)}}
+  .icon{{width:72px;height:72px;margin:0 auto 20px;border-radius:50%;background:{color};display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff}}
+  h1{{font-size:22px;margin:0 0 8px;color:#f1f5f9}}
+  p{{color:#94a3b8;line-height:1.5}}
+</style></head><body>
+<div class="card">
+  <div class="icon">✓</div>
+  <h1>{title}</h1>
+  <p>{message}</p>
+</div></body></html>"""
+    return HTMLResponse(content=html)
+
+
+@router.get("/apt/confirmar/{token}", response_class=HTMLResponse)
+async def confirm_appointment_by_token(
+    token: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    apt = await db.appointments.find_one({"confirm_token": token})
+    if not apt:
+        return _render_status_page("Link invalido", "Este link de confirmacao nao existe ou ja expirou.", "#ef4444")
+    if apt.get("status") == "cancelado":
+        return _render_status_page("Agendamento cancelado", "Este agendamento foi cancelado. Fale com a empresa para reagendar.", "#f59e0b")
+    if apt.get("status") != "confirmado":
+        await db.appointments.update_one(
+            {"id": apt["id"]},
+            {"$set": {"status": "confirmado", "confirmed_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    return _render_status_page(
+        "Agendamento confirmado!",
+        f"Te esperamos em {apt.get('date','')} as {apt.get('time','')}. Ate breve!",
+        "#10b981"
+    )
+
+
+@router.get("/apt/cancelar/{token}", response_class=HTMLResponse)
+async def cancel_appointment_by_token(
+    token: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    apt = await db.appointments.find_one({"cancel_token": token})
+    if not apt:
+        return _render_status_page("Link invalido", "Este link de cancelamento nao existe ou ja expirou.", "#ef4444")
+    if apt.get("status") == "cancelado":
+        return _render_status_page("Ja cancelado", "Este agendamento ja estava cancelado.", "#64748b")
+    await db.appointments.update_one(
+        {"id": apt["id"]},
+        {"$set": {"status": "cancelado", "cancelled_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return _render_status_page(
+        "Agendamento cancelado",
+        "Seu agendamento foi cancelado e o horario ja foi liberado. Se mudar de ideia, agende um novo horario.",
+        "#ef4444"
+    )
 
 
 @router.get("/booking/{slug}/subscription")

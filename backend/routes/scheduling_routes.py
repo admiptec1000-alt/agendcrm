@@ -29,6 +29,9 @@ class SubscriptionPlanCreate(BaseModel):
     items: List[SubscriptionPlanItem] = []  # detailed per-service credits
     included_service_ids: List[str] = []  # legacy fallback
     description: Optional[str] = None
+    # Weekdays the plan can be redeemed. 0=Sunday .. 6=Saturday.
+    # Empty/None means "any day".
+    valid_weekdays: Optional[List[int]] = None
 
 class ClientSubscriptionCreate(BaseModel):
     client_phone: str
@@ -93,6 +96,21 @@ async def _resolve_own_professional_id(db: AsyncIOMotorDatabase, user: dict) -> 
     )
     return (my or {}).get("id")
 
+
+def _plan_allows_weekday(plan: dict, date_str: str) -> bool:
+    """Check if the plan can be used on the weekday of date_str (YYYY-MM-DD).
+    Uses 0=Sunday .. 6=Saturday to match the UI toggles."""
+    valid = plan.get("valid_weekdays")
+    if not valid:  # None or empty => any day
+        return True
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        # Python's weekday(): Mon=0..Sun=6. Convert to Sun=0..Sat=6.
+        wd = (dt.weekday() + 1) % 7
+        return wd in set(valid)
+    except Exception:
+        return True
+
 # === APPOINTMENTS ===
 @router.get("/appointments")
 async def list_appointments(
@@ -148,6 +166,10 @@ async def create_appointment(
     })
     if want_sub and client_sub and _calc_sub_status(client_sub) == "active":
         plan = await db.subscription_plans.find_one({"id": client_sub["plan_id"]})
+        if plan and not _plan_allows_weekday(plan, data.date):
+            # Plan doesn't cover this weekday. Silently fall back to normal price
+            # so the client can still book — but the subscription is not debited.
+            plan = None
         if plan:
             # Find credits_per_use for this service
             cost = None
@@ -195,11 +217,15 @@ async def create_appointment(
         "subscription_applied": subscription_applied,
         "status": AppointmentStatus.PENDENTE,
         "notes": data.notes,
+        "confirm_token": str(uuid.uuid4()),
+        "cancel_token": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.appointments.insert_one(appointment)
 
-    # Send WhatsApp confirmation (fire-and-forget; auto-tag as confirmed if sent)
+    # Send WhatsApp welcome notification (fire-and-forget).
+    # IMPORTANT: status stays PENDENTE until the client clicks the confirm link
+    # included in the reminder message.
     try:
         from notifications import notify_appointment_created
         import os as _os
@@ -210,9 +236,8 @@ async def create_appointment(
         if sent:
             await db.appointments.update_one(
                 {"id": appointment_id},
-                {"$set": {"status": AppointmentStatus.CONFIRMADO, "whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
+                {"$set": {"whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
             )
-            appointment["status"] = AppointmentStatus.CONFIRMADO
     except Exception as e:
         logger.warning(f"Failed to notify appointment {appointment_id}: {e}")
 
@@ -1035,6 +1060,7 @@ class SubscriptionPlanUpdate(BaseModel):
     items: Optional[List[SubscriptionPlanItem]] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+    valid_weekdays: Optional[List[int]] = None
 
 @router.put("/subscription-plans/{plan_id}")
 async def update_subscription_plan(

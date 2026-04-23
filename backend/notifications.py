@@ -31,6 +31,9 @@ VAR_ALIASES = {
     "empresa": "empresa",
     "link_cancelar": "link_cancelar",
     "link": "link_cancelar",
+    "cancelar": "link_cancelar",
+    "link_confirmar": "link_confirmar",
+    "confirmar": "link_confirmar",
 }
 
 
@@ -157,10 +160,12 @@ async def notify_appointment_created(
     company = await db.companies.find_one({"id": company_id}, {"_id": 0, "name": 1})
     company_name = (company or {}).get("name", "")
 
-    # Build cancel link
-    cancel_link = ""
-    if base_url and company_slug:
-        cancel_link = f"{base_url.rstrip('/')}/{company_slug}/agenda?phone={appointment.get('customer_phone','')}"
+    # Build confirm/cancel links (token-based so the client can action without login)
+    base = base_url.rstrip("/") if base_url else ""
+    confirm_token = appointment.get("confirm_token", "")
+    cancel_token_v = appointment.get("cancel_token", "")
+    link_confirmar = f"{base}/api/public/apt/confirmar/{confirm_token}" if base and confirm_token else ""
+    link_cancelar = f"{base}/api/public/apt/cancelar/{cancel_token_v}" if base and cancel_token_v else ""
 
     # Default messages if no template configured
     date_pt = appointment.get("date", "")
@@ -177,16 +182,17 @@ async def notify_appointment_created(
         "data": date_pt,
         "hora": appointment.get("time", ""),
         "empresa": company_name,
-        "link_cancelar": cancel_link,
+        "link_confirmar": link_confirmar,
+        "link_cancelar": link_cancelar,
     }
 
     default_client_msg = (
         f"Ola *{client_vars['nome_cliente']}*! 😊\n\n"
-        f"Seu agendamento foi confirmado na *{company_name}*:\n"
+        f"Recebemos seu agendamento na *{company_name}*:\n"
         f"📅 {date_pt} as {client_vars['hora']}\n"
         f"💇 {client_vars['servico']}\n"
         f"👤 com {client_vars['nome_profissional']}\n\n"
-        f"Te esperamos! Se precisar cancelar acesse: {cancel_link}"
+        f"Em breve enviaremos um lembrete com os links para confirmar ou cancelar."
     )
     client_msg = render_template(template_msg, client_vars) if template_msg else default_client_msg
 

@@ -1061,6 +1061,8 @@ const PlanoModal = ({ plan, services, onClose, onSave }) => {
     description: plan?.description || '',
     is_active: plan?.is_active ?? true,
     items: plan?.items || [],
+    // 0=Sun .. 6=Sat. Empty = any day.
+    valid_weekdays: plan?.valid_weekdays || [],
   });
   const [newSvc, setNewSvc] = useState({ service_id: '', credits_per_use: 1 });
 
@@ -1107,6 +1109,34 @@ const PlanoModal = ({ plan, services, onClose, onSave }) => {
           <div>
             <label className="text-[10px] font-bold uppercase text-slate-400">Descrição (opcional)</label>
             <input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Ex: Inclui corte e barba ilimitados" className="input-field text-sm" />
+          </div>
+
+          <div className="border-t border-slate-100 pt-3">
+            <label className="text-[10px] font-bold uppercase text-slate-400 block mb-2">Dias válidos do plano</label>
+            <p className="text-[11px] text-slate-500 mb-2">Selecione os dias em que o plano pode ser usado. Se nenhum for marcado, vale para todos os dias.</p>
+            <div className="grid grid-cols-7 gap-1">
+              {['Dom','Seg','Ter','Qua','Qui','Sex','Sab'].map((label, idx) => {
+                const active = form.valid_weekdays.includes(idx);
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setForm(f => ({
+                      ...f,
+                      valid_weekdays: active
+                        ? f.valid_weekdays.filter(d => d !== idx)
+                        : [...f.valid_weekdays, idx]
+                    }))}
+                    className={`py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                      active ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                    }`}
+                    data-testid={`plan-weekday-${idx}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="border-t border-slate-100 pt-3">
