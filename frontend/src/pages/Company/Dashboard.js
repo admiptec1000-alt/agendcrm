@@ -261,6 +261,67 @@ const CompanyDashboard = () => {
 };
 
 /* ========== PAGE ROUTER ========== */
+/* ========== PROFESSIONAL STORIES (Instagram-like filter) ========== */
+const ProfessionalStories = ({ professionals, activeId, onPick }) => {
+  const actives = (professionals || []).filter(p => p.is_active !== false);
+  if (actives.length === 0) return null;
+
+  const initials = (name = '') => name.trim().split(/\s+/).slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
+
+  const Circle = ({ item, active, onClick, label, isAll }) => (
+    <button
+      onClick={onClick}
+      className="flex flex-col items-center gap-1 flex-shrink-0 group"
+      data-testid={`story-${isAll ? 'all' : item.id}`}
+    >
+      <div
+        className={`p-[2.5px] rounded-full transition-all ${
+          active
+            ? 'bg-gradient-to-tr from-amber-400 via-pink-500 to-fuchsia-600'
+            : 'bg-slate-200 group-hover:bg-slate-300'
+        }`}
+      >
+        <div className="bg-white rounded-full p-[2px]">
+          <div className="w-16 h-16 rounded-full overflow-hidden flex items-center justify-center bg-gradient-to-br from-slate-700 to-slate-900 text-white text-lg font-bold">
+            {isAll ? (
+              <Users className="w-6 h-6" />
+            ) : item.avatar_url || item.photo_url ? (
+              <img src={item.avatar_url || item.photo_url} alt={item.name} className="w-full h-full object-cover" />
+            ) : (
+              <span>{initials(item.name)}</span>
+            )}
+          </div>
+        </div>
+      </div>
+      <span className={`text-[11px] leading-tight max-w-[72px] truncate ${active ? 'text-slate-900 font-semibold' : 'text-slate-500'}`}>
+        {label}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="mb-4 -mx-1 px-1" data-testid="professional-stories">
+      <div className="flex items-center gap-3 overflow-x-auto pb-1 scrollbar-hide">
+        <Circle
+          isAll
+          active={activeId === 'todos'}
+          onClick={() => onPick('todos')}
+          label="Todos"
+        />
+        {actives.map(p => (
+          <Circle
+            key={p.id}
+            item={p}
+            active={activeId === p.id}
+            onClick={() => onPick(p.id)}
+            label={p.name?.split(' ')[0] || p.name}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
 /* ========== MOBILE BOTTOM NAV ========== */
 const MobileBottomNav = ({ activePage, setActivePage, onOpenMenu, hasFeature }) => {
   const items = [
@@ -1381,6 +1442,13 @@ const WhatsAppPage = () => {
 const PAYMENT_METHODS = [{key:'dinheiro',label:'Dinheiro'},{key:'pix',label:'PIX'},{key:'cartao_credito',label:'Credito'},{key:'cartao_debito',label:'Debito'}];
 const APT_STATUS_COLORS = { confirmado: 'bg-emerald-100 text-emerald-700', pendente: 'bg-amber-100 text-amber-700', cancelado: 'bg-red-100 text-red-700', concluido: 'bg-blue-100 text-blue-700' };
 const APT_STATUS_DOT = { confirmado: 'bg-emerald-500', pendente: 'bg-amber-500', cancelado: 'bg-red-500', concluido: 'bg-blue-500' };
+// Soft tints for the whole card background (light + distinctive)
+const APT_STATUS_CARD = {
+  confirmado: 'bg-emerald-50/70 border-emerald-200',
+  pendente:   'bg-amber-50/70 border-amber-200',
+  cancelado:  'bg-red-50/50 border-red-200',
+  concluido:  'bg-blue-50/70 border-blue-200',
+};
 
 const MetricCard = ({ label, value, subtitle, icon, iconBg, iconColor, testId }) => (
   <div
@@ -1579,6 +1647,13 @@ const AgendaPage = () => {
         />
       </div>
 
+      {/* Stories-style professional filter */}
+      <ProfessionalStories
+        professionals={professionals}
+        activeId={professionalFilter}
+        onPick={(id) => setProfessionalFilter(id)}
+      />
+
       {/* Advanced Filters Card */}
       <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 mb-4 shadow-sm" data-testid="agenda-filters-card">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
@@ -1663,7 +1738,9 @@ const AgendaPage = () => {
           const isDone = a.status === 'concluido';
           const extraCount = (a.extra_items || []).length;
           return (
-            <div key={a.id} className={`rounded-xl border bg-white overflow-hidden ${isCancelled ? 'opacity-60' : ''}`} data-testid={`agenda-item-${a.id}`}>
+            <div key={a.id}
+              className={`rounded-xl border overflow-hidden ${APT_STATUS_CARD[a.status] || 'bg-white border-slate-200'} ${isCancelled ? 'opacity-70' : ''}`}
+              data-testid={`agenda-item-${a.id}`}>
               <div className="flex items-stretch">
                 <div className={`w-1 flex-shrink-0 ${APT_STATUS_DOT[a.status] || 'bg-slate-300'}`} />
                 <div className="flex-1 px-3 py-3 min-w-0">
