@@ -1837,6 +1837,23 @@ const AgendaPage = () => {
                   )}
                   {!isCancelled && !isDone && (
                     <button
+                      onClick={async () => {
+                        try {
+                          await schedulingAPI.sendAppointmentReminder(a.id);
+                          toast.success('Lembrete enviado via WhatsApp!');
+                        } catch (e) {
+                          toast.error(e.response?.data?.detail || 'Erro ao enviar lembrete');
+                        }
+                      }}
+                      className="p-1.5 rounded-lg text-amber-500 hover:bg-amber-50"
+                      title="Enviar lembrete com link de confirmacao"
+                      data-testid={`agenda-reminder-${a.id}`}
+                    >
+                      <Bell className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {!isCancelled && !isDone && (
+                    <button
                       onClick={() => {
                         const phone = (a.customer_phone || '').replace(/\D/g, '');
                         const normalized = phone.startsWith('55') ? phone : `55${phone}`;
@@ -1844,7 +1861,7 @@ const AgendaPage = () => {
                         window.open(`https://wa.me/${normalized}?text=${msg}`, '_blank');
                       }}
                       className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-50"
-                      title="Enviar WhatsApp"
+                      title="Abrir conversa no WhatsApp"
                       data-testid={`agenda-wa-${a.id}`}
                     >
                       <MessageCircle className="w-3.5 h-3.5" />
@@ -2646,7 +2663,7 @@ const PROCESS_TYPES = [
   { key: 'aniversario', label: 'Aniversario', desc: 'Mensagem de aniversario' },
 ];
 
-const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', '{empresa}', '{valor}'];
+const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', '{empresa}', '{valor}', '{link_confirmar}', '{link_cancelar}'];
 
 const ConexoesPage = () => {
   const [tab, setTab] = useState('conexoes');
@@ -2939,11 +2956,74 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
 const TemplateEditor = ({ tmpl, onSave, onCancel }) => {
   const [message, setMessage] = useState(tmpl.message || '');
   const [active, setActive] = useState(tmpl.active);
+  const textareaRef = React.useRef(null);
+
+  const insertVar = (variable) => {
+    const ta = textareaRef.current;
+    if (!ta) {
+      setMessage(m => m + variable);
+      return;
+    }
+    const start = ta.selectionStart ?? message.length;
+    const end = ta.selectionEnd ?? message.length;
+    const next = message.slice(0, start) + variable + message.slice(end);
+    setMessage(next);
+    // Restore focus + cursor after the inserted variable
+    requestAnimationFrame(() => {
+      try {
+        ta.focus();
+        const pos = start + variable.length;
+        ta.setSelectionRange(pos, pos);
+      } catch { /* ignore */ }
+    });
+  };
+
+  const isReminder = tmpl.key === 'lembrete';
+
   return (
     <div className="space-y-3">
       <p className="text-sm font-semibold text-slate-900">{tmpl.label}</p>
-      <textarea value={message} onChange={e => setMessage(e.target.value)} rows={3}
-        className="input-field text-sm" placeholder="Ola {nome}, seu agendamento de {servico} foi confirmado para {data} as {hora}." data-testid={`template-msg-${tmpl.key}`} />
+      <textarea
+        ref={textareaRef}
+        value={message}
+        onChange={e => setMessage(e.target.value)}
+        rows={4}
+        className="input-field text-sm"
+        placeholder={
+          isReminder
+            ? 'Ola {nome}, lembrando do seu agendamento de {servico} em {data} as {hora}. Para confirmar clique: {link_confirmar}'
+            : 'Ola {nome}, seu agendamento de {servico} foi confirmado para {data} as {hora}.'
+        }
+        data-testid={`template-msg-${tmpl.key}`}
+      />
+      <div>
+        <p className="text-[11px] font-semibold text-slate-500 mb-1.5">Clique para inserir variavel no texto:</p>
+        <div className="flex flex-wrap gap-1.5">
+          {VARIABLES.map(v => {
+            const isLink = v.includes('link_');
+            return (
+              <button
+                type="button"
+                key={v}
+                onClick={() => insertVar(v)}
+                className={`px-2 py-1 rounded-md text-[11px] font-mono font-medium border transition-colors ${
+                  isLink
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                    : 'bg-slate-50 text-primary border-slate-200 hover:bg-slate-100'
+                }`}
+                data-testid={`var-insert-${v.replace(/[{}]/g, '')}`}
+              >
+                {v}
+              </button>
+            );
+          })}
+        </div>
+        {isReminder && (
+          <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md mt-2 p-2 leading-relaxed">
+            <b>Dica:</b> use <code className="font-mono">{'{link_confirmar}'}</code> no lembrete. Quando o cliente clicar no link recebido via WhatsApp, o agendamento e confirmado automaticamente (fica verde na agenda).
+          </p>
+        )}
+      </div>
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="w-4 h-4 text-primary rounded" />

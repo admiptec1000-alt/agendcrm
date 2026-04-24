@@ -141,6 +141,7 @@ export const schedulingAPI = {
   getOnboardingStatus: () => api.get('/scheduling/onboarding-status'),
   completeOnboarding: () => api.post('/scheduling/onboarding-complete'),
   concludeAppointment: (id, data) => api.put(`/scheduling/appointments/${id}/conclude`, data),
+  sendAppointmentReminder: (id) => api.post(`/scheduling/appointments/${id}/send-reminder`),
   getFinancialTransactions: (params) => api.get('/scheduling/financial/transactions', { params }),
   getFinancialSummary: (params) => api.get('/scheduling/financial/summary', { params }),
   getPermissionProfiles: () => api.get('/scheduling/permission-profiles'),

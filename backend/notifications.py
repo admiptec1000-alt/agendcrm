@@ -7,6 +7,7 @@ once the message is dispatched (user's product decision).
 import os
 import logging
 import re
+from datetime import timezone
 from typing import Optional
 
 import httpx
@@ -220,3 +221,93 @@ async def notify_appointment_created(
         await _send_via_baileys(conn["id"], prof_phone, prof_msg)
 
     return sent_any
+
+
+async def notify_appointment_reminder(
+    db: AsyncIOMotorDatabase,
+    company_id: str,
+    appointment: dict,
+    base_url: str = "",
+) -> bool:
+    """Send reminder to client using the 'lembrete' template.
+    Substitutes {link_confirmar} so the client can tap the link and the
+    appointment is automatically marked as confirmed.
+    """
+    conn = await _get_active_whatsapp_conn(db, company_id)
+    if not conn:
+        logger.warning(f"[reminder] No connected WhatsApp for company={company_id}")
+        return False
+
+    # Verify remote status
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get(f"{WA_SERVICE_URL}/instances/{conn['id']}/status")
+            if r.status_code == 200 and not (r.json() or {}).get("connected"):
+                logger.warning(f"[reminder] Baileys not connected for conn={conn['id']}")
+                return False
+    except Exception:
+        pass
+
+    # Load reminder template
+    tmpl = await db.message_templates.find_one(
+        {"company_id": company_id, "process_key": "lembrete", "active": True},
+        {"_id": 0}
+    )
+
+    company = await db.companies.find_one({"id": company_id}, {"_id": 0, "name": 1})
+    company_name = (company or {}).get("name", "")
+
+    base = base_url.rstrip("/") if base_url else ""
+    confirm_token = appointment.get("confirm_token", "")
+    cancel_token_v = appointment.get("cancel_token", "")
+    link_confirmar = f"{base}/api/public/apt/confirmar/{confirm_token}" if base and confirm_token else ""
+    link_cancelar = f"{base}/api/public/apt/cancelar/{cancel_token_v}" if base and cancel_token_v else ""
+
+    date_pt = appointment.get("date", "")
+    try:
+        y, m, d = date_pt.split("-")
+        date_pt = f"{d}/{m}/{y}"
+    except Exception:
+        pass
+
+    variables = {
+        "nome_cliente": appointment.get("customer_name", ""),
+        "nome_profissional": appointment.get("professional_name", ""),
+        "servico": appointment.get("service_name", ""),
+        "data": date_pt,
+        "hora": appointment.get("time", ""),
+        "empresa": company_name,
+        "valor": f"R$ {(appointment.get('price') or 0):.2f}".replace(".", ","),
+        "link_confirmar": link_confirmar,
+        "link_cancelar": link_cancelar,
+    }
+
+    default_msg = (
+        f"Ola *{variables['nome_cliente']}*!\n\n"
+        f"Lembrando do seu agendamento na *{company_name}*:\n"
+        f"📅 {date_pt} as {variables['hora']}\n"
+        f"💇 {variables['servico']}\n"
+        f"👤 com {variables['nome_profissional']}\n\n"
+        + (f"✅ Confirme seu horario: {link_confirmar}\n" if link_confirmar else "")
+        + (f"❌ Precisa cancelar? {link_cancelar}" if link_cancelar else "")
+    )
+
+    message = render_template((tmpl or {}).get("message"), variables) if tmpl else default_msg
+    message = message.strip()
+    if not message:
+        message = default_msg
+
+    phone = appointment.get("customer_phone")
+    if not phone:
+        return False
+    ok = await _send_via_baileys(conn["id"], phone, message)
+    if ok:
+        try:
+            from datetime import datetime as _dt
+            await db.appointments.update_one(
+                {"id": appointment["id"]},
+                {"$set": {"reminder_sent_at": _dt.now(timezone.utc).isoformat()}}
+            )
+        except Exception:
+            pass
+    return ok

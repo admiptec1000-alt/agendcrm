@@ -338,6 +338,36 @@ async def delete_appointment(
     return {"message": "Agendamento deletado"}
 
 
+# === MANUAL REMINDER (uses 'lembrete' template with link_confirmar) ===
+@router.post("/appointments/{appointment_id}/send-reminder")
+async def send_appointment_reminder(
+    appointment_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    apt = await db.appointments.find_one(
+        {"id": appointment_id, "company_id": user["company_id"]}, {"_id": 0}
+    )
+    if not apt:
+        raise HTTPException(status_code=404, detail="Agendamento nao encontrado")
+    if apt.get("status") in ["cancelado", "concluido"]:
+        raise HTTPException(status_code=400, detail="Agendamento ja finalizado")
+
+    try:
+        from notifications import notify_appointment_reminder
+        import os as _os
+        base_url = _os.environ.get("FRONTEND_PUBLIC_URL", "")
+        sent = await notify_appointment_reminder(db, user["company_id"], apt, base_url)
+        if not sent:
+            raise HTTPException(status_code=502, detail="Nao foi possivel enviar o lembrete. Verifique a conexao do WhatsApp.")
+        return {"message": "Lembrete enviado!"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending reminder: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao enviar lembrete: {str(e)}")
+
+
 
 # === CONCLUDE APPOINTMENT WITH PAYMENT ===
 class ConcludeAppointment(BaseModel):
