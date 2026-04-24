@@ -12,6 +12,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 class NotificationSettingsUpdate(BaseModel):
     booking_confirmation: Optional[bool] = None
     booking_reminder_24h: Optional[bool] = None
+    reminder_minutes_before: Optional[int] = None
     booking_cancelled: Optional[bool] = None
     new_client: Optional[bool] = None
     daily_summary: Optional[bool] = None
@@ -32,11 +33,15 @@ async def get_notification_settings(
             "company_id": user["company_id"],
             "booking_confirmation": True,
             "booking_reminder_24h": True,
+            "reminder_minutes_before": 1440,
             "booking_cancelled": True,
             "new_client": False,
             "daily_summary": False,
             "channel": "whatsapp"
         }
+    else:
+        # Backfill default for older records
+        settings.setdefault("reminder_minutes_before", 1440)
     return settings
 
 @router.put("/settings")
@@ -58,6 +63,7 @@ async def update_notification_settings(
             "company_id": company_id,
             "booking_confirmation": True,
             "booking_reminder_24h": True,
+            "reminder_minutes_before": 1440,
             "booking_cancelled": True,
             "new_client": False,
             "daily_summary": False,
@@ -67,6 +73,8 @@ async def update_notification_settings(
         await db.notification_settings.insert_one(doc)
 
     updated = await db.notification_settings.find_one({"company_id": company_id}, {"_id": 0})
+    if updated:
+        updated.setdefault("reminder_minutes_before", 1440)
     return updated
 
 @router.get("/history")

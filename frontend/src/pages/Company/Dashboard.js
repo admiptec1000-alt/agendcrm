@@ -3552,6 +3552,15 @@ const NotificacoesPage = () => {
     setSaving(false);
   };
 
+  const saveReminderMinutes = async (minutes) => {
+    const val = Math.max(1, parseInt(minutes, 10) || 0);
+    setSettings(s => ({ ...s, reminder_minutes_before: val }));
+    try {
+      await notificationsAPI.updateSettings({ reminder_minutes_before: val });
+      toast.success('Tempo do lembrete atualizado!');
+    } catch (e) { toast.error('Erro ao salvar'); }
+  };
+
   const handleSendTest = async () => {
     const res = await notificationsAPI.sendTest();
     toast.success('Notificacao de teste enviada!');
@@ -3560,7 +3569,7 @@ const NotificacoesPage = () => {
 
   const notifTypes = [
     { key: 'booking_confirmation', label: 'Confirmacao de Agendamento', desc: 'Envia mensagem quando agendamento e confirmado' },
-    { key: 'booking_reminder_24h', label: 'Lembrete 24h antes', desc: 'Envia lembrete 24 horas antes do agendamento' },
+    { key: 'booking_reminder_24h', label: 'Lembrete antes do agendamento', desc: 'Envia um lembrete automatico ao cliente antes do horario' },
     { key: 'booking_cancelled', label: 'Cancelamento', desc: 'Envia notificacao quando agendamento e cancelado' },
     { key: 'new_client', label: 'Novo Cliente', desc: 'Notifica quando um novo cliente se cadastra' },
     { key: 'daily_summary', label: 'Resumo Diario', desc: 'Envia resumo dos agendamentos do dia seguinte' },
@@ -3595,16 +3604,57 @@ const NotificacoesPage = () => {
             <h3 className="font-semibold text-slate-900 mb-4">Tipos de Notificacao</h3>
             <div className="space-y-3">
               {notifTypes.map(nt => (
-                <div key={nt.key} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium text-slate-900">{nt.label}</p>
-                    <p className="text-xs text-slate-500">{nt.desc}</p>
+                <div key={nt.key} className="p-3 bg-slate-50 rounded-lg">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-900">{nt.label}</p>
+                      <p className="text-xs text-slate-500">{nt.desc}</p>
+                    </div>
+                    <button onClick={() => toggleSetting(nt.key)} disabled={saving}
+                      className={`w-12 h-6 rounded-full transition-colors relative flex-shrink-0 ${settings?.[nt.key] ? 'bg-primary' : 'bg-slate-300'}`}
+                      data-testid={`toggle-${nt.key}`}>
+                      <div className={`w-5 h-5 rounded-full bg-white shadow-sm absolute top-0.5 transition-all ${settings?.[nt.key] ? 'left-[26px]' : 'left-0.5'}`} />
+                    </button>
                   </div>
-                  <button onClick={() => toggleSetting(nt.key)} disabled={saving}
-                    className={`w-12 h-6 rounded-full transition-colors relative ${settings?.[nt.key] ? 'bg-primary' : 'bg-slate-300'}`}
-                    data-testid={`toggle-${nt.key}`}>
-                    <div className={`w-5 h-5 rounded-full bg-white shadow-sm absolute top-0.5 transition-all ${settings?.[nt.key] ? 'left-[26px]' : 'left-0.5'}`} />
-                  </button>
+                  {nt.key === 'booking_reminder_24h' && settings?.booking_reminder_24h && (
+                    <div className="mt-3 pt-3 border-t border-slate-200">
+                      <label className="text-xs font-semibold text-slate-700 block mb-1.5">Enviar lembrete quanto tempo antes?</label>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={settings?.reminder_minutes_before ?? 1440}
+                          onChange={e => setSettings(s => ({ ...s, reminder_minutes_before: e.target.value }))}
+                          onBlur={e => saveReminderMinutes(e.target.value)}
+                          className="w-28 px-3 py-1.5 text-sm rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          data-testid="reminder-minutes-input"
+                        />
+                        <span className="text-xs text-slate-500">minutos antes do horario</span>
+                        <div className="flex gap-1.5 ml-auto flex-wrap">
+                          {[
+                            { label: '30min', v: 30 },
+                            { label: '1h', v: 60 },
+                            { label: '2h', v: 120 },
+                            { label: '24h', v: 1440 },
+                          ].map(preset => (
+                            <button
+                              key={preset.v}
+                              onClick={() => saveReminderMinutes(preset.v)}
+                              className={`text-[10px] px-2 py-1 rounded-md font-semibold transition-colors ${
+                                (settings?.reminder_minutes_before ?? 1440) === preset.v
+                                  ? 'bg-primary text-white'
+                                  : 'bg-white border border-slate-200 text-slate-600 hover:border-primary hover:text-primary'
+                              }`}
+                              data-testid={`reminder-preset-${preset.v}`}
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
