@@ -14,6 +14,9 @@ import {
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
+import TagsPage from '../CRM/TagsPage';
+import KanbanPage from '../CRM/KanbanPage';
+import AIPage from '../CRM/AIPage';
 import WhatsAppConnectionsPage from '../CRM/WhatsAppConnectionsPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 
@@ -125,6 +128,7 @@ const CompanyDashboard = () => {
   useEffect(() => {
     if (activePage) return;
     if (!enabledFeatures || enabledFeatures.length === 0) return;
+    if (baseType === null) return; // wait for base_type to be resolved
     let target = null;
     if (baseType === 'crm') {
       target = enabledFeatures.includes('atendimentos') ? 'atendimentos'
@@ -251,7 +255,7 @@ const CompanyDashboard = () => {
           <UserHeaderMenu user={user} logout={logout} />
         </header>
 
-        <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)]' : 'p-4 lg:p-6 pb-24 lg:pb-6 max-w-full overflow-x-hidden'}>
+        <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)] pb-16 lg:pb-0 overflow-hidden' : 'p-4 lg:p-6 pb-24 lg:pb-6 max-w-full overflow-x-hidden'}>
           <PageContent page={activePage} hasFeature={hasFeature} setActivePage={setActivePage} menuGroups={menuGroups} />
         </div>
       </main>
@@ -589,7 +593,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'campanhas': return <CampaignsPage />;
     case 'tags': return <TagsPage />;
     case 'flowbuilder': return <FlowBuilderPage />;
-    case 'agente_ia': return <AIAgentPage />;
+    case 'agente_ia': return <AIPage />;
     case 'conexoes': return <ConexoesPage />;
     case 'chat_interno': return <ChatInternoPage />;
     case 'calendario': return <CalendarPageFull />;
@@ -829,7 +833,8 @@ const DashboardPage = ({ setActivePage, menuGroups }) => {
 };
 
 /* ========== KANBAN WITH DRAG AND DROP ========== */
-const KanbanPage = () => {
+// eslint-disable-next-line no-unused-vars
+const _KanbanPageOld = () => {
   const [kanban, setKanban] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [draggedTicket, setDraggedTicket] = useState(null);
@@ -1406,7 +1411,8 @@ const CampaignsPage = () => {
 };
 
 /* ========== TAGS ========== */
-const TagsPage = () => (
+// eslint-disable-next-line no-unused-vars
+const _TagsPageOld = () => (
   <div className="animate-fade-in card" data-testid="tags-page">
     <h3 className="font-semibold text-slate-900 mb-4">Tags</h3>
     <p className="text-sm text-slate-500">Gerencie suas tags para organizar tickets e contatos.</p>
@@ -1419,7 +1425,8 @@ const TagsPage = () => (
 );
 
 /* ========== AI AGENT ========== */
-const AIAgentPage = () => {
+// eslint-disable-next-line no-unused-vars
+const _AIAgentPageOld = () => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);

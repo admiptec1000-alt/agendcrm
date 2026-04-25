@@ -100,7 +100,7 @@ const AtendimentosPage = () => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-52px)] lg:h-[calc(100vh-52px)] pb-16 lg:pb-0 -m-6" data-testid="atendimentos-page">
+    <div className="flex h-full w-full overflow-hidden" data-testid="atendimentos-page">
       {/* === CONVERSATION LIST === */}
       <div className={`${selectedTicket ? 'hidden lg:flex' : 'flex'} flex-col w-full lg:w-[380px] border-r border-slate-200 bg-white flex-shrink-0`}>
         {/* Modern header with gradient and KPIs */}

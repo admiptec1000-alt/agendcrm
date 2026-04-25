@@ -17,6 +17,7 @@ from database import connect_to_mongo, close_mongo_connection, get_database
 from routes.auth_routes import router as auth_router
 from routes.super_admin_routes import router as super_admin_router
 from routes.crm_routes import router as crm_router
+from routes.ai_routes import router as ai_router
 from routes.scheduling_routes import router as scheduling_router
 from routes.upload_routes import router as upload_router
 from routes.public_routes import router as public_router
@@ -46,6 +47,7 @@ async def root():
 api_router.include_router(auth_router)
 api_router.include_router(super_admin_router)
 api_router.include_router(crm_router)
+api_router.include_router(ai_router)
 api_router.include_router(scheduling_router)
 api_router.include_router(upload_router)
 api_router.include_router(public_router)

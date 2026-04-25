@@ -82,21 +82,39 @@ export const superAdminAPI = {
 
 // CRM API
 export const crmAPI = {
+  // Tickets
   getTickets: (params) => api.get('/crm/tickets', { params }),
   getTicketCounts: () => api.get('/crm/tickets/counts'),
   createTicket: (data) => api.post('/crm/tickets', data),
   updateTicket: (id, data) => api.put(`/crm/tickets/${id}`, data),
   deleteTicket: (id) => api.delete(`/crm/tickets/${id}`),
   addMessage: (ticketId, data) => api.post(`/crm/tickets/${ticketId}/messages`, data),
+  // Kanban
   getKanban: () => api.get('/crm/kanban'),
+  getKanbanV2: () => api.get('/crm/kanban-v2'),
+  listKanbanColumns: () => api.get('/crm/kanban-columns'),
+  createKanbanColumn: (data) => api.post('/crm/kanban-columns', data),
+  updateKanbanColumn: (id, data) => api.put(`/crm/kanban-columns/${id}`, data),
+  deleteKanbanColumn: (id) => api.delete(`/crm/kanban-columns/${id}`),
+  moveTicketColumn: (ticketId, columnId) => api.put(`/crm/tickets/${ticketId}/kanban-column`, { column_id: columnId }),
+  // AI chat (legacy)
   aiChat: (data) => api.post('/crm/ai/chat', data),
+  // Quick Responses + Campaigns
   getQuickResponses: () => api.get('/crm/quick-responses'),
   createQuickResponse: (data) => api.post('/crm/quick-responses', data),
   getCampaigns: () => api.get('/crm/campaigns'),
   createCampaign: (data) => api.post('/crm/campaigns', data),
+  // Flows
   getFlows: () => api.get('/crm/flows'),
+  listFlows: () => api.get('/crm/flows'),
   createFlow: (data) => api.post('/crm/flows', data),
-  updateFlow: (id, data) => api.put(`/crm/flows/${id}`, data)
+  updateFlow: (id, data) => api.put(`/crm/flows/${id}`, data),
+  deleteFlow: (id) => api.delete(`/crm/flows/${id}`),
+  // Tags
+  listTags: () => api.get('/crm/tags'),
+  createTag: (data) => api.post('/crm/tags', data),
+  updateTag: (id, data) => api.put(`/crm/tags/${id}`, data),
+  deleteTag: (id) => api.delete(`/crm/tags/${id}`),
 };
 
 // Scheduling API
@@ -249,3 +267,21 @@ export const uploadAPI = {
   },
   deleteFile: (fileId) => api.delete(`/upload/files/${fileId}`)
 };
+
+// CRM additions moved into crmAPI above. AI Providers + Agents:
+export const aiAPI = {
+  listAgentTemplates: () => api.get('/ai/agent-templates'),
+  // Providers
+  listProviders: () => api.get('/ai/providers'),
+  createProvider: (data) => api.post('/ai/providers', data),
+  updateProvider: (id, data) => api.put(`/ai/providers/${id}`, data),
+  deleteProvider: (id) => api.delete(`/ai/providers/${id}`),
+  // Agents
+  listAgents: () => api.get('/ai/agents'),
+  getAgent: (id) => api.get(`/ai/agents/${id}`),
+  createAgent: (data) => api.post('/ai/agents', data),
+  updateAgent: (id, data) => api.put(`/ai/agents/${id}`, data),
+  deleteAgent: (id) => api.delete(`/ai/agents/${id}`),
+  testAgent: (id, data) => api.post(`/ai/agents/${id}/test`, data),
+};
+

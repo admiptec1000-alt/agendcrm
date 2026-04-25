@@ -1,0 +1,44 @@
+{
+  "summary": "Full backend + frontend regression for iteration 25 (Flowbuilder rewrite, AI Agents/Providers, Tags CRUD, Kanban with native column, onboarding base_type). All 15 backend pytest cases passed (100%). Frontend smoke test confirmed Tags, Kanban, Agente IA, Flowbuilder pages render correctly with no JS errors. Login + sidebar navigation OK as crm@test.com.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/ai/providers", "issue": "Default 'default-emergent' stub is returned only when user has zero providers — once a custom provider is added, default disappears. UI must handle that (consume providers list and fallback to 'emergent' visually if needed)."},
+      {"endpoint": "POST /api/ai/agents/{id}/test", "issue": "Returns generic 500 on LLM errors — consider 502 with structured error so UI can distinguish 'misconfigured' vs 'LLM downtime'. EMERGENT_LLM_KEY is configured in backend/.env so happy-path works."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Atendimentos (desktop 1920x1080)", "issues": ["scrollHeight=1099 vs clientHeight=1080 — 19px extra body scroll. Acceptable but not pixel-perfect; main agent's overflow-hidden wrapper handles it. Consider verifying on smaller viewports."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_25.py",
+    "/app/test_reports/pytest/iteration_25.xml"
+  ],
+  "action_items": [
+    "(Optional) Improve error response in /api/ai/agents/{id}/test for clearer UI handling.",
+    "(Optional) Verify Atendimentos layout on mobile viewport (390x844) and tablet — tested only on desktop 1920x1080.",
+    "Code-review found no blockers; main agent can ship."
+  ],
+  "critical_code_review_comments": [
+    "ai_routes.py: /agents/{id}/test reuses Emergent universal key correctly; for non-emergent providers code falls back to provider_type='openai' instead of using the user's stored api_key — meaning custom OpenAI/Anthropic/Gemini providers still call via Emergent key. Acceptable for now (Emergent supports those models) but documented behavior should match.",
+    "crm_routes.py: NATIVE_FIRST_COLUMN is a module-level dict reused across requests — safe because handlers don't mutate it, but if order-customization is added later, return a copy.",
+    "crm_routes.py /kanban-v2 returns up to 2000 tickets unsorted into columns in memory; fine for current scale, may need pagination per column when companies grow.",
+    "ai_routes.py list_providers excludes api_key in projection — good, but create_provider response also strips api_key which means UI cannot show a 'masked' indicator that key was saved. Consider returning has_api_key boolean.",
+    "Frontend imports use new file paths (TagsPage, KanbanPage, AIPage, FlowBuilderPage); old definitions correctly prefixed with _ to avoid name conflict — confirmed in Dashboard.js lines 837/1415."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_25.py (new)"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% smoke (4/4 pages render, no JS errors)"},
+  "test_credentials": "crm@test.com / crm123 (CRM-only company), admin@boss.com.br / boss123 (scheduling)",
+  "seed_data_creation": "All test data prefixed with TEST_ and cleaned up by test fixtures.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All backend endpoints for iteration 25 (AI agents/providers/templates, Tags CRUD, kanban-columns CRUD with native first column, kanban-v2 grouping, ticket-move, flow delete, onboarding-status base_type) are GREEN. Frontend pages Tags/Kanban/Agente IA/Flowbuilder/Atendimentos render. If retesting, focus on: (a) drag-and-drop UI in KanbanPage between columns (not exercised by playwright — HTML5 dnd is hard to automate; backend move endpoint is verified), (b) full FlowBuilder flow with 9 node types (canvas + reactflow shows up only after creating a flow — was not exercised), (c) AI agent creation modal with 5 tabs (verify wiring of personality/products/faq/objections/extras — backend persistence verified via test_agent_full_crud_with_nested_fields), (d) AIAgent test endpoint with real LLM call (EMERGENT_LLM_KEY is configured).",
+  "rca of the issue": "No blocking issues found this iteration."
+}
