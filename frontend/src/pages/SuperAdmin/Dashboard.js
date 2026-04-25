@@ -7,7 +7,7 @@ import {
   Plus, Pencil, Trash2, X, ChevronRight, Search, LayoutGrid,
   Briefcase, BarChart3, Eye, Check, Scissors, Stethoscope,
   Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe,
-  Monitor, ExternalLink, Tv, Link as LinkIcon
+  Monitor, ExternalLink, Tv, Link as LinkIcon, RefreshCw
 } from 'lucide-react';
 
 const iconMap = {

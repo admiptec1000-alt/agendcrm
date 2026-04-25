@@ -135,20 +135,17 @@ async def update_business_type(
     if update_data:
         await db.business_types.update_one({"id": type_id}, {"$set": update_data})
 
-    # Propagate features to all companies of this business type
+    # Propagate features to all companies of this business type.
+    # IMPORTANT: REPLACE features completely with the BT's current features.
+    # Previously this code preserved company-specific keys not in BT, but that
+    # caused stale features to remain (e.g. company keeps "Completo" features
+    # after BT was changed to a smaller "Catalogo" set).
     if "features" in update_data:
         bt_features = update_data["features"]
-        bt_feat_map = {f["feature_key"]: f for f in bt_features}
-        companies = await db.companies.find({"business_type_id": type_id}).to_list(1000)
-        for c in companies:
-            new_features = list(bt_features)  # fresh copy for this company
-            # Preserve company-specific toggles by respecting whatever is already there for unknown keys
-            existing_keys = {f["feature_key"] for f in new_features}
-            for ef in c.get("features", []):
-                if ef["feature_key"] not in existing_keys:
-                    new_features.append(ef)
-            # For features also present in bt, overwrite 'enabled' to bt value (admin control)
-            await db.companies.update_one({"id": c["id"]}, {"$set": {"features": new_features}})
+        await db.companies.update_many(
+            {"business_type_id": type_id},
+            {"$set": {"features": list(bt_features)}}
+        )
 
     updated = await db.business_types.find_one({"id": type_id}, {"_id": 0})
     return updated
@@ -318,6 +315,44 @@ async def update_company_features(
 
     updated = await db.companies.find_one({"id": company_id}, {"_id": 0})
     return updated
+
+
+@router.post("/companies/{company_id}/resync-features")
+async def resync_company_features(
+    company_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Force-resync the company's features list to exactly match its assigned
+    business type's features. Useful when the business type was edited after
+    the company was created, or when a company appears to show extra/missing
+    features in the menu.
+    """
+    company = await db.companies.find_one({"id": company_id})
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+    bt_id = company.get("business_type_id")
+    if not bt_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Empresa nao possui tipo de negocio. Atribua um tipo antes de sincronizar."
+        )
+    bt = await db.business_types.find_one({"id": bt_id}, {"_id": 0})
+    if not bt:
+        raise HTTPException(status_code=404, detail="Tipo de negocio da empresa nao foi encontrado")
+
+    bt_features = bt.get("features", [])
+    await db.companies.update_one(
+        {"id": company_id},
+        {"$set": {"features": bt_features}}
+    )
+
+    updated = await db.companies.find_one({"id": company_id}, {"_id": 0})
+    return {
+        "message": f"Features sincronizadas com '{bt.get('name')}'",
+        "feature_count": len(bt_features),
+        "company": updated,
+    }
 
 @router.delete("/companies/{company_id}")
 async def delete_company(

@@ -65,6 +65,7 @@ export const superAdminAPI = {
   createCompany: (data) => api.post('/super-admin/companies', data),
   updateCompany: (id, data) => api.put(`/super-admin/companies/${id}`, data),
   updateCompanyFeatures: (id, features) => api.put(`/super-admin/companies/${id}/features`, features),
+  resyncCompanyFeatures: (id) => api.post(`/super-admin/companies/${id}/resync-features`),
   deleteCompany: (id) => api.delete(`/super-admin/companies/${id}`),
   getBusinessTypes: () => api.get('/super-admin/business-types'),
   getBusinessType: (id) => api.get(`/super-admin/business-types/${id}`),
