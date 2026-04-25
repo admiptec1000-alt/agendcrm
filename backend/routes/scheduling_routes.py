@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
 from auth import get_current_user
@@ -425,12 +425,17 @@ async def conclude_appointment(
         "company_id": user["company_id"],
         "appointment_id": appointment_id,
         "type": "receita",
+        "direction": "entrada",
+        "status": "pago",
         "amount": final_amount,
         "payment_method": data.payment_method,
         "description": f"{apt.get('service_name','')} - {apt.get('customer_name','')}",
+        "category": "servico",
         "professional_id": apt.get("professional_id"),
         "professional_name": apt.get("professional_name"),
         "date": apt.get("date"),
+        "due_date": apt.get("date"),
+        "paid_at": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.financial_transactions.insert_one(transaction)
@@ -439,12 +444,39 @@ async def conclude_appointment(
 
 
 # === FINANCIAL TRANSACTIONS ===
+# === FINANCIAL TRANSACTIONS ===
+class TransactionCreate(BaseModel):
+    direction: str  # 'entrada' | 'saida'
+    description: str
+    amount: float
+    payment_method: Optional[str] = None  # dinheiro, pix, cartao_credito, cartao_debito, outros
+    category: Optional[str] = None  # servico, fornecedor, salario, aluguel, conta, outros
+    date: str  # ISO date when actually happened OR when registered
+    due_date: Optional[str] = None  # vencimento for accounts payable/receivable
+    status: str = "pago"  # 'pago' | 'pendente'
+    notes: Optional[str] = None
+
+
+class TransactionUpdate(BaseModel):
+    direction: Optional[str] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    payment_method: Optional[str] = None
+    category: Optional[str] = None
+    date: Optional[str] = None
+    due_date: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
 @router.get("/financial/transactions")
 async def list_transactions(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
     start_date: str = None, end_date: str = None,
-    payment_method: str = None
+    payment_method: str = None,
+    direction: str = None,
+    status: str = None
 ):
     query = {"company_id": user["company_id"]}
     if start_date:
@@ -453,15 +485,104 @@ async def list_transactions(
         query.setdefault("date", {})["$lte"] = end_date
     if payment_method:
         query["payment_method"] = payment_method
+    if direction:
+        query["direction"] = direction
+    if status:
+        query["status"] = status
     txns = await db.financial_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     fees = await _get_payment_fees(db, user["company_id"])
     for t in txns:
         gross = float(t.get("amount", 0) or 0)
-        fee_amount = _calc_fee(gross, t.get("payment_method", ""), fees)
+        # Backfill defaults for legacy records
+        t.setdefault("direction", "entrada")
+        t.setdefault("status", "pago")
+        fee_amount = _calc_fee(gross, t.get("payment_method", ""), fees) if t.get("direction") == "entrada" else 0.0
         t["gross_amount"] = round(gross, 2)
         t["fee_amount"] = round(fee_amount, 2)
         t["net_amount"] = round(gross - fee_amount, 2)
     return txns
+
+
+@router.post("/financial/transactions")
+async def create_transaction(
+    data: TransactionCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    if data.direction not in ("entrada", "saida"):
+        raise HTTPException(status_code=400, detail="direction deve ser 'entrada' ou 'saida'")
+    if data.status not in ("pago", "pendente"):
+        raise HTTPException(status_code=400, detail="status deve ser 'pago' ou 'pendente'")
+
+    txn = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "type": "receita" if data.direction == "entrada" else "despesa",
+        "direction": data.direction,
+        "status": data.status,
+        "amount": float(data.amount or 0),
+        "payment_method": data.payment_method or "outros",
+        "category": data.category or "outros",
+        "description": data.description,
+        "date": data.date,
+        "due_date": data.due_date or data.date,
+        "notes": data.notes,
+        "manual": True,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if data.status == "pago":
+        txn["paid_at"] = datetime.now(timezone.utc).isoformat()
+    await db.financial_transactions.insert_one(txn)
+    return {k: v for k, v in txn.items() if k != "_id"}
+
+
+@router.put("/financial/transactions/{txn_id}")
+async def update_transaction(
+    txn_id: str,
+    data: TransactionUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "amount" in update:
+        update["amount"] = float(update["amount"] or 0)
+    if "status" in update and update["status"] == "pago":
+        update["paid_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.financial_transactions.update_one(
+        {"id": txn_id, "company_id": user["company_id"]},
+        {"$set": update}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Lancamento nao encontrado")
+    return await db.financial_transactions.find_one({"id": txn_id}, {"_id": 0})
+
+
+@router.post("/financial/transactions/{txn_id}/pay")
+async def mark_transaction_paid(
+    txn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    result = await db.financial_transactions.update_one(
+        {"id": txn_id, "company_id": user["company_id"]},
+        {"$set": {"status": "pago", "paid_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Lancamento nao encontrado")
+    return await db.financial_transactions.find_one({"id": txn_id}, {"_id": 0})
+
+
+@router.delete("/financial/transactions/{txn_id}")
+async def delete_transaction(
+    txn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    result = await db.financial_transactions.delete_one({"id": txn_id, "company_id": user["company_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Lancamento nao encontrado")
+    return {"message": "Lancamento removido"}
 
 
 # === PAYMENT FEES (taxas por forma de pagamento) ===
@@ -574,32 +695,58 @@ async def financial_summary(
     txns = await db.financial_transactions.find(query, {"_id": 0}).to_list(5000)
     fees = await _get_payment_fees(db, user["company_id"])
 
+    # Receita = entradas pagas
     total_gross = 0.0
     total_fee = 0.0
     by_method_gross = {}
     by_method_fee = {}
     by_method_net = {}
+    # Despesas pagas
+    total_expenses = 0.0
+    # A receber (entradas pendentes) e A pagar (saidas pendentes)
+    total_receivable = 0.0
+    total_payable = 0.0
+
     for t in txns:
-        gross = float(t.get("amount", 0) or 0)
-        method = t.get("payment_method", "outros")
-        fee_amount = _calc_fee(gross, method, fees)
-        net = gross - fee_amount
-        total_gross += gross
-        total_fee += fee_amount
-        by_method_gross[method] = by_method_gross.get(method, 0) + gross
-        by_method_fee[method] = by_method_fee.get(method, 0) + fee_amount
-        by_method_net[method] = by_method_net.get(method, 0) + net
-        # also enrich the returned txns sample with derived fields
-        t["gross_amount"] = round(gross, 2)
-        t["fee_amount"] = round(fee_amount, 2)
-        t["net_amount"] = round(net, 2)
+        # Backfill legacy records as paid income
+        direction = t.get("direction", "entrada")
+        status = t.get("status", "pago")
+        amount = float(t.get("amount", 0) or 0)
+
+        if direction == "entrada" and status == "pago":
+            method = t.get("payment_method", "outros")
+            fee_amount = _calc_fee(amount, method, fees)
+            net = amount - fee_amount
+            total_gross += amount
+            total_fee += fee_amount
+            by_method_gross[method] = by_method_gross.get(method, 0) + amount
+            by_method_fee[method] = by_method_fee.get(method, 0) + fee_amount
+            by_method_net[method] = by_method_net.get(method, 0) + net
+            t["gross_amount"] = round(amount, 2)
+            t["fee_amount"] = round(fee_amount, 2)
+            t["net_amount"] = round(net, 2)
+        elif direction == "saida" and status == "pago":
+            total_expenses += amount
+            t["gross_amount"] = round(amount, 2)
+            t["fee_amount"] = 0.0
+            t["net_amount"] = round(amount, 2)
+        elif direction == "entrada" and status == "pendente":
+            total_receivable += amount
+        elif direction == "saida" and status == "pendente":
+            total_payable += amount
+
+    paid_txns = [t for t in txns if t.get("status", "pago") == "pago"]
 
     return {
-        "total_revenue": round(total_gross, 2),  # legacy/back-compat (gross)
+        "total_revenue": round(total_gross, 2),  # legacy/back-compat
         "total_gross": round(total_gross, 2),
         "total_fee": round(total_fee, 2),
         "total_net": round(total_gross - total_fee, 2),
-        "transaction_count": len(txns),
+        "total_expenses": round(total_expenses, 2),
+        "total_profit": round((total_gross - total_fee) - total_expenses, 2),
+        "total_receivable": round(total_receivable, 2),
+        "total_payable": round(total_payable, 2),
+        "transaction_count": len(paid_txns),
         "by_payment_method": {k: round(v, 2) for k, v in by_method_gross.items()},  # legacy
         "by_payment_method_gross": {k: round(v, 2) for k, v in by_method_gross.items()},
         "by_payment_method_fee": {k: round(v, 2) for k, v in by_method_fee.items()},

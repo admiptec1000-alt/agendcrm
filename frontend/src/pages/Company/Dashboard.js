@@ -3560,6 +3560,297 @@ const MySitePage = () => {
 };
 
 /* ========== FINANCEIRO (REAL) ========== */
+const TX_CATEGORIES = {
+  entrada: [
+    { v: 'servico', label: 'Servico' },
+    { v: 'venda_produto', label: 'Venda de produto' },
+    { v: 'comissao', label: 'Comissao' },
+    { v: 'outros', label: 'Outros' },
+  ],
+  saida: [
+    { v: 'fornecedor', label: 'Fornecedor / Compra' },
+    { v: 'salario', label: 'Salario / Comissao paga' },
+    { v: 'aluguel', label: 'Aluguel' },
+    { v: 'conta', label: 'Conta (luz/agua/internet)' },
+    { v: 'imposto', label: 'Imposto' },
+    { v: 'manutencao', label: 'Manutencao' },
+    { v: 'outros', label: 'Outros' },
+  ],
+};
+
+const LancamentosView = ({ startDate, endDate, filterMethod, fees, onChanged }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterDirection, setFilterDirection] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const todayIso = new Date().toISOString().split('T')[0];
+  const [form, setForm] = useState({ direction: 'entrada', description: '', amount: '', payment_method: 'dinheiro', category: 'servico', date: todayIso, due_date: todayIso, status: 'pago', notes: '' });
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      if (filterMethod) params.payment_method = filterMethod;
+      if (filterDirection) params.direction = filterDirection;
+      if (filterStatus) params.status = filterStatus;
+      const r = await schedulingAPI.getFinancialTransactions(params);
+      setItems(r.data || []);
+    } catch (e) {
+      toast.error('Erro ao carregar lancamentos');
+    } finally { setLoading(false); }
+  }, [startDate, endDate, filterMethod, filterDirection, filterStatus]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const openNew = (direction = 'entrada') => {
+    setEditing(null);
+    setForm({
+      direction,
+      description: '',
+      amount: '',
+      payment_method: direction === 'entrada' ? 'dinheiro' : 'dinheiro',
+      category: direction === 'entrada' ? 'servico' : 'fornecedor',
+      date: todayIso,
+      due_date: todayIso,
+      status: 'pago',
+      notes: '',
+    });
+    setShowModal(true);
+  };
+
+  const openEdit = (it) => {
+    setEditing(it);
+    setForm({
+      direction: it.direction || 'entrada',
+      description: it.description || '',
+      amount: String(it.amount || ''),
+      payment_method: it.payment_method || 'dinheiro',
+      category: it.category || 'outros',
+      date: it.date || todayIso,
+      due_date: it.due_date || it.date || todayIso,
+      status: it.status || 'pago',
+      notes: it.notes || '',
+    });
+    setShowModal(true);
+  };
+
+  const handleSave = async () => {
+    if (!form.description.trim()) { toast.error('Informe a descricao'); return; }
+    const amount = parseFloat(String(form.amount).replace(',', '.')) || 0;
+    if (amount <= 0) { toast.error('Valor deve ser maior que zero'); return; }
+    const payload = { ...form, amount };
+    try {
+      if (editing) {
+        await schedulingAPI.updateFinancialTransaction(editing.id, payload);
+        toast.success('Lancamento atualizado!');
+      } else {
+        await schedulingAPI.createFinancialTransaction(payload);
+        toast.success('Lancamento criado!');
+      }
+      setShowModal(false);
+      reload();
+      onChanged && onChanged();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro ao salvar');
+    }
+  };
+
+  const handlePay = async (id) => {
+    try {
+      await schedulingAPI.payFinancialTransaction(id);
+      toast.success('Marcado como pago!');
+      reload();
+      onChanged && onChanged();
+    } catch (e) { toast.error('Erro ao atualizar'); }
+  };
+
+  const handleDelete = async (it) => {
+    if (!window.confirm(`Excluir o lancamento "${it.description}"?`)) return;
+    try {
+      await schedulingAPI.deleteFinancialTransaction(it.id);
+      toast.success('Removido!');
+      reload();
+      onChanged && onChanged();
+    } catch (e) { toast.error('Erro ao excluir'); }
+  };
+
+  // Aggregates for header chips
+  const totals = useMemo(() => {
+    const out = { entradaPago: 0, entradaPendente: 0, saidaPago: 0, saidaPendente: 0 };
+    for (const t of items) {
+      const dir = t.direction || 'entrada';
+      const st = t.status || 'pago';
+      const amt = Number(t.amount || 0);
+      if (dir === 'entrada' && st === 'pago') out.entradaPago += amt;
+      if (dir === 'entrada' && st === 'pendente') out.entradaPendente += amt;
+      if (dir === 'saida' && st === 'pago') out.saidaPago += amt;
+      if (dir === 'saida' && st === 'pendente') out.saidaPendente += amt;
+    }
+    return out;
+  }, [items]);
+
+  return (
+    <div className="space-y-3" data-testid="lancamentos-view">
+      {/* Action bar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={() => openNew('entrada')} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-500 text-white text-xs font-semibold shadow-sm hover:bg-emerald-600 active:scale-95 transition-all" data-testid="new-receivable-btn">
+          <Plus className="w-3.5 h-3.5" /> Receita
+        </button>
+        <button onClick={() => openNew('saida')} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500 text-white text-xs font-semibold shadow-sm hover:bg-rose-600 active:scale-95 transition-all" data-testid="new-payable-btn">
+          <Plus className="w-3.5 h-3.5" /> Despesa
+        </button>
+        <div className="ml-auto flex bg-slate-100 rounded-lg p-0.5 text-[11px]">
+          <button onClick={() => setFilterDirection('')} className={`px-2 py-1 rounded-md font-semibold ${!filterDirection ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'}`}>Todos</button>
+          <button onClick={() => setFilterDirection('entrada')} className={`px-2 py-1 rounded-md font-semibold ${filterDirection==='entrada' ? 'bg-white shadow-sm text-emerald-700' : 'text-slate-500'}`} data-testid="filter-entrada">Entradas</button>
+          <button onClick={() => setFilterDirection('saida')} className={`px-2 py-1 rounded-md font-semibold ${filterDirection==='saida' ? 'bg-white shadow-sm text-rose-700' : 'text-slate-500'}`} data-testid="filter-saida">Saidas</button>
+        </div>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="text-[11px] px-2 py-1 rounded-md bg-slate-100 border-0">
+          <option value="">Todos status</option>
+          <option value="pago">Pago</option>
+          <option value="pendente">Pendente</option>
+        </select>
+      </div>
+
+      {/* Summary chips */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+        <div className="p-2 bg-emerald-50 border border-emerald-100 rounded-lg"><p className="text-[10px] uppercase font-bold text-emerald-700">Recebido</p><p className="text-sm font-bold text-emerald-700">R$ {totals.entradaPago.toFixed(2)}</p></div>
+        <div className="p-2 bg-emerald-50/60 border border-emerald-100 rounded-lg"><p className="text-[10px] uppercase font-bold text-emerald-600">A Receber</p><p className="text-sm font-bold text-emerald-600">R$ {totals.entradaPendente.toFixed(2)}</p></div>
+        <div className="p-2 bg-rose-50 border border-rose-100 rounded-lg"><p className="text-[10px] uppercase font-bold text-rose-700">Pago</p><p className="text-sm font-bold text-rose-700">R$ {totals.saidaPago.toFixed(2)}</p></div>
+        <div className="p-2 bg-amber-50 border border-amber-100 rounded-lg"><p className="text-[10px] uppercase font-bold text-amber-700">A Pagar</p><p className="text-sm font-bold text-amber-700">R$ {totals.saidaPendente.toFixed(2)}</p></div>
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div className="text-center py-12 text-sm text-slate-400">Carregando...</div>
+      ) : items.length === 0 ? (
+        <div className="text-center py-12">
+          <DollarSign className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+          <p className="text-sm text-slate-500">Nenhum lancamento</p>
+          <p className="text-xs text-slate-400 mt-1">Clique em Receita ou Despesa para comecar</p>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {items.map(it => {
+            const isIn = (it.direction || 'entrada') === 'entrada';
+            const isPaid = (it.status || 'pago') === 'pago';
+            const dueText = it.due_date ? it.due_date.split('-').reverse().join('/') : '';
+            return (
+              <div key={it.id} className={`rounded-xl border bg-white p-3 ${isIn ? 'border-l-2 border-l-emerald-400' : 'border-l-2 border-l-rose-400'}`} data-testid={`txn-${it.id}`}>
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-semibold text-slate-900 truncate">{it.description}</p>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-slate-500">{(it.date || '').split('-').reverse().join('/')}</span>
+                      {!isPaid && dueText && <span className="text-[10px] text-amber-700">venc. {dueText}</span>}
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold uppercase">{it.category || 'outros'}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{isPaid ? 'pago' : 'pendente'}</span>
+                      {it.payment_method && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{it.payment_method.replace('_',' ')}</span>}
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className={`text-sm font-bold ${isIn ? 'text-emerald-600' : 'text-rose-600'}`}>{isIn ? '+' : '-'} R$ {Number(it.amount || 0).toFixed(2)}</p>
+                    <div className="flex justify-end gap-1 mt-1">
+                      {!isPaid && (
+                        <button onClick={() => handlePay(it.id)} className="text-[10px] px-2 py-0.5 rounded bg-emerald-500 text-white font-semibold" data-testid={`pay-txn-${it.id}`}>Pagar</button>
+                      )}
+                      <button onClick={() => openEdit(it)} className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-primary" data-testid={`edit-txn-${it.id}`}><Pencil className="w-3 h-3" /></button>
+                      {it.manual && (
+                        <button onClick={() => handleDelete(it)} className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-red-500" data-testid={`del-txn-${it.id}`}><Trash2 className="w-3 h-3" /></button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={() => setShowModal(false)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <h3 className="text-base font-bold text-slate-900">{editing ? 'Editar' : 'Novo'} Lancamento</h3>
+              <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-4 space-y-3 overflow-y-auto max-h-[70vh]">
+              {/* Direction toggle */}
+              <div className="flex bg-slate-100 rounded-lg p-0.5">
+                <button onClick={() => setForm({...form, direction: 'entrada', category: 'servico'})} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${form.direction==='entrada'?'bg-emerald-500 text-white shadow-sm':'text-slate-500'}`} data-testid="modal-direction-entrada">Receita (Entrada)</button>
+                <button onClick={() => setForm({...form, direction: 'saida', category: 'fornecedor'})} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${form.direction==='saida'?'bg-rose-500 text-white shadow-sm':'text-slate-500'}`} data-testid="modal-direction-saida">Despesa (Saida)</button>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Descricao</label>
+                <input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder={form.direction === 'entrada' ? 'Ex: Venda de produto' : 'Ex: Conta de luz'} className="input-field text-sm" data-testid="modal-tx-description" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Valor</label>
+                  <div className="relative">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">R$</span>
+                    <input type="number" step="0.01" min="0" value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} className="input-field text-sm pl-8" data-testid="modal-tx-amount" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Categoria</label>
+                  <select value={form.category} onChange={e => setForm({...form, category: e.target.value})} className="input-field text-sm" data-testid="modal-tx-category">
+                    {TX_CATEGORIES[form.direction].map(c => <option key={c.v} value={c.v}>{c.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Data</label>
+                  <input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} className="input-field text-sm" data-testid="modal-tx-date" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Vencimento</label>
+                  <input type="date" value={form.due_date} onChange={e => setForm({...form, due_date: e.target.value})} className="input-field text-sm" data-testid="modal-tx-duedate" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Forma de pagamento</label>
+                <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="input-field text-sm" data-testid="modal-tx-method">
+                  <option value="dinheiro">Dinheiro</option>
+                  <option value="pix">PIX</option>
+                  <option value="cartao_credito">Cartao Credito</option>
+                  <option value="cartao_debito">Cartao Debito</option>
+                  <option value="boleto">Boleto</option>
+                  <option value="transferencia">Transferencia</option>
+                  <option value="outros">Outros</option>
+                </select>
+              </div>
+
+              <div className="flex bg-slate-100 rounded-lg p-0.5">
+                <button onClick={() => setForm({...form, status: 'pago'})} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold ${form.status==='pago'?'bg-white shadow-sm text-emerald-700':'text-slate-500'}`} data-testid="modal-tx-status-pago">Pago</button>
+                <button onClick={() => setForm({...form, status: 'pendente'})} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold ${form.status==='pendente'?'bg-white shadow-sm text-amber-700':'text-slate-500'}`} data-testid="modal-tx-status-pendente">{form.direction==='entrada' ? 'A receber' : 'A pagar'}</button>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Observacoes (opcional)</label>
+                <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} rows={2} className="input-field text-sm" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 p-3 border-t border-slate-200">
+              <button onClick={() => setShowModal(false)} className="btn-secondary text-sm">Cancelar</button>
+              <button onClick={handleSave} className="btn-primary text-sm" data-testid="modal-tx-save">{editing ? 'Salvar' : 'Criar'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const FinanceiroPage = () => {
   const [summary, setSummary] = useState(null);
   const [startDate, setStartDate] = useState('');
@@ -3620,7 +3911,7 @@ const FinanceiroPage = () => {
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="flex bg-slate-100 rounded-lg p-0.5 flex-wrap">
           <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='resumo'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-resumo">Resumo</button>
-          <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='transacoes'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-transacoes">Transacoes</button>
+          <button onClick={() => setView('lancamentos')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='lancamentos'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-lancamentos">Lancamentos</button>
           <button onClick={() => setView('taxas')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='taxas'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-taxas">Taxas</button>
         </div>
         {view !== 'taxas' && (
@@ -3739,6 +4030,28 @@ const FinanceiroPage = () => {
             </div>
           </div>
 
+          {/* Secondary metrics: Despesas / Lucro / A Receber / A Pagar */}
+          {(summary?.total_expenses > 0 || summary?.total_receivable > 0 || summary?.total_payable > 0) && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4" data-testid="fin-metrics-row">
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <p className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Despesas pagas</p>
+                <p className="text-base font-bold text-rose-600 mt-0.5">R$ {(summary?.total_expenses || 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <p className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Lucro</p>
+                <p className={`text-base font-bold mt-0.5 ${(summary?.total_profit || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>R$ {(summary?.total_profit || 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-[10px] font-bold uppercase text-emerald-700 tracking-wider">A receber</p>
+                <p className="text-base font-bold text-emerald-700 mt-0.5">R$ {(summary?.total_receivable || 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <p className="text-[10px] font-bold uppercase text-amber-700 tracking-wider">A pagar</p>
+                <p className="text-base font-bold text-amber-700 mt-0.5">R$ {(summary?.total_payable || 0).toFixed(2)}</p>
+              </div>
+            </div>
+          )}
+
           {view === 'resumo' ? (
             <>
               {/* Payment methods breakdown */}
@@ -3803,8 +4116,24 @@ const FinanceiroPage = () => {
                 </div>
               </div>
             </>
+          ) : view === 'lancamentos' ? (
+            <LancamentosView
+              startDate={startDate}
+              endDate={endDate}
+              filterMethod={filterMethod}
+              filterProf={filterProf}
+              fees={fees}
+              onChanged={() => {
+                // re-trigger summary refresh
+                const params = {};
+                if (startDate) params.start_date = startDate;
+                if (endDate) params.end_date = endDate;
+                if (filterMethod) params.payment_method = filterMethod;
+                schedulingAPI.getFinancialSummary(params).then(r => setSummary(r.data)).catch(() => {});
+              }}
+            />
           ) : (
-            /* Transaction list view */
+            /* Transaction list view (legacy) */
             <div className="space-y-2">
               {txns.map(t => (
                 <div key={t.id} className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3" data-testid={`txn-${t.id}`}>
