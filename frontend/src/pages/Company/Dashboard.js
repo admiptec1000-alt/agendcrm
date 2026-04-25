@@ -52,7 +52,7 @@ const FEATURE_META = {
   financeiro:         { icon: 'DollarSign',       label: 'Financeiro', group: 'Analise' },
   comissoes:          { icon: 'PieChart',         label: 'Comissoes', group: 'Analise' },
   meu_site:           { icon: 'Globe',            label: 'Meu Site', group: 'Config Empresa' },
-  notificacoes:       { icon: 'Bell',             label: 'Notificacoes', group: 'Config Empresa' },
+  // 'notificacoes' agora vive como aba dentro de Conexoes — nao aparece mais no menu lateral
   configuracoes:      { icon: 'Settings',         label: 'Configuracoes', group: 'Config Empresa' },
   'integrações':      { icon: 'Puzzle',           label: 'Integracoes', group: 'Config Empresa' },
   relatorios:         { icon: 'BarChart3',        label: 'Relatorios', group: 'Analise' },
@@ -64,7 +64,8 @@ const FEATURE_META = {
 
 const CompanyDashboard = () => {
   const { user, logout } = useAuth();
-  const [activePage, setActivePage] = useState('agenda');
+  const [activePage, setActivePage] = useState(null);
+  const [baseType, setBaseType] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -101,13 +102,41 @@ const CompanyDashboard = () => {
   // Check onboarding status on mount
   useEffect(() => {
     schedulingAPI.getOnboardingStatus().then(r => {
-      if (!r.data.onboarding_done) setShowOnboarding(true);
+      const bt = r.data?.base_type || 'scheduling';
+      setBaseType(bt);
+      // CRM-only companies (e.g. Atendimento ao Cliente) don't need service/professional setup
+      // — skip the onboarding modal entirely; mark it done so it never shows again.
+      if (bt === 'crm') {
+        if (!r.data.onboarding_done) {
+          schedulingAPI.completeOnboarding().catch(() => {});
+        }
+      } else if (!r.data.onboarding_done) {
+        setShowOnboarding(true);
+      }
     }).catch(() => {});
     schedulingAPI.getBookingPage().then(r => setBookingPage(r.data)).catch(() => {});
     const onLogoUpdate = () => { schedulingAPI.getBookingPage().then(r => setBookingPage(r.data)).catch(() => {}); };
     window.addEventListener('company-logo-updated', onLogoUpdate);
     return () => window.removeEventListener('company-logo-updated', onLogoUpdate);
   }, []);
+
+  // Pick a default page once enabled features are known.
+  // CRM-only -> 'atendimentos' (or first CRM feature); scheduling -> 'agenda'; fallback -> first enabled.
+  useEffect(() => {
+    if (activePage) return;
+    if (!enabledFeatures || enabledFeatures.length === 0) return;
+    let target = null;
+    if (baseType === 'crm') {
+      target = enabledFeatures.includes('atendimentos') ? 'atendimentos'
+        : (enabledFeatures.includes('kanban') ? 'kanban'
+        : (enabledFeatures.includes('contatos') ? 'contatos'
+        : (enabledFeatures.includes('dashboard') ? 'dashboard' : enabledFeatures[0])));
+    } else {
+      target = enabledFeatures.includes('agenda') ? 'agenda'
+        : (enabledFeatures.includes('dashboard') ? 'dashboard' : enabledFeatures[0]);
+    }
+    setActivePage(target);
+  }, [enabledFeatures, baseType, activePage]);
 
   const menuGroups = useMemo(() => {
     const groups = {};
@@ -544,6 +573,13 @@ const MobileMenuSheet = ({ menuGroups, activePage, onPick, onClose, onLogout }) 
 
 
 const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
+  if (!page) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <div className="text-sm text-slate-400">Carregando...</div>
+      </div>
+    );
+  }
   switch (page) {
     case 'dashboard': return <DashboardPage setActivePage={setActivePage} menuGroups={menuGroups} />;
     case 'kanban': return <KanbanPage />;
@@ -568,7 +604,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'meu_site': return <MySitePage />;
     case 'financeiro': return <FinanceiroPage />;
     case 'comissoes': return <ComissoesPage />;
-    case 'notificacoes': return <NotificacoesPage />;
+    case 'notificacoes': return <ConexoesPage initialTab="notificacoes" />;
     case 'relatorios': return <FinanceiroPage />;
     case 'configuracoes': return <ConfigPage />;
     case 'indoor': return <IndoorSettingsPage />;
@@ -2817,8 +2853,8 @@ const PROCESS_TYPES = [
 
 const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', '{empresa}', '{valor}', '{link_confirmar}', '{link_cancelar}', '{link_avaliacao}', '{link_agendar}', '{ultimo_atendimento}', '{dias_sem_voltar}', '{ultimo_servico}', '{aniversario}'];
 
-const ConexoesPage = () => {
-  const [tab, setTab] = useState('conexoes');
+const ConexoesPage = ({ initialTab = 'conexoes' }) => {
+  const [tab, setTab] = useState(initialTab);
   const [connections, setConnections] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [editingTemplate, setEditingTemplate] = useState(null);
@@ -2907,9 +2943,10 @@ const ConexoesPage = () => {
         )}
       </div>
 
-      <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1 mb-6 w-fit">
-        <button onClick={() => setTab('conexoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${tab==='conexoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-conexoes">Canais</button>
-        <button onClick={() => setTab('templates')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${tab==='templates'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-templates">Mensagens Modelo</button>
+      <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1 mb-6 w-fit overflow-x-auto">
+        <button onClick={() => setTab('conexoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='conexoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-conexoes">Canais</button>
+        <button onClick={() => setTab('templates')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='templates'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-templates">Mensagens Modelo</button>
+        <button onClick={() => setTab('notificacoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='notificacoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-notificacoes">Configuracao de Notificacao</button>
       </div>
 
       {tab === 'conexoes' && (
@@ -2962,6 +2999,8 @@ const ConexoesPage = () => {
           </div>
         </div>
       )}
+
+      {tab === 'notificacoes' && <NotificacoesPage embedded />}
     </div>
   );
 };
@@ -4212,7 +4251,7 @@ const ComissoesPage = () => {
 };
 
 /* ========== NOTIFICACOES (REAL) ========== */
-const NotificacoesPage = () => {
+const NotificacoesPage = ({ embedded = false }) => {
   const [settings, setSettings] = useState(null);
   const [history, setHistory] = useState([]);
   const [saving, setSaving] = useState(false);

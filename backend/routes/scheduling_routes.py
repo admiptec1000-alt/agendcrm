@@ -1499,8 +1499,20 @@ async def get_onboarding_status(
     booking_page = await db.booking_pages.find_one({"company_id": company_id}, {"_id": 0})
     company = await db.companies.find_one({"id": company_id}, {"_id": 0})
     onboarding_done = company.get("onboarding_done", False) if company else False
+
+    # Resolve business type base_type to drive behavior:
+    #   'crm'       -> CRM only (e.g. Atendimento ao Cliente) — no service/professional onboarding
+    #   'scheduling'-> scheduling (Salao, Clinica)
+    #   'both'      -> Completo
+    base_type = "scheduling"  # safe default
+    if company and company.get("business_type_id"):
+        bt = await db.business_types.find_one({"id": company["business_type_id"]}, {"_id": 0, "base_type": 1})
+        if bt and bt.get("base_type"):
+            base_type = bt["base_type"]
+
     return {
         "onboarding_done": onboarding_done,
+        "base_type": base_type,
         "steps": {
             "company_configured": bool(company and company.get("theme_colors")),
             "has_services": services_count > 0,

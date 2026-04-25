@@ -100,40 +100,60 @@ const AtendimentosPage = () => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-52px)] -m-6" data-testid="atendimentos-page">
+    <div className="flex h-[calc(100vh-52px)] lg:h-[calc(100vh-52px)] pb-16 lg:pb-0 -m-6" data-testid="atendimentos-page">
       {/* === CONVERSATION LIST === */}
       <div className={`${selectedTicket ? 'hidden lg:flex' : 'flex'} flex-col w-full lg:w-[380px] border-r border-slate-200 bg-white flex-shrink-0`}>
-        {/* Search */}
-        <div className="p-3 border-b border-slate-200">
+        {/* Modern header with gradient and KPIs */}
+        <div className="px-4 pt-4 pb-3 bg-gradient-to-br from-primary to-indigo-600 text-white">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-widest opacity-70">Atendimentos</p>
+              <p className="text-2xl font-bold font-heading mt-0.5">{counts.total || 0}<span className="text-xs font-normal opacity-70 ml-2">conversas</span></p>
+            </div>
+            <button
+              onClick={() => setShowNewTicket(true)}
+              className="w-11 h-11 rounded-2xl bg-white/15 hover:bg-white/25 backdrop-blur active:scale-95 transition-all flex items-center justify-center shadow-lg"
+              data-testid="new-ticket-btn"
+              title="Novo atendimento"
+            >
+              <Plus className="w-5 h-5" />
+            </button>
+          </div>
+          {/* Search */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/70" />
             <input
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar atendimento e mensagens"
-              className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              placeholder="Buscar conversa, cliente ou mensagem"
+              className="w-full pl-9 pr-4 py-2.5 text-sm bg-white/15 backdrop-blur placeholder-white/60 text-white border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-white/40"
               data-testid="search-conversations"
             />
           </div>
         </div>
 
-        {/* Filters Row */}
-        <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-2">
-          <select
-            value={channelFilter}
-            onChange={(e) => setChannelFilter(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary"
-            data-testid="channel-filter"
-          >
-            <option value="">Todos canais</option>
-            <option value="whatsapp">WhatsApp</option>
-            <option value="instagram">Instagram</option>
-            <option value="web">Web</option>
-            <option value="email">Email</option>
-          </select>
-          <button onClick={() => setShowNewTicket(true)} className="ml-auto p-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors" data-testid="new-ticket-btn">
-            <Plus className="w-4 h-4" />
-          </button>
+        {/* Channel filter chips */}
+        <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto">
+          {[
+            { v: '', label: 'Todos' },
+            { v: 'whatsapp', label: 'WhatsApp' },
+            { v: 'instagram', label: 'Instagram' },
+            { v: 'web', label: 'Web' },
+            { v: 'email', label: 'Email' },
+          ].map(c => (
+            <button
+              key={c.v}
+              onClick={() => setChannelFilter(c.v)}
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap transition-all ${
+                channelFilter === c.v
+                  ? 'bg-primary text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+              data-testid={`channel-chip-${c.v || 'all'}`}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
 
         {/* Tabs */}
@@ -145,9 +165,15 @@ const AtendimentosPage = () => {
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto">
           {tickets.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-16 text-slate-400">
-              <MessageSquare className="w-10 h-10 mb-2" />
-              <p className="text-sm">Nenhuma conversa</p>
+            <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/10 to-indigo-100 flex items-center justify-center mb-3">
+                <MessageSquare className="w-7 h-7 text-primary" />
+              </div>
+              <p className="text-sm font-semibold text-slate-700">Tudo em dia!</p>
+              <p className="text-xs text-slate-400 mt-1">{activeTab === 'atendendo' ? 'Nenhum atendimento em andamento' : 'Nenhum cliente aguardando'}</p>
+              <button onClick={() => setShowNewTicket(true)} className="mt-4 text-xs font-semibold text-primary hover:underline">
+                + Iniciar novo atendimento
+              </button>
             </div>
           )}
           {tickets.map((ticket) => {
