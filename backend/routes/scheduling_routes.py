@@ -414,6 +414,9 @@ async def conclude_appointment(
     }
     if data.notes:
         update["notes"] = data.notes
+    # Generate review token if not already present (used by satisfaction survey link)
+    if not apt.get("review_token"):
+        update["review_token"] = str(uuid.uuid4())
     await db.appointments.update_one({"id": appointment_id}, {"$set": update})
 
     # Record financial transaction
@@ -451,7 +454,85 @@ async def list_transactions(
     if payment_method:
         query["payment_method"] = payment_method
     txns = await db.financial_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    fees = await _get_payment_fees(db, user["company_id"])
+    for t in txns:
+        gross = float(t.get("amount", 0) or 0)
+        fee_amount = _calc_fee(gross, t.get("payment_method", ""), fees)
+        t["gross_amount"] = round(gross, 2)
+        t["fee_amount"] = round(fee_amount, 2)
+        t["net_amount"] = round(gross - fee_amount, 2)
     return txns
+
+
+# === PAYMENT FEES (taxas por forma de pagamento) ===
+class PaymentFeesUpdate(BaseModel):
+    pix_pct: Optional[float] = 0.0
+    pix_fixed: Optional[float] = 0.0
+    credit_pct: Optional[float] = 0.0
+    credit_fixed: Optional[float] = 0.0
+    debit_pct: Optional[float] = 0.0
+    debit_fixed: Optional[float] = 0.0
+
+
+def _empty_fees() -> dict:
+    return {
+        "pix_pct": 0.0, "pix_fixed": 0.0,
+        "credit_pct": 0.0, "credit_fixed": 0.0,
+        "debit_pct": 0.0, "debit_fixed": 0.0,
+    }
+
+
+async def _get_payment_fees(db: AsyncIOMotorDatabase, company_id: str) -> dict:
+    doc = await db.payment_fees.find_one({"company_id": company_id}, {"_id": 0})
+    if not doc:
+        return _empty_fees()
+    out = _empty_fees()
+    out.update({k: float(doc.get(k) or 0) for k in out.keys()})
+    return out
+
+
+def _calc_fee(amount: float, payment_method: str, fees: dict) -> float:
+    if not amount or amount <= 0:
+        return 0.0
+    pm = (payment_method or "").lower()
+    if pm == "pix":
+        return amount * (fees.get("pix_pct", 0) / 100.0) + fees.get("pix_fixed", 0)
+    if pm == "cartao_credito":
+        return amount * (fees.get("credit_pct", 0) / 100.0) + fees.get("credit_fixed", 0)
+    if pm == "cartao_debito":
+        return amount * (fees.get("debit_pct", 0) / 100.0) + fees.get("debit_fixed", 0)
+    return 0.0
+
+
+@router.get("/financial/payment-fees")
+async def get_payment_fees(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    return await _get_payment_fees(db, user["company_id"])
+
+
+@router.put("/financial/payment-fees")
+async def update_payment_fees(
+    data: PaymentFeesUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    payload = {k: float(v or 0) for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    # Clamp negative values
+    for k in payload:
+        if payload[k] < 0:
+            payload[k] = 0.0
+    existing = await db.payment_fees.find_one({"company_id": user["company_id"]})
+    if existing:
+        await db.payment_fees.update_one(
+            {"company_id": user["company_id"]},
+            {"$set": payload}
+        )
+    else:
+        doc = {"id": str(uuid.uuid4()), "company_id": user["company_id"], **_empty_fees(), **payload}
+        await db.payment_fees.insert_one(doc)
+    return await _get_payment_fees(db, user["company_id"])
 
 @router.get("/client-subscription-lookup")
 async def lookup_client_subscription(
@@ -489,19 +570,42 @@ async def financial_summary(
         query["date"] = {"$gte": start_date}
     if end_date:
         query.setdefault("date", {})["$lte"] = end_date
-    
+
     txns = await db.financial_transactions.find(query, {"_id": 0}).to_list(5000)
-    total = sum(t.get("amount", 0) for t in txns)
-    by_method = {}
+    fees = await _get_payment_fees(db, user["company_id"])
+
+    total_gross = 0.0
+    total_fee = 0.0
+    by_method_gross = {}
+    by_method_fee = {}
+    by_method_net = {}
     for t in txns:
-        m = t.get("payment_method", "outros")
-        by_method[m] = by_method.get(m, 0) + t.get("amount", 0)
-    
+        gross = float(t.get("amount", 0) or 0)
+        method = t.get("payment_method", "outros")
+        fee_amount = _calc_fee(gross, method, fees)
+        net = gross - fee_amount
+        total_gross += gross
+        total_fee += fee_amount
+        by_method_gross[method] = by_method_gross.get(method, 0) + gross
+        by_method_fee[method] = by_method_fee.get(method, 0) + fee_amount
+        by_method_net[method] = by_method_net.get(method, 0) + net
+        # also enrich the returned txns sample with derived fields
+        t["gross_amount"] = round(gross, 2)
+        t["fee_amount"] = round(fee_amount, 2)
+        t["net_amount"] = round(net, 2)
+
     return {
-        "total_revenue": total,
+        "total_revenue": round(total_gross, 2),  # legacy/back-compat (gross)
+        "total_gross": round(total_gross, 2),
+        "total_fee": round(total_fee, 2),
+        "total_net": round(total_gross - total_fee, 2),
         "transaction_count": len(txns),
-        "by_payment_method": by_method,
-        "transactions": txns[:50]
+        "by_payment_method": {k: round(v, 2) for k, v in by_method_gross.items()},  # legacy
+        "by_payment_method_gross": {k: round(v, 2) for k, v in by_method_gross.items()},
+        "by_payment_method_fee": {k: round(v, 2) for k, v in by_method_fee.items()},
+        "by_payment_method_net": {k: round(v, 2) for k, v in by_method_net.items()},
+        "fees": fees,
+        "transactions": txns[:50],
     }
 
 

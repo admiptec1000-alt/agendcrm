@@ -35,6 +35,17 @@ VAR_ALIASES = {
     "cancelar": "link_cancelar",
     "link_confirmar": "link_confirmar",
     "confirmar": "link_confirmar",
+    "link_avaliacao": "link_avaliacao",
+    "avaliacao": "link_avaliacao",
+    "pesquisa": "link_avaliacao",
+    "link_agendar": "link_agendar",
+    "agendar": "link_agendar",
+    "retorno": "link_agendar",
+    "ultimo_atendimento": "ultimo_atendimento",
+    "ultimo_servico": "ultimo_servico",
+    "dias_sem_voltar": "dias_sem_voltar",
+    "aniversario": "aniversario",
+    "valor": "valor",
 }
 
 
@@ -291,7 +302,6 @@ async def notify_appointment_reminder(
         + (f"✅ Confirme seu horario: {link_confirmar}\n" if link_confirmar else "")
         + (f"❌ Precisa cancelar? {link_cancelar}" if link_cancelar else "")
     )
-
     message = render_template((tmpl or {}).get("message"), variables) if tmpl else default_msg
     message = message.strip()
     if not message:
@@ -311,3 +321,140 @@ async def notify_appointment_reminder(
         except Exception:
             pass
     return ok
+
+
+def _build_link_agendar(base_url: str, slug: str, customer_name: str = "", customer_phone: str = "") -> str:
+    """Build a public booking page URL with prefilled name/phone."""
+    if not base_url or not slug:
+        return ""
+    from urllib.parse import urlencode, quote
+    params = {}
+    if customer_name:
+        params["name"] = customer_name
+    if customer_phone:
+        params["phone"] = customer_phone
+    qs = "?" + urlencode(params, quote_via=quote) if params else ""
+    return f"{base_url.rstrip('/')}/{slug}/agenda{qs}"
+
+
+async def notify_satisfaction_survey(
+    db: AsyncIOMotorDatabase,
+    company_id: str,
+    appointment: dict,
+    base_url: str = "",
+) -> bool:
+    """Send post-attendance satisfaction survey via WhatsApp.
+    Substitutes {link_avaliacao} with a token-based public review URL.
+    Uses the 'pos_atendimento' template if active, else a default message.
+    """
+    conn = await _get_active_whatsapp_conn(db, company_id)
+    if not conn:
+        return False
+    tmpl = await db.message_templates.find_one(
+        {"company_id": company_id, "process_key": "pos_atendimento", "active": True},
+        {"_id": 0}
+    )
+    company = await db.companies.find_one({"id": company_id}, {"_id": 0, "name": 1})
+    company_name = (company or {}).get("name", "")
+    base = base_url.rstrip("/") if base_url else ""
+    review_token = appointment.get("review_token", "")
+    link_avaliacao = f"{base}/api/public/apt/review/{review_token}" if base and review_token else ""
+
+    date_pt = appointment.get("date", "")
+    try:
+        y, m, d = date_pt.split("-")
+        date_pt = f"{d}/{m}/{y}"
+    except Exception:
+        pass
+
+    variables = {
+        "nome_cliente": appointment.get("customer_name", ""),
+        "nome_profissional": appointment.get("professional_name", ""),
+        "servico": appointment.get("service_name", ""),
+        "data": date_pt,
+        "hora": appointment.get("time", ""),
+        "empresa": company_name,
+        "valor": f"R$ {(appointment.get('price') or 0):.2f}".replace(".", ","),
+        "link_avaliacao": link_avaliacao,
+    }
+    default_msg = (
+        f"Ola *{variables['nome_cliente']}*! 😊\n\n"
+        f"Esperamos que tenha gostado do seu atendimento na *{company_name}*. "
+        f"Sua opiniao e muito importante para nos.\n\n"
+        + (f"⭐ Avalie aqui: {link_avaliacao}" if link_avaliacao else "Conte para nos como foi sua experiencia!")
+    )
+    message = render_template((tmpl or {}).get("message"), variables) if tmpl else default_msg
+    message = (message or "").strip() or default_msg
+    phone = appointment.get("customer_phone")
+    if not phone:
+        return False
+    ok = await _send_via_baileys(conn["id"], phone, message)
+    if ok:
+        from datetime import datetime as _dt
+        await db.appointments.update_one(
+            {"id": appointment["id"]},
+            {"$set": {"survey_sent_at": _dt.now(timezone.utc).isoformat()}}
+        )
+    return ok
+
+
+async def notify_return_reminder(
+    db: AsyncIOMotorDatabase,
+    company_id: str,
+    customer: dict,
+    last_appointment: Optional[dict] = None,
+    base_url: str = "",
+    company_slug: str = "",
+) -> bool:
+    """Send a 'come back' reminder to a customer.
+    Substitutes {link_agendar} (with prefilled name/phone) so the client can
+    re-book with one tap. Uses the 'retorno' template if active.
+    """
+    conn = await _get_active_whatsapp_conn(db, company_id)
+    if not conn:
+        return False
+    tmpl = await db.message_templates.find_one(
+        {"company_id": company_id, "process_key": "retorno", "active": True},
+        {"_id": 0}
+    )
+    company = await db.companies.find_one({"id": company_id}, {"_id": 0, "name": 1})
+    company_name = (company or {}).get("name", "")
+
+    customer_name = customer.get("name", "")
+    customer_phone = customer.get("phone", "")
+    link_agendar = _build_link_agendar(base_url, company_slug, customer_name, customer_phone)
+
+    last_date = ""
+    last_service = ""
+    days_since = ""
+    if last_appointment:
+        last_date_iso = last_appointment.get("date", "")
+        try:
+            y, m, d = last_date_iso.split("-")
+            last_date = f"{d}/{m}/{y}"
+            from datetime import date as _date
+            last = _date(int(y), int(m), int(d))
+            days_since = str((_date.today() - last).days)
+        except Exception:
+            last_date = last_date_iso
+        last_service = last_appointment.get("service_name", "")
+
+    variables = {
+        "nome_cliente": customer_name,
+        "empresa": company_name,
+        "link_agendar": link_agendar,
+        "ultimo_atendimento": last_date,
+        "ultimo_servico": last_service,
+        "dias_sem_voltar": days_since,
+        "aniversario": customer.get("birthday", ""),
+    }
+    default_msg = (
+        f"Ola *{customer_name}*! 💜\n\n"
+        f"Sentimos sua falta na *{company_name}*! Ja faz um tempinho desde sua ultima visita.\n\n"
+        + (f"📅 Agende seu proximo horario: {link_agendar}" if link_agendar else "Quando quiser voltar, e so falar!")
+    )
+    message = render_template((tmpl or {}).get("message"), variables) if tmpl else default_msg
+    message = (message or "").strip() or default_msg
+    if not customer_phone:
+        return False
+    return await _send_via_baileys(conn["id"], customer_phone, message)

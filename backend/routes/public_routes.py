@@ -7,7 +7,8 @@ from models import AppointmentCreate, AppointmentStatus
 import uuid
 import os
 from datetime import datetime, timezone, timedelta
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/public", tags=["public"])
 
@@ -491,6 +492,142 @@ async def cancel_appointment_by_token(
         "Seu agendamento foi cancelado e o horario ja foi liberado. Se mudar de ideia, agende um novo horario.",
         "#ef4444"
     )
+
+
+# === SATISFACTION SURVEY (1-5 stars) ===
+def _render_review_page(token: str, apt: dict, company_name: str, primary_color: str = "#4F46E5") -> str:
+    customer = apt.get("customer_name", "")
+    service = apt.get("service_name", "")
+    return f"""<!DOCTYPE html><html lang=\"pt-br\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Avaliacao - {company_name}</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#0f172a 0%,#1e1b4b 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}}
+  .card{{max-width:460px;width:100%;background:#fff;border-radius:24px;padding:32px 24px;box-shadow:0 20px 60px rgba(0,0,0,.4)}}
+  h1{{font-size:22px;margin:0 0 6px;color:#0f172a;text-align:center}}
+  .sub{{color:#64748b;text-align:center;margin-bottom:24px;font-size:14px}}
+  .info{{background:#f1f5f9;border-radius:12px;padding:12px;text-align:center;margin-bottom:24px}}
+  .info b{{color:#0f172a}}
+  .info span{{color:#475569;font-size:13px}}
+  .stars{{display:flex;gap:8px;justify-content:center;margin-bottom:24px}}
+  .star{{font-size:42px;cursor:pointer;color:#cbd5e1;transition:transform .15s;user-select:none}}
+  .star.active{{color:#facc15}}
+  .star:hover{{transform:scale(1.15)}}
+  textarea{{width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:12px;font-size:14px;resize:vertical;min-height:90px;font-family:inherit}}
+  textarea:focus{{outline:2px solid {primary_color};outline-offset:-1px;border-color:transparent}}
+  button{{width:100%;padding:14px;background:{primary_color};color:#fff;border:0;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;margin-top:16px;transition:opacity .2s}}
+  button:hover{{opacity:.9}}
+  button:disabled{{opacity:.4;cursor:not-allowed}}
+  .ok{{display:none;text-align:center;padding:20px}}
+  .ok.show{{display:block}}
+  .ok h2{{color:#10b981;margin-bottom:6px}}
+  .ok p{{color:#64748b}}
+  .form{{display:block}}
+  .form.hide{{display:none}}
+</style></head><body>
+<div class=\"card\">
+  <div class=\"form\" id=\"form\">
+    <h1>Como foi seu atendimento?</h1>
+    <p class=\"sub\">{company_name}</p>
+    <div class=\"info\">
+      <b>{customer}</b><br>
+      <span>{service}</span>
+    </div>
+    <div class=\"stars\" id=\"stars\">
+      <span class=\"star\" data-v=\"1\">★</span>
+      <span class=\"star\" data-v=\"2\">★</span>
+      <span class=\"star\" data-v=\"3\">★</span>
+      <span class=\"star\" data-v=\"4\">★</span>
+      <span class=\"star\" data-v=\"5\">★</span>
+    </div>
+    <textarea id=\"comment\" placeholder=\"Quer deixar um comentario? (opcional)\"></textarea>
+    <button id=\"submit\" disabled>Enviar Avaliacao</button>
+  </div>
+  <div class=\"ok\" id=\"ok\">
+    <h2>Obrigado! 💜</h2>
+    <p>Sua avaliacao nos ajuda a melhorar cada dia mais.</p>
+  </div>
+</div>
+<script>
+  let rating = 0;
+  const stars = document.querySelectorAll('.star');
+  const submit = document.getElementById('submit');
+  stars.forEach(s => {{
+    s.addEventListener('click', () => {{
+      rating = parseInt(s.dataset.v, 10);
+      stars.forEach(x => {{ x.classList.toggle('active', parseInt(x.dataset.v,10) <= rating); }});
+      submit.disabled = false;
+    }});
+  }});
+  submit.addEventListener('click', async () => {{
+    submit.disabled = true;
+    submit.textContent = 'Enviando...';
+    try {{
+      const r = await fetch('/api/public/apt/review/{token}', {{
+        method: 'POST', headers: {{'Content-Type':'application/json'}},
+        body: JSON.stringify({{ rating, comment: document.getElementById('comment').value }})
+      }});
+      if (r.ok) {{
+        document.getElementById('form').classList.add('hide');
+        document.getElementById('ok').classList.add('show');
+      }} else {{
+        submit.disabled = false;
+        submit.textContent = 'Enviar Avaliacao';
+        alert('Erro ao enviar. Tente novamente.');
+      }}
+    }} catch(e) {{
+      submit.disabled = false;
+      submit.textContent = 'Enviar Avaliacao';
+    }}
+  }});
+</script>
+</body></html>"""
+
+
+@router.get("/apt/review/{token}", response_class=HTMLResponse)
+async def review_appointment_page(
+    token: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    apt = await db.appointments.find_one({"review_token": token})
+    if not apt:
+        return _render_status_page("Link invalido", "Este link de avaliacao nao existe ou expirou.", "#ef4444")
+    if apt.get("review_rating"):
+        return _render_status_page("Ja avaliado", "Voce ja enviou sua avaliacao para este atendimento. Obrigado!", "#10b981")
+    company = await db.companies.find_one({"id": apt["company_id"]}, {"_id": 0, "name": 1})
+    page = await db.booking_pages.find_one({"company_id": apt["company_id"]}, {"_id": 0, "primary_color": 1})
+    return HTMLResponse(content=_render_review_page(
+        token, apt,
+        (company or {}).get("name", "Avaliacao"),
+        (page or {}).get("primary_color", "#4F46E5")
+    ))
+
+
+class ReviewSubmit(BaseModel):
+    rating: int
+    comment: Optional[str] = ""
+
+
+@router.post("/apt/review/{token}")
+async def review_appointment_submit(
+    token: str,
+    data: ReviewSubmit,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    apt = await db.appointments.find_one({"review_token": token})
+    if not apt:
+        raise HTTPException(status_code=404, detail="Link invalido")
+    if apt.get("review_rating"):
+        raise HTTPException(status_code=400, detail="Avaliacao ja registrada")
+    rating = max(1, min(5, int(data.rating or 0)))
+    await db.appointments.update_one(
+        {"id": apt["id"]},
+        {"$set": {
+            "review_rating": rating,
+            "review_comment": (data.comment or "").strip()[:500],
+            "review_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    )
+    return {"message": "Avaliacao registrada", "rating": rating}
 
 
 @router.get("/booking/{slug}/subscription")

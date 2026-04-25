@@ -2414,16 +2414,161 @@ const EditAppointmentModal = ({ appointment, services, canEditPrice, onClose, on
 };
 
 
+const FILTER_TYPES = [
+  { key: 'inactive_days', label: 'Clientes sem atendimento ha X dias', needsDays: true },
+  { key: 'never_returned', label: 'Clientes que nao voltaram apos 1o atendimento', needsDays: true },
+  { key: 'birthday_month', label: 'Aniversariantes do mes', needsMonth: true },
+  { key: 'service', label: 'Clientes de um servico especifico', needsService: true },
+  { key: 'all_active', label: 'Todos os clientes ativos' },
+];
+
+const REMARK_VARS = ['{nome}', '{empresa}', '{link_agendar}', '{ultimo_atendimento}', '{ultimo_servico}', '{dias_sem_voltar}', '{aniversario}'];
+
+const RemarketingTab = () => {
+  const [filterType, setFilterType] = useState('inactive_days');
+  const [days, setDays] = useState(45);
+  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  const [services, setServices] = useState([]);
+  const [serviceId, setServiceId] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [message, setMessage] = useState('Ola {nome}! Sentimos sua falta na {empresa}. Faz {dias_sem_voltar} dias desde seu ultimo atendimento ({ultimo_servico} em {ultimo_atendimento}). Que tal voltar? Agende: {link_agendar}');
+  const [when, setWhen] = useState('now');
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [sending, setSending] = useState(false);
+  const messageRef = React.useRef(null);
+
+  useEffect(() => { schedulingAPI.getServices().then(r => setServices(r.data)).catch(() => {}); }, []);
+
+  const filterCfg = FILTER_TYPES.find(f => f.key === filterType);
+
+  const buildBody = () => ({
+    filter_type: filterType,
+    inactive_days: filterCfg?.needsDays ? parseInt(days, 10) || 30 : null,
+    month: filterCfg?.needsMonth ? parseInt(month, 10) : null,
+    service_id: filterCfg?.needsService ? (serviceId || null) : null,
+  });
+
+  const loadPreview = async () => {
+    if (filterCfg?.needsService && !serviceId) { toast.error('Selecione um servico'); return; }
+    setLoadingPreview(true);
+    try {
+      const r = await channelsAPI.remarketingPreview(buildBody());
+      setPreview(r.data);
+    } catch (e) {
+      toast.error('Erro ao buscar audiencia');
+    } finally { setLoadingPreview(false); }
+  };
+
+  const insertVar = (v) => {
+    const ta = messageRef.current;
+    if (!ta) { setMessage(m => m + v); return; }
+    const start = ta.selectionStart ?? message.length;
+    const end = ta.selectionEnd ?? message.length;
+    setMessage(message.slice(0, start) + v + message.slice(end));
+    requestAnimationFrame(() => { try { ta.focus(); ta.setSelectionRange(start + v.length, start + v.length); } catch {} });
+  };
+
+  const handleSend = async () => {
+    if (!message.trim()) { toast.error('Escreva uma mensagem'); return; }
+    if (when === 'scheduled' && !scheduledAt) { toast.error('Defina a data/hora do envio'); return; }
+    if (!preview || !preview.count) { toast.error('Carregue a previa primeiro'); return; }
+    if (!window.confirm(`Confirmar envio para ${preview.count} cliente(s)?`)) return;
+    setSending(true);
+    try {
+      const body = { ...buildBody(), message, when, scheduled_at: when === 'scheduled' ? new Date(scheduledAt).toISOString() : null };
+      const r = await channelsAPI.remarketingBulkSend(body);
+      toast.success(r.data.message);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro ao enviar');
+    } finally { setSending(false); }
+  };
+
+  return (
+    <div className="space-y-4" data-testid="remarketing-tab">
+      <div className="card !p-4">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">1. Selecione o publico</p>
+        <select value={filterType} onChange={e => { setFilterType(e.target.value); setPreview(null); }} className="input-field text-sm" data-testid="filter-type">
+          {FILTER_TYPES.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+        </select>
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          {filterCfg?.needsDays && (
+            <div>
+              <label className="text-xs font-medium text-slate-700">Dias minimos sem visita</label>
+              <input type="number" min="1" value={days} onChange={e => setDays(e.target.value)} className="input-field text-sm" data-testid="filter-days" />
+            </div>
+          )}
+          {filterCfg?.needsMonth && (
+            <div>
+              <label className="text-xs font-medium text-slate-700">Mes</label>
+              <select value={month} onChange={e => setMonth(e.target.value)} className="input-field text-sm" data-testid="filter-month">
+                {['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'].map((m,i) => <option key={i} value={i+1}>{m}</option>)}
+              </select>
+            </div>
+          )}
+          {filterCfg?.needsService && (
+            <div className="col-span-2">
+              <label className="text-xs font-medium text-slate-700">Servico</label>
+              <select value={serviceId} onChange={e => setServiceId(e.target.value)} className="input-field text-sm" data-testid="filter-service">
+                <option value="">Selecione...</option>
+                {services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+        <button onClick={loadPreview} disabled={loadingPreview} className="btn-secondary text-sm mt-3 w-full" data-testid="preview-audience-btn">
+          {loadingPreview ? 'Buscando...' : 'Carregar Previa'}
+        </button>
+        {preview && (
+          <div className="mt-3 p-3 bg-primary/5 rounded-lg border border-primary/10" data-testid="audience-result">
+            <p className="text-sm font-semibold text-primary">{preview.count} cliente(s) na audiencia</p>
+            <div className="mt-1 max-h-28 overflow-y-auto">
+              {preview.audience.slice(0, 8).map(c => (
+                <p key={c.id} className="text-xs text-slate-600">{c.name} - {c.phone} {c.days_since !== null && `· ${c.days_since}d`}</p>
+              ))}
+              {preview.count > 8 && <p className="text-[10px] text-slate-400 mt-1">... e mais {preview.count - 8}</p>}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="card !p-4">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">2. Escreva a mensagem</p>
+        <textarea ref={messageRef} value={message} onChange={e => setMessage(e.target.value)} rows={5} className="input-field text-sm" data-testid="remarketing-message" />
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {REMARK_VARS.map(v => (
+            <button key={v} type="button" onClick={() => insertVar(v)} className="px-2 py-0.5 rounded-md text-[11px] font-mono bg-slate-50 text-primary border border-slate-200 hover:bg-slate-100" data-testid={`insert-${v.replace(/[{}]/g,'')}`}>{v}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card !p-4">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">3. Quando enviar</p>
+        <div className="flex gap-2 mb-3">
+          <button onClick={() => setWhen('now')} className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold ${when==='now'?'bg-primary text-white':'bg-slate-100 text-slate-600'}`} data-testid="when-now">Imediato</button>
+          <button onClick={() => setWhen('scheduled')} className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold ${when==='scheduled'?'bg-primary text-white':'bg-slate-100 text-slate-600'}`} data-testid="when-scheduled">Agendar</button>
+        </div>
+        {when === 'scheduled' && (
+          <input type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} className="input-field text-sm" data-testid="schedule-datetime" />
+        )}
+        <button onClick={handleSend} disabled={sending || !preview?.count} className="btn-primary text-sm w-full mt-3" data-testid="bulk-send-btn">
+          {sending ? 'Enviando...' : (when === 'now' ? `Enviar agora para ${preview?.count || 0} cliente(s)` : `Agendar envio para ${preview?.count || 0} cliente(s)`)}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const MessageSchedulingPage = () => {
+  const [tab, setTab] = useState('campanha');
   const [messages, setMessages] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ recipient: '', channel: 'whatsapp', message: '', scheduled_at: '' });
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => { loadMessages(); }, []);
   const loadMessages = async () => {
     try { const r = await channelsAPI.getScheduledMessages(); setMessages(r.data); }
-    catch (e) {} finally { setLoading(false); }
+    catch (e) {}
   };
 
   const handleSave = async () => {
@@ -2446,52 +2591,58 @@ const MessageSchedulingPage = () => {
 
   return (
     <div className="animate-fade-in" data-testid="message-scheduling-page">
-      <div className="flex items-center justify-between mb-6">
-        <p className="text-sm text-slate-600">Agende envios de mensagens via WhatsApp e outros canais</p>
-        <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2" data-testid="new-msg-schedule-btn">
-          <Plus className="w-4 h-4" /> Agendar Mensagem
-        </button>
+      <div className="flex bg-slate-100 rounded-lg p-0.5 mb-4 overflow-x-auto">
+        <button onClick={() => setTab('campanha')} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${tab==='campanha'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="tab-campanha">📢 Campanha / Remarketing</button>
+        <button onClick={() => setTab('agendadas')} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${tab==='agendadas'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="tab-agendadas">📅 Agendadas ({messages.length})</button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Total</p><p className="text-xl font-bold font-heading">{messages.length}</p></div>
-        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Pendentes</p><p className="text-xl font-bold font-heading text-amber-600">{messages.filter(m => m.status === 'pendente').length}</p></div>
-        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Enviadas</p><p className="text-xl font-bold font-heading text-emerald-600">{messages.filter(m => m.status === 'enviada').length}</p></div>
-        <div className="card !p-4"><p className="text-xs text-slate-500 mb-1">Canceladas</p><p className="text-xl font-bold font-heading text-red-600">{messages.filter(m => m.status === 'cancelada').length}</p></div>
-      </div>
-
-      <div className="card">
-        {messages.length === 0 ? (
-          <div className="text-center py-16">
-            <CalendarCheck className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm">Nenhuma mensagem agendada</p>
-            <p className="text-slate-400 text-xs mt-1">Clique em "Agendar Mensagem" para comecar</p>
+      {tab === 'campanha' ? <RemarketingTab /> : (
+        <>
+          <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+            <p className="text-sm text-slate-600">Mensagens individuais agendadas</p>
+            <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2 text-sm" data-testid="new-msg-schedule-btn">
+              <Plus className="w-4 h-4" /> Agendar
+            </button>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {messages.map(msg => (
-              <div key={msg.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${msg.channel === 'whatsapp' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
-                    <Phone className="w-5 h-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-900 truncate">{msg.recipient}</p>
-                    <p className="text-xs text-slate-500 truncate">{msg.message}</p>
-                  </div>
-                </div>
-                <div className="text-right flex-shrink-0 ml-3">
-                  <p className="text-xs font-medium text-primary">{new Date(msg.scheduled_at).toLocaleString('pt-BR')}</p>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${msg.status === 'pendente' ? 'bg-amber-100 text-amber-700' : msg.status === 'enviada' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{msg.status}</span>
-                  {msg.status === 'pendente' && (
-                    <button onClick={() => handleCancel(msg.id)} className="block text-[10px] text-red-500 hover:text-red-700 mt-1 font-medium">Cancelar</button>
-                  )}
-                </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+            <div className="card !p-3"><p className="text-xs text-slate-500">Total</p><p className="text-lg font-bold font-heading">{messages.length}</p></div>
+            <div className="card !p-3"><p className="text-xs text-slate-500">Pendentes</p><p className="text-lg font-bold font-heading text-amber-600">{messages.filter(m => m.status === 'pendente').length}</p></div>
+            <div className="card !p-3"><p className="text-xs text-slate-500">Enviadas</p><p className="text-lg font-bold font-heading text-emerald-600">{messages.filter(m => m.status === 'enviada').length}</p></div>
+            <div className="card !p-3"><p className="text-xs text-slate-500">Canceladas</p><p className="text-lg font-bold font-heading text-red-600">{messages.filter(m => m.status === 'cancelada').length}</p></div>
+          </div>
+
+          <div className="card">
+            {messages.length === 0 ? (
+              <div className="text-center py-12">
+                <CalendarCheck className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <p className="text-slate-500 text-sm">Nenhuma mensagem agendada</p>
               </div>
-            ))}
+            ) : (
+              <div className="space-y-2">
+                {messages.map(msg => (
+                  <div key={msg.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg gap-3">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <Phone className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-900 truncate">{msg.recipient_name || msg.recipient}</p>
+                        <p className="text-xs text-slate-500 truncate">{msg.message}</p>
+                      </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-xs font-medium text-primary whitespace-nowrap">{new Date(msg.scheduled_at).toLocaleString('pt-BR')}</p>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${msg.status === 'pendente' ? 'bg-amber-100 text-amber-700' : msg.status === 'enviada' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{msg.status}</span>
+                      {msg.status === 'pendente' && (
+                        <button onClick={() => handleCancel(msg.id)} className="block text-[10px] text-red-500 hover:text-red-700 mt-1 font-medium">Cancelar</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
@@ -2659,11 +2810,12 @@ const PROCESS_TYPES = [
   { key: 'lembrete', label: 'Lembrete', desc: 'Enviada antes do horario agendado' },
   { key: 'cancelamento', label: 'Cancelamento', desc: 'Enviada ao cancelar um agendamento' },
   { key: 'boas_vindas', label: 'Boas-vindas', desc: 'Enviada para novos clientes' },
-  { key: 'pos_atendimento', label: 'Pos-Atendimento', desc: 'Enviada apos o atendimento' },
+  { key: 'pos_atendimento', label: 'Pos-Atendimento (Pesquisa de Satisfacao)', desc: 'Enviada apos o atendimento concluido. Use {link_avaliacao} para o cliente avaliar com 1-5 estrelas' },
+  { key: 'retorno', label: 'Lembrete de Retorno', desc: 'Reativa clientes que nao voltam ha algum tempo. Use {link_agendar} com pre-preenchimento' },
   { key: 'aniversario', label: 'Aniversario', desc: 'Mensagem de aniversario' },
 ];
 
-const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', '{empresa}', '{valor}', '{link_confirmar}', '{link_cancelar}'];
+const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', '{empresa}', '{valor}', '{link_confirmar}', '{link_cancelar}', '{link_avaliacao}', '{link_agendar}', '{ultimo_atendimento}', '{dias_sem_voltar}', '{ultimo_servico}', '{aniversario}'];
 
 const ConexoesPage = () => {
   const [tab, setTab] = useState('conexoes');
@@ -3417,8 +3569,16 @@ const FinanceiroPage = () => {
   const [view, setView] = useState('resumo');
   const [showFilters, setShowFilters] = useState(false);
   const [professionals, setProfessionals] = useState([]);
+  const [fees, setFees] = useState(null);
+  const [feesDraft, setFeesDraft] = useState(null);
+  const [savingFees, setSavingFees] = useState(false);
 
   useEffect(() => { schedulingAPI.getProfessionals().then(r => setProfessionals(r.data)).catch(() => {}); }, []);
+
+  const reloadFees = () => {
+    schedulingAPI.getPaymentFees().then(r => { setFees(r.data); setFeesDraft(r.data); }).catch(() => {});
+  };
+  useEffect(() => { reloadFees(); }, []);
 
   useEffect(() => {
     const params = {};
@@ -3428,33 +3588,50 @@ const FinanceiroPage = () => {
     schedulingAPI.getFinancialSummary(params).then(r => setSummary(r.data)).catch(() => {
       reportsAPI.getFinancial(params).then(r => setSummary(r.data)).catch(() => {});
     });
-  }, [startDate, endDate, filterMethod]);
+  }, [startDate, endDate, filterMethod, fees]);
 
   const PAY_LABEL = { dinheiro: 'Dinheiro', pix: 'PIX', cartao_credito: 'Credito', cartao_debito: 'Debito', outros: 'Outros' };
   const PAY_COLOR = { dinheiro: 'bg-emerald-500', pix: 'bg-cyan-500', cartao_credito: 'bg-violet-500', cartao_debito: 'bg-blue-500', outros: 'bg-slate-400' };
   const PAY_BG = { dinheiro: 'bg-emerald-50 text-emerald-700', pix: 'bg-cyan-50 text-cyan-700', cartao_credito: 'bg-violet-50 text-violet-700', cartao_debito: 'bg-blue-50 text-blue-700' };
-  const byMethod = summary?.by_payment_method || {};
-  const totalRevenue = summary?.total_revenue || 0;
+  const grossByMethod = summary?.by_payment_method_gross || summary?.by_payment_method || {};
+  const feeByMethod = summary?.by_payment_method_fee || {};
+  const netByMethod = summary?.by_payment_method_net || {};
+  const totalGross = summary?.total_gross ?? summary?.total_revenue ?? 0;
+  const totalFee = summary?.total_fee ?? 0;
+  const totalNet = summary?.total_net ?? totalGross;
   const activeFilters = [startDate, endDate, filterProf, filterMethod].filter(Boolean).length;
 
   let txns = summary?.transactions || [];
   if (filterProf) txns = txns.filter(t => t.professional_id === filterProf);
 
+  const saveFees = async () => {
+    setSavingFees(true);
+    try {
+      await schedulingAPI.updatePaymentFees(feesDraft || {});
+      toast.success('Taxas salvas!');
+      reloadFees();
+    } catch (e) { toast.error('Erro ao salvar taxas'); }
+    finally { setSavingFees(false); }
+  };
+
   return (
     <div className="animate-fade-in" data-testid="financeiro-page">
       {/* Toggle + View */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex bg-slate-100 rounded-lg p-0.5">
-          <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='resumo'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`}>Resumo</button>
-          <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='transacoes'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`}>Transacoes</button>
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <div className="flex bg-slate-100 rounded-lg p-0.5 flex-wrap">
+          <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='resumo'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-resumo">Resumo</button>
+          <button onClick={() => setView('transacoes')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='transacoes'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-transacoes">Transacoes</button>
+          <button onClick={() => setView('taxas')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='taxas'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-taxas">Taxas</button>
         </div>
-        <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeFilters > 0 ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-600'}`}>
-          <Settings className="w-3.5 h-3.5" /> Filtros {activeFilters > 0 && <span className="w-4 h-4 rounded-full bg-primary text-white text-[10px] flex items-center justify-center">{activeFilters}</span>}
-        </button>
+        {view !== 'taxas' && (
+          <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeFilters > 0 ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-600'}`}>
+            <Settings className="w-3.5 h-3.5" /> Filtros {activeFilters > 0 && <span className="w-4 h-4 rounded-full bg-primary text-white text-[10px] flex items-center justify-center">{activeFilters}</span>}
+          </button>
+        )}
       </div>
 
       {/* Collapsible filters */}
-      {showFilters && (
+      {showFilters && view !== 'taxas' && (
         <div className="rounded-xl border border-slate-200 bg-white p-3 mb-4 space-y-2 overflow-hidden">
           <div className="grid grid-cols-2 gap-2">
             <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Inicio</label>
@@ -3481,89 +3658,183 @@ const FinanceiroPage = () => {
         </div>
       )}
 
-      {/* Revenue hero */}
-      <div className="rounded-xl bg-gradient-to-r from-primary to-indigo-600 text-white p-4 mb-4">
-        <p className="text-xs font-medium opacity-80">Receita Total</p>
-        <p className="text-3xl font-bold font-heading mt-0.5">R$ {totalRevenue.toFixed(2)}</p>
-        <div className="flex gap-4 mt-2 text-xs opacity-80">
-          <span>{summary?.transaction_count || 0} transacoes</span>
-          <span>Ticket: R$ {summary?.transaction_count ? (totalRevenue / summary.transaction_count).toFixed(2) : '0.00'}</span>
-        </div>
-      </div>
-
-      {view === 'resumo' ? (
-        <>
-          {/* Payment methods breakdown */}
-          <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
-            <p className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-3">Por Forma de Pagamento</p>
-            {Object.entries(byMethod).length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-4">Nenhuma transacao registrada</p>
-            ) : (
-              <div className="space-y-2.5">
-                {Object.entries(byMethod).map(([method, amount]) => (
-                  <div key={method}>
-                    <div className="flex justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2.5 h-2.5 rounded-full ${PAY_COLOR[method] || 'bg-slate-400'}`} />
-                        <span className="text-xs font-medium text-slate-700">{PAY_LABEL[method] || method}</span>
+      {view === 'taxas' ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-4" data-testid="fin-fees-card">
+          <p className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-1">Taxas das formas de pagamento</p>
+          <p className="text-xs text-slate-500 mb-4">As taxas sao deduzidas automaticamente nos calculos do resumo financeiro (Bruto / Taxa / Liquido).</p>
+          {feesDraft && (
+            <div className="space-y-4">
+              {[
+                { key: 'pix', label: 'PIX', icon: '⚡', pctK: 'pix_pct', fixedK: 'pix_fixed' },
+                { key: 'credit', label: 'Cartao de Credito', icon: '💳', pctK: 'credit_pct', fixedK: 'credit_fixed' },
+                { key: 'debit', label: 'Cartao de Debito', icon: '💳', pctK: 'debit_pct', fixedK: 'debit_fixed' },
+              ].map(row => (
+                <div key={row.key} className="rounded-lg border border-slate-200 p-3" data-testid={`fee-row-${row.key}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-base">{row.icon}</span>
+                    <span className="text-sm font-semibold text-slate-900">{row.label}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400">Taxa %</label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={feesDraft[row.pctK] ?? 0}
+                          onChange={e => setFeesDraft({ ...feesDraft, [row.pctK]: parseFloat(e.target.value) || 0 })}
+                          className="input-field text-sm pr-6"
+                          data-testid={`fee-${row.key}-pct`}
+                        />
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">%</span>
                       </div>
-                      <span className="text-xs font-bold text-slate-900">R$ {amount.toFixed(2)}</span>
                     </div>
-                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all ${PAY_COLOR[method] || 'bg-slate-400'}`} style={{ width: `${totalRevenue ? (amount / totalRevenue * 100) : 0}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Recent transactions */}
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <p className="text-xs font-bold uppercase text-slate-400 tracking-wider px-4 pt-3 pb-2">Ultimas Transacoes</p>
-            <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
-              {txns.slice(0, 20).map(t => (
-                <div key={t.id} className="flex items-center justify-between px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-slate-900 truncate">{t.description}</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[11px] text-slate-400">{t.date?.split('-').reverse().join('/')}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PAY_BG[t.payment_method] || 'bg-slate-100 text-slate-600'}`}>{PAY_LABEL[t.payment_method] || t.payment_method}</span>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400">Taxa fixa</label>
+                      <div className="relative">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">R$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={feesDraft[row.fixedK] ?? 0}
+                          onChange={e => setFeesDraft({ ...feesDraft, [row.fixedK]: parseFloat(e.target.value) || 0 })}
+                          className="input-field text-sm pl-8"
+                          data-testid={`fee-${row.key}-fixed`}
+                        />
+                      </div>
                     </div>
                   </div>
-                  <span className="text-sm font-bold text-emerald-600 flex-shrink-0 ml-3">R$ {(t.amount || 0).toFixed(2)}</span>
                 </div>
               ))}
-              {txns.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Nenhuma transacao</p>}
-            </div>
-          </div>
-        </>
-      ) : (
-        /* Transaction list view - cards instead of table for mobile */
-        <div className="space-y-2">
-          {txns.map(t => (
-            <div key={t.id} className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3" data-testid={`txn-${t.id}`}>
-              <div className={`w-1 h-10 rounded-full flex-shrink-0 ${PAY_COLOR[t.payment_method] || 'bg-slate-300'}`} />
-              <div className="flex-1 min-w-0">
-                <p className="text-[13px] font-semibold text-slate-900 truncate">{t.description}</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-[11px] text-slate-400">{t.date?.split('-').reverse().join('/')}</span>
-                  <span className="text-[11px] text-slate-500">{t.professional_name || ''}</span>
-                </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => setFeesDraft(fees)} className="btn-secondary text-sm" data-testid="fees-cancel">Cancelar</button>
+                <button onClick={saveFees} disabled={savingFees} className="btn-primary text-sm" data-testid="fees-save">{savingFees ? 'Salvando...' : 'Salvar Taxas'}</button>
               </div>
-              <div className="text-right flex-shrink-0">
-                <p className="text-sm font-bold text-emerald-600">R$ {(t.amount || 0).toFixed(2)}</p>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PAY_BG[t.payment_method] || 'bg-slate-100 text-slate-600'}`}>{PAY_LABEL[t.payment_method] || t.payment_method}</span>
-              </div>
-            </div>
-          ))}
-          {txns.length === 0 && (
-            <div className="text-center py-16">
-              <DollarSign className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm text-slate-500">Nenhuma transacao</p>
             </div>
           )}
         </div>
+      ) : (
+        <>
+          {/* Revenue hero - Bruto / Taxa / Liquido */}
+          <div className="rounded-xl bg-gradient-to-r from-primary to-indigo-600 text-white p-4 mb-4" data-testid="fin-hero">
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <p className="text-[10px] font-medium opacity-70 uppercase tracking-wider">Bruto</p>
+                <p className="text-xl font-bold font-heading mt-0.5">R$ {totalGross.toFixed(2)}</p>
+              </div>
+              <div className="border-l border-white/20 pl-3">
+                <p className="text-[10px] font-medium opacity-70 uppercase tracking-wider">Taxa</p>
+                <p className="text-xl font-bold font-heading mt-0.5 text-rose-200">- R$ {totalFee.toFixed(2)}</p>
+              </div>
+              <div className="border-l border-white/20 pl-3">
+                <p className="text-[10px] font-medium opacity-70 uppercase tracking-wider">Liquido</p>
+                <p className="text-xl font-bold font-heading mt-0.5 text-emerald-200">R$ {totalNet.toFixed(2)}</p>
+              </div>
+            </div>
+            <div className="flex gap-4 mt-3 text-xs opacity-80">
+              <span>{summary?.transaction_count || 0} transacoes</span>
+              <span>Ticket: R$ {summary?.transaction_count ? (totalGross / summary.transaction_count).toFixed(2) : '0.00'}</span>
+            </div>
+          </div>
+
+          {view === 'resumo' ? (
+            <>
+              {/* Payment methods breakdown */}
+              <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
+                <p className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-3">Por Forma de Pagamento</p>
+                {Object.entries(grossByMethod).length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-4">Nenhuma transacao registrada</p>
+                ) : (
+                  <div className="space-y-3">
+                    {Object.entries(grossByMethod).map(([method, gross]) => {
+                      const fee = feeByMethod[method] || 0;
+                      const net = netByMethod[method] ?? gross;
+                      return (
+                        <div key={method}>
+                          <div className="flex justify-between mb-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${PAY_COLOR[method] || 'bg-slate-400'}`} />
+                              <span className="text-xs font-medium text-slate-700 truncate">{PAY_LABEL[method] || method}</span>
+                            </div>
+                            <div className="flex items-baseline gap-2 flex-shrink-0">
+                              {fee > 0 && (
+                                <span className="text-[10px] text-rose-500 font-medium">- R$ {fee.toFixed(2)}</span>
+                              )}
+                              <span className="text-xs font-bold text-emerald-700">R$ {net.toFixed(2)}</span>
+                            </div>
+                          </div>
+                          <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full transition-all ${PAY_COLOR[method] || 'bg-slate-400'}`} style={{ width: `${totalGross ? (gross / totalGross * 100) : 0}%` }} />
+                          </div>
+                          {fee > 0 && (
+                            <p className="text-[10px] text-slate-400 mt-0.5">Bruto R$ {gross.toFixed(2)}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Recent transactions */}
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <p className="text-xs font-bold uppercase text-slate-400 tracking-wider px-4 pt-3 pb-2">Ultimas Transacoes</p>
+                <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                  {txns.slice(0, 20).map(t => (
+                    <div key={t.id} className="flex items-center justify-between px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-slate-900 truncate">{t.description}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[11px] text-slate-400">{t.date?.split('-').reverse().join('/')}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PAY_BG[t.payment_method] || 'bg-slate-100 text-slate-600'}`}>{PAY_LABEL[t.payment_method] || t.payment_method}</span>
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0 ml-3">
+                        <span className="text-sm font-bold text-emerald-600">R$ {(t.net_amount ?? t.amount ?? 0).toFixed(2)}</span>
+                        {t.fee_amount > 0 && (
+                          <p className="text-[10px] text-slate-400">- R$ {(t.fee_amount || 0).toFixed(2)}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {txns.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Nenhuma transacao</p>}
+                </div>
+              </div>
+            </>
+          ) : (
+            /* Transaction list view */
+            <div className="space-y-2">
+              {txns.map(t => (
+                <div key={t.id} className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3" data-testid={`txn-${t.id}`}>
+                  <div className={`w-1 h-10 rounded-full flex-shrink-0 ${PAY_COLOR[t.payment_method] || 'bg-slate-300'}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-semibold text-slate-900 truncate">{t.description}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-[11px] text-slate-400">{t.date?.split('-').reverse().join('/')}</span>
+                      <span className="text-[11px] text-slate-500">{t.professional_name || ''}</span>
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-sm font-bold text-emerald-600">R$ {(t.net_amount ?? t.amount ?? 0).toFixed(2)}</p>
+                    {t.fee_amount > 0 ? (
+                      <p className="text-[10px] text-rose-500">- R$ {t.fee_amount.toFixed(2)} taxa</p>
+                    ) : (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PAY_BG[t.payment_method] || 'bg-slate-100 text-slate-600'}`}>{PAY_LABEL[t.payment_method] || t.payment_method}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {txns.length === 0 && (
+                <div className="text-center py-16">
+                  <DollarSign className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm text-slate-500">Nenhuma transacao</p>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -3651,9 +3922,29 @@ const NotificacoesPage = () => {
     { key: 'booking_confirmation', label: 'Confirmacao de Agendamento', desc: 'Envia mensagem quando agendamento e confirmado' },
     { key: 'booking_reminder_24h', label: 'Lembrete antes do agendamento', desc: 'Envia um lembrete automatico ao cliente antes do horario' },
     { key: 'booking_cancelled', label: 'Cancelamento', desc: 'Envia notificacao quando agendamento e cancelado' },
+    { key: 'survey_enabled', label: 'Pesquisa de Satisfacao', desc: 'Envia mensagem com link de avaliacao apos o atendimento concluido' },
+    { key: 'return_reminder_enabled', label: 'Lembrete de Retorno', desc: 'Reativa clientes que nao voltam (use no template "retorno")' },
     { key: 'new_client', label: 'Novo Cliente', desc: 'Notifica quando um novo cliente se cadastra' },
     { key: 'daily_summary', label: 'Resumo Diario', desc: 'Envia resumo dos agendamentos do dia seguinte' },
   ];
+
+  const saveSurveyMinutes = async (minutes) => {
+    const val = Math.max(1, parseInt(minutes, 10) || 0);
+    setSettings(s => ({ ...s, survey_minutes_after: val }));
+    try {
+      await notificationsAPI.updateSettings({ survey_minutes_after: val });
+      toast.success('Tempo da pesquisa atualizado!');
+    } catch (e) { toast.error('Erro ao salvar'); }
+  };
+
+  const saveReturnDays = async (days) => {
+    const val = Math.max(1, parseInt(days, 10) || 0);
+    setSettings(s => ({ ...s, return_reminder_days: val }));
+    try {
+      await notificationsAPI.updateSettings({ return_reminder_days: val });
+      toast.success('Periodo de retorno atualizado!');
+    } catch (e) { toast.error('Erro ao salvar'); }
+  };
 
   return (
     <div className="animate-fade-in" data-testid="notificacoes-page">
@@ -3733,6 +4024,69 @@ const NotificacoesPage = () => {
                           ))}
                         </div>
                       </div>
+                    </div>
+                  )}
+                  {nt.key === 'survey_enabled' && settings?.survey_enabled && (
+                    <div className="mt-3 pt-3 border-t border-slate-200">
+                      <label className="text-xs font-semibold text-slate-700 block mb-1.5">Enviar pesquisa quanto tempo apos atendimento?</label>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={settings?.survey_minutes_after ?? 120}
+                          onChange={e => setSettings(s => ({ ...s, survey_minutes_after: e.target.value }))}
+                          onBlur={e => saveSurveyMinutes(e.target.value)}
+                          className="w-28 px-3 py-1.5 text-sm rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          data-testid="survey-minutes-input"
+                        />
+                        <span className="text-xs text-slate-500">minutos apos concluir</span>
+                        <div className="flex gap-1.5 ml-auto flex-wrap">
+                          {[
+                            { label: '30min', v: 30 },
+                            { label: '1h', v: 60 },
+                            { label: '2h', v: 120 },
+                            { label: '24h', v: 1440 },
+                          ].map(preset => (
+                            <button
+                              key={preset.v}
+                              onClick={() => saveSurveyMinutes(preset.v)}
+                              className={`text-[10px] px-2 py-1 rounded-md font-semibold transition-colors ${
+                                (settings?.survey_minutes_after ?? 120) === preset.v
+                                  ? 'bg-primary text-white'
+                                  : 'bg-white border border-slate-200 text-slate-600 hover:border-primary hover:text-primary'
+                              }`}
+                              data-testid={`survey-preset-${preset.v}`}
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md mt-2 p-2 leading-relaxed">
+                        <b>Dica:</b> use a variavel <code className="font-mono">{'{link_avaliacao}'}</code> no template "Pos-Atendimento" para que o cliente possa avaliar o atendimento de 1 a 5 estrelas.
+                      </p>
+                    </div>
+                  )}
+                  {nt.key === 'return_reminder_enabled' && settings?.return_reminder_enabled && (
+                    <div className="mt-3 pt-3 border-t border-slate-200">
+                      <label className="text-xs font-semibold text-slate-700 block mb-1.5">Considerar cliente "ausente" apos quantos dias sem visita?</label>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={settings?.return_reminder_days ?? 30}
+                          onChange={e => setSettings(s => ({ ...s, return_reminder_days: e.target.value }))}
+                          onBlur={e => saveReturnDays(e.target.value)}
+                          className="w-28 px-3 py-1.5 text-sm rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          data-testid="return-days-input"
+                        />
+                        <span className="text-xs text-slate-500">dias</span>
+                      </div>
+                      <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md mt-2 p-2 leading-relaxed">
+                        <b>Dica:</b> use a variavel <code className="font-mono">{'{link_agendar}'}</code> no template "Lembrete de Retorno" — o cliente entra ja com nome e telefone preenchidos.
+                      </p>
                     </div>
                   )}
                 </div>

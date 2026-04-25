@@ -16,6 +16,10 @@ class NotificationSettingsUpdate(BaseModel):
     booking_cancelled: Optional[bool] = None
     new_client: Optional[bool] = None
     daily_summary: Optional[bool] = None
+    survey_enabled: Optional[bool] = None
+    survey_minutes_after: Optional[int] = None
+    return_reminder_enabled: Optional[bool] = None
+    return_reminder_days: Optional[int] = None
     channel: Optional[str] = None  # whatsapp, email, both
 
 @router.get("/settings")
@@ -37,11 +41,19 @@ async def get_notification_settings(
             "booking_cancelled": True,
             "new_client": False,
             "daily_summary": False,
+            "survey_enabled": False,
+            "survey_minutes_after": 120,
+            "return_reminder_enabled": False,
+            "return_reminder_days": 30,
             "channel": "whatsapp"
         }
     else:
         # Backfill default for older records
         settings.setdefault("reminder_minutes_before", 1440)
+        settings.setdefault("survey_enabled", False)
+        settings.setdefault("survey_minutes_after", 120)
+        settings.setdefault("return_reminder_enabled", False)
+        settings.setdefault("return_reminder_days", 30)
     return settings
 
 @router.put("/settings")
@@ -67,6 +79,10 @@ async def update_notification_settings(
             "booking_cancelled": True,
             "new_client": False,
             "daily_summary": False,
+            "survey_enabled": False,
+            "survey_minutes_after": 120,
+            "return_reminder_enabled": False,
+            "return_reminder_days": 30,
             "channel": "whatsapp",
             **update_data
         }
@@ -75,6 +91,10 @@ async def update_notification_settings(
     updated = await db.notification_settings.find_one({"company_id": company_id}, {"_id": 0})
     if updated:
         updated.setdefault("reminder_minutes_before", 1440)
+        updated.setdefault("survey_enabled", False)
+        updated.setdefault("survey_minutes_after", 120)
+        updated.setdefault("return_reminder_enabled", False)
+        updated.setdefault("return_reminder_days", 30)
     return updated
 
 @router.get("/history")

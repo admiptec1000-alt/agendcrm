@@ -460,6 +460,220 @@ async def delete_scheduled_message(
     return {"message": "Mensagem deletada"}
 
 
+# === REMARKETING / BULK MESSAGES ===
+class RemarketingPreview(BaseModel):
+    filter_type: str  # inactive_days | never_returned | birthday_month | service | all_active
+    inactive_days: Optional[int] = 30
+    service_id: Optional[str] = None
+    month: Optional[int] = None  # 1..12 (defaults to current)
+
+
+class BulkSendRequest(BaseModel):
+    filter_type: str
+    inactive_days: Optional[int] = 30
+    service_id: Optional[str] = None
+    month: Optional[int] = None
+    message: str
+    when: str = "now"  # now | scheduled
+    scheduled_at: Optional[str] = None  # ISO datetime when when='scheduled'
+
+
+async def _resolve_audience(db: AsyncIOMotorDatabase, company_id: str, body: dict) -> List[dict]:
+    """Return a list of customer dicts matching the remarketing filter.
+    Each item shape: {name, phone, last_appointment_date, last_service_name, days_since}
+    """
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    today = _date.today()
+
+    # Pull all customers of this company (filtered later)
+    customers = await db.customers.find(
+        {"company_id": company_id}, {"_id": 0}
+    ).to_list(5000)
+    if not customers:
+        return []
+
+    # Pull last appointment per customer (concluido takes priority, otherwise last by date)
+    customer_ids = [c["id"] for c in customers if c.get("id")]
+    last_apts: dict = {}
+    if customer_ids:
+        cursor = db.appointments.find(
+            {"company_id": company_id, "customer_id": {"$in": customer_ids}, "status": "concluido"},
+            {"_id": 0, "customer_id": 1, "date": 1, "service_id": 1, "service_name": 1}
+        ).sort("date", -1)
+        async for a in cursor:
+            cid = a.get("customer_id")
+            if cid and cid not in last_apts:
+                last_apts[cid] = a
+
+    filt = body.get("filter_type")
+    inactive_days = int(body.get("inactive_days") or 30)
+    service_id = body.get("service_id")
+    month = body.get("month") or today.month
+
+    audience: List[dict] = []
+    for c in customers:
+        cid = c.get("id")
+        last = last_apts.get(cid)
+        last_date_str = (last or {}).get("date", "")
+        last_service = (last or {}).get("service_name", "")
+        days_since = None
+        if last_date_str:
+            try:
+                ly, lm, ld = last_date_str.split("-")
+                days_since = (today - _date(int(ly), int(lm), int(ld))).days
+            except Exception:
+                days_since = None
+
+        accept = False
+        if filt == "all_active":
+            accept = True
+        elif filt == "inactive_days":
+            accept = days_since is not None and days_since >= inactive_days
+        elif filt == "never_returned":
+            # Has exactly 1 concluded appointment AND that one is older than threshold
+            if cid:
+                count = await db.appointments.count_documents({
+                    "company_id": company_id, "customer_id": cid, "status": "concluido"
+                })
+                accept = count == 1 and days_since is not None and days_since >= inactive_days
+        elif filt == "birthday_month":
+            bday = c.get("birthday") or ""
+            try:
+                # birthday formats accepted: YYYY-MM-DD, DD/MM/YYYY, MM-DD
+                bm = None
+                if "-" in bday and len(bday) >= 7:
+                    bm = int(bday.split("-")[1])
+                elif "/" in bday and len(bday) >= 5:
+                    bm = int(bday.split("/")[1])
+                if bm == int(month):
+                    accept = True
+            except Exception:
+                accept = False
+        elif filt == "service":
+            if service_id and last and last.get("service_id") == service_id:
+                accept = True
+
+        if not accept:
+            continue
+        if not c.get("phone"):
+            continue
+
+        audience.append({
+            "id": cid,
+            "name": c.get("name", ""),
+            "phone": c.get("phone", ""),
+            "birthday": c.get("birthday", ""),
+            "last_appointment_date": last_date_str,
+            "last_service_name": last_service,
+            "days_since": days_since,
+        })
+
+    return audience
+
+
+@router.post("/remarketing/preview")
+async def remarketing_preview(
+    data: RemarketingPreview,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    audience = await _resolve_audience(db, user["company_id"], data.model_dump())
+    return {"count": len(audience), "audience": audience[:200]}
+
+
+def _format_pt_date(iso_date: str) -> str:
+    if not iso_date:
+        return ""
+    try:
+        y, m, d = iso_date.split("-")
+        return f"{d}/{m}/{y}"
+    except Exception:
+        return iso_date
+
+
+def _substitute_personal(template: str, customer: dict, company_name: str, link_agendar: str) -> str:
+    # Reuse existing render_template from notifications module
+    from notifications import render_template
+    variables = {
+        "nome_cliente": customer.get("name", ""),
+        "empresa": company_name,
+        "link_agendar": link_agendar,
+        "ultimo_atendimento": _format_pt_date(customer.get("last_appointment_date", "")),
+        "ultimo_servico": customer.get("last_service_name", ""),
+        "dias_sem_voltar": str(customer.get("days_since")) if customer.get("days_since") is not None else "",
+        "aniversario": customer.get("birthday", ""),
+    }
+    return render_template(template, variables)
+
+
+@router.post("/remarketing/bulk-send")
+async def remarketing_bulk_send(
+    data: BulkSendRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    audience = await _resolve_audience(db, user["company_id"], data.model_dump())
+    if not audience:
+        raise HTTPException(status_code=400, detail="Nenhum cliente encontrado para os filtros selecionados")
+
+    company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0, "name": 1})
+    company_name = (company or {}).get("name", "")
+    page = await db.booking_pages.find_one({"company_id": user["company_id"]}, {"_id": 0, "slug": 1})
+    slug = (page or {}).get("slug", "")
+    base_url = os.environ.get("FRONTEND_PUBLIC_URL", "")
+    from urllib.parse import urlencode, quote
+
+    when = (data.when or "now").lower()
+    if when == "scheduled" and not data.scheduled_at:
+        raise HTTPException(status_code=400, detail="scheduled_at e obrigatorio quando when=scheduled")
+
+    if when == "now":
+        # Send immediately via baileys
+        from notifications import _get_active_whatsapp_conn, _send_via_baileys
+        conn = await _get_active_whatsapp_conn(db, user["company_id"])
+        if not conn:
+            raise HTTPException(status_code=502, detail="Nenhum WhatsApp conectado para envio")
+        sent = 0
+        failed = 0
+        for c in audience:
+            qs = ""
+            if c.get("name") or c.get("phone"):
+                qs = "?" + urlencode({"name": c.get("name", ""), "phone": c.get("phone", "")}, quote_via=quote)
+            link_agendar = f"{base_url.rstrip('/')}/{slug}/agenda{qs}" if base_url and slug else ""
+            personal_msg = _substitute_personal(data.message, c, company_name, link_agendar)
+            ok = await _send_via_baileys(conn["id"], c["phone"], personal_msg)
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+        return {"message": f"{sent} mensagens enviadas, {failed} falhas", "sent": sent, "failed": failed, "total": len(audience)}
+
+    # Scheduled: store one scheduled_messages doc per recipient
+    inserted = 0
+    for c in audience:
+        qs = ""
+        if c.get("name") or c.get("phone"):
+            qs = "?" + urlencode({"name": c.get("name", ""), "phone": c.get("phone", "")}, quote_via=quote)
+        link_agendar = f"{base_url.rstrip('/')}/{slug}/agenda{qs}" if base_url and slug else ""
+        personal_msg = _substitute_personal(data.message, c, company_name, link_agendar)
+        await db.scheduled_messages.insert_one({
+            "id": str(uuid.uuid4()),
+            "company_id": user["company_id"],
+            "recipient": c["phone"],
+            "recipient_name": c.get("name", ""),
+            "channel": "whatsapp",
+            "message": personal_msg,
+            "scheduled_at": data.scheduled_at,
+            "status": "pendente",
+            "campaign_filter": data.filter_type,
+            "created_by": user["id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        inserted += 1
+    return {"message": f"{inserted} mensagens agendadas", "scheduled": inserted, "total": len(audience)}
+
+
 # === CHAT INTERNO ===
 class ChatMessageCreate(BaseModel):
     content: str

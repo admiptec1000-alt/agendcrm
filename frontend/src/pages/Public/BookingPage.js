@@ -34,6 +34,28 @@ const PublicBooking = () => {
     customer_name: '', customer_phone: '', customer_email: ''
   });
 
+  // Pre-fill name/phone from URL query params (?name=...&phone=...)
+  // Used by retorno reminder so the customer lands ready-to-book.
+  useEffect(() => {
+    try {
+      const qs = new URLSearchParams(window.location.search);
+      const name = qs.get('name');
+      const phone = qs.get('phone');
+      if (name || phone) {
+        setFormData(f => ({
+          ...f,
+          customer_name: name || f.customer_name,
+          customer_phone: phone || f.customer_phone,
+        }));
+        if (phone && phone.length >= 8) {
+          // Trigger client lookup once data is ready
+          setTimeout(() => { try { handlePhoneLookup(phone); } catch { /* ignore */ } }, 600);
+        }
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     Promise.all([
       publicAPI.getBookingPage(slug),

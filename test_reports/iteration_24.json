@@ -1,0 +1,42 @@
+{
+  "summary": "Code-review only pass on new features (payment-fees, notifications survey/return, remarketing, public review page, link_agendar). Was unable to run the full pytest/playwright suite due to context budget. Code review of routes/scheduling_routes.py, routes/notification_routes.py, routes/channels_routes.py, routes/public_routes.py and notifications.py shows endpoint shapes and calculations match the requested spec.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/channels/remarketing/preview", "issue": "_resolve_audience queries db.customers collection but the rest of the system stores clients in db.clients (see scheduling_routes.create_appointment and public_routes.create_public_booking which insert into db.clients). If the seed data created by main agent was placed in db.customers it will work, but admin-flow customers from the actual app are in db.clients. This may cause real-world remarketing audience to be empty even though clients exist.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/channels/remarketing/bulk-send", "issue": "Variables substituted include {nome_cliente} but spec example uses {nome}; render_template handles via VAR_ALIASES so OK, just confirm UI chip labels match"},
+      {"endpoint": "GET /api/scheduling/financial/summary", "issue": "by_payment_method_net for 'dinheiro' equals gross (no fee) — correct per spec; just ensure UI shows it"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "VERIFY collection name in _resolve_audience: should it be db.clients (consistent with rest of app) or is db.customers a separate intended collection? If main agent seeded into db.customers as test data only, production flow will return empty audience because real clients are written to db.clients. Recommend using db.clients with field alias (birthday vs birth_date — clients collection uses birth_date).",
+    "Confirm field naming: clients collection stores birth_date (YYYY-MM-DD) but _resolve_audience reads c.get('birthday'). Birthday-month filter will not match real client records.",
+    "Run full pytest+playwright next iteration: this pass was code-review only due to context limit."
+  ],
+  "critical_code_review_comments": [
+    "channels_routes.py _resolve_audience uses db.customers and field 'birthday'; rest of app uses db.clients and field 'birth_date'. This is a likely bug for real data even if seeded test docs work.",
+    "channels_routes.py _resolve_audience 'never_returned' branch requires days_since >= inactive_days. Spec says >=30 default; code is OK.",
+    "scheduling_routes.conclude_appointment correctly generates review_token UUID only when missing.",
+    "notifications._build_link_agendar returns base_url/{slug}/agenda?name=&phone= as required.",
+    "public_routes review_appointment_page returns 200 HTML with 5 stars; invalid token returns the styled status page (also 200). Spec said 'Link invalido' page — that matches but status code is 200 not 404. Acceptable per design.",
+    "POST /api/public/apt/review/{token} returns 400 'Avaliacao ja registrada' when already reviewed — matches spec.",
+    "notification_routes settings GET/PUT include all new fields (survey_enabled, survey_minutes_after, return_reminder_enabled, return_reminder_days) with proper defaults.",
+    "scheduling_routes payment-fees GET/PUT and financial/summary include total_gross/total_fee/total_net + by_payment_method_*; _calc_fee correctly returns 0 for dinheiro."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "code-review only", "frontend": "not tested"},
+  "test_credentials": "admin@boss.com.br / boss123",
+  "seed_data_creation": "Main agent already seeded 3 customers and 2 concluded appointments per request brief.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Next agent should: (1) login as admin@boss.com.br/boss123 via /api/auth/login, (2) curl GET/PUT /api/scheduling/financial/payment-fees and /api/scheduling/financial/summary asserting gross/fee/net fields, (3) call POST /api/channels/remarketing/preview with each filter_type and assert counts (Joao for inactive_days=30 and never_returned, Joao+Maria for birthday_month=4) — IMPORTANT: confirm whether seed went into db.customers or db.clients before running, as code reads db.customers, (4) GET /api/public/apt/review/{invalid-token} should return 200 HTML with 'Link invalido', (5) Frontend: navigate to /boss/painel and verify Financeiro tabs, MessageScheduling tabs, Notifications survey/return toggles, and BookingPage prefill with ?name=&phone= query params.",
+  "rca of the issue": "Potential collection mismatch: channels_routes._resolve_audience references db.customers and customer field 'birthday', while existing customer records in scheduling_routes.create_appointment / public_routes.create_public_booking are stored in db.clients with field 'birth_date'. If main agent stored test data in db.customers the tests will pass but real users will see empty remarketing audiences. Mitigation: rename to db.clients and read 'birth_date'; or migrate clients->customers; or document the design intent."
+}

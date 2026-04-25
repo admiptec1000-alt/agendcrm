@@ -159,6 +159,14 @@ async def startup_event():
         logger.info("WhatsApp keep-alive task started")
     except Exception as e:
         logger.warning(f"Failed to start WA keepalive: {e}")
+    # Start notifications scheduler (reminders, surveys, bulk messages)
+    try:
+        from scheduler import start_scheduler_loop
+        import asyncio
+        asyncio.create_task(start_scheduler_loop())
+        logger.info("Notification scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start scheduler: {e}")
     logger.info("Startup complete!")
 
 @app.on_event("shutdown")
