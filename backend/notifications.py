@@ -446,7 +446,7 @@ async def notify_return_reminder(
         "ultimo_atendimento": last_date,
         "ultimo_servico": last_service,
         "dias_sem_voltar": days_since,
-        "aniversario": customer.get("birthday", ""),
+        "aniversario": customer.get("birth_date") or customer.get("birthday") or "",
     }
     default_msg = (
         f"Ola *{customer_name}*! 💜\n\n"

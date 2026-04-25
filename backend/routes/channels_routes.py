@@ -486,8 +486,8 @@ async def _resolve_audience(db: AsyncIOMotorDatabase, company_id: str, body: dic
     from datetime import datetime as _dt
     today = _date.today()
 
-    # Pull all customers of this company (filtered later)
-    customers = await db.customers.find(
+    # Pull all clients of this company (filtered later)
+    customers = await db.clients.find(
         {"company_id": company_id}, {"_id": 0}
     ).to_list(5000)
     if not customers:
@@ -538,9 +538,9 @@ async def _resolve_audience(db: AsyncIOMotorDatabase, company_id: str, body: dic
                 })
                 accept = count == 1 and days_since is not None and days_since >= inactive_days
         elif filt == "birthday_month":
-            bday = c.get("birthday") or ""
+            bday = c.get("birth_date") or c.get("birthday") or ""
             try:
-                # birthday formats accepted: YYYY-MM-DD, DD/MM/YYYY, MM-DD
+                # birth_date formats accepted: YYYY-MM-DD, DD/MM/YYYY, MM-DD
                 bm = None
                 if "-" in bday and len(bday) >= 7:
                     bm = int(bday.split("-")[1])
@@ -563,7 +563,7 @@ async def _resolve_audience(db: AsyncIOMotorDatabase, company_id: str, body: dic
             "id": cid,
             "name": c.get("name", ""),
             "phone": c.get("phone", ""),
-            "birthday": c.get("birthday", ""),
+            "birthday": c.get("birth_date") or c.get("birthday") or "",
             "last_appointment_date": last_date_str,
             "last_service_name": last_service,
             "days_since": days_since,
@@ -621,7 +621,7 @@ async def remarketing_bulk_send(
     company_name = (company or {}).get("name", "")
     page = await db.booking_pages.find_one({"company_id": user["company_id"]}, {"_id": 0, "slug": 1})
     slug = (page or {}).get("slug", "")
-    base_url = os.environ.get("FRONTEND_PUBLIC_URL", "")
+    base_url = os.environ.get("FRONTEND_PUBLIC_URL") or os.environ.get("PUBLIC_URL") or ""
     from urllib.parse import urlencode, quote
 
     when = (data.when or "now").lower()

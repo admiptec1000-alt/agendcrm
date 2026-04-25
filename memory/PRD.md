@@ -1,83 +1,61 @@
-# PRD - AgentCRM & Booking System
+# AgentCRM & Booking — PRD
 
-## Current State
-- Super Admin: admin@agentcrm.com / admin123 → /admin-login
-- Boss Company: admin@boss.com.br / boss123 → /boss/login → /boss/painel
-
-## Implemented Features
-
-### Multi-tenant Core
-- JWT Auth, PWA dinâmico (manifest+favicon por empresa)
-- Super Admin: Companies, Business Types, Subdomain
-- Logo global em header/sidebar/site público/TV/PWA
-
-### CRM
-- Atendimentos, FlowBuilder, Kanban, AI Agent (GPT-5.2)
-- **WhatsApp Baileys** microserviço externo (Render) com keep-alive + auto-rehydrate
-- Badge visual de health do serviço (online/offline)
-- Message Templates (6 processos)
-- Chat Interno
-
-### Agendamento
-- **Agenda**: lista com filtros; Editar (data/hora/serviço/items extras/valor com permissão); Concluir com valor final e forma pagamento
-- **Calendário**: Mês/Semana/Dia
-- **Financeiro**: filtros dinâmicos
-- **Suspensão** por dias OU horas (hour-window só bloqueia o intervalo correto)
-- **Clientes**: accordion inline, form modernizado com avatar, máscara BR, data de nascimento, chip 🎂 aniversário próximo, auto-book ao criar
-- **Usuários + Perfis de Acesso**: 31 permissões agrupadas
-
-### 🆕 Planos & Assinaturas (iter 23)
-- **CRUD de Planos**: nome, preço, ciclo em dias, total de créditos, items [{service_id, credits_per_use}]
-- **Assinaturas**: vinculadas a plano, end_date calculada, barra de progresso de créditos, status active/expired/cancelled
-- **Booking público**: identifica assinante por telefone, mostra banner (verde ativa / amarela vencida), toggle "usar créditos" no resumo, valor=0 quando usar créditos
-- **Consumo inteligente**: abate `credits_per_use` do serviço; auto-expire quando chega a 0
-- **Auto-confirmação**: ao criar agendamento (público ou admin), envia WhatsApp para cliente E profissional e tageia como `confirmado` se mensagem despachada
-- **Mensagem inclui** `{{link_cancelar}}` → direciona ao `/slug/agenda?phone=X`
-
-### Permissões granulares
-- edit_appointment, edit_appointment_price
-- Non-admin filtra automaticamente por profissional vinculado (fail-closed)
+## Original Problem Statement
+SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos de Flowbuilder, Kanban, Omnichannel WhatsApp via Baileys (microserviço Node.js no Render), TV Indoor, perfis de acesso granulares, agendamentos com confirmação/cancelamento via link, e sistema completo de notificações.
 
 ## Architecture
-- FastAPI backend (port 8001)
-- React frontend (port 3000)
-- **WhatsApp Baileys** externo no Render (agendcrm.onrender.com)
-- MongoDB + supervisor
+- Backend: FastAPI + MongoDB (motor)
+- Frontend: React 19 + Tailwind, PWA dinâmico
+- Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
+- Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
-## Recent Changes (Feb 2026 - iter 23)
-- [x] Backend: SubscriptionPlan com items[], cycle_days, total_credits
-- [x] Backend: ClientSubscription com end_date, credits_total/used/remaining, status lazy via _calc_sub_status
-- [x] Backend: endpoint público /booking/{slug}/subscription
-- [x] Backend: booking público aceita use_subscription, abate créditos
-- [x] Backend: notifications.py — módulo que envia WhatsApp client+prof com template confirmacao
-- [x] Backend: create_appointment (admin+public) auto-envia WhatsApp e tagga confirmado
-- [x] Frontend: PlanosPage + PlanoModal CRUD completo
-- [x] Frontend: SubscriptionsPage redesenhada com cards e progress bar
-- [x] Frontend: Booking público com subscription-banner + use-credits-toggle
-- [x] Frontend: Modais com font-page-title (Space Grotesk 300)
-- [x] Frontend: Label "Telefone / WhatsApp" alinhada com "Data de Nascimento"
+## What's been implemented (latest first)
 
-## Recent Changes (Feb 2026 - iter 24)
-- [x] **PWA "Add to Home Screen" (iOS)**: script inline em index.html roda ANTES do React mount, detecta slug da URL, atualiza `<title>`, `apple-mobile-web-app-title`, `apple-touch-icon`, `theme-color` e troca `<link rel="manifest">` para `/api/public/manifest/:slug` (same-origin). Resultado: iOS "Adicionar à Tela de Início" agora mostra o nome e URL corretos da empresa.
-- [x] Manifest endpoint prioriza `page.title` > `company.name`; gera ícones em múltiplos tamanhos (96/152/180/192/512 + maskable) quando logo_url existe.
-- [x] Hook `useCompanyBranding` usa URL relativa para manifest (evita CORS), atualiza todos os apple-touch-icon variants.
-- [x] Service Worker `CACHE_NAME` bumpado para `agentcrm-v2` para invalidar index.html antigo em usuários existentes.
-- [x] **Domínio**: CORS ampliado para `https://agentcrm.8ip.com.br` (novo domínio de produção).
-- [x] **Landing Page**: atalho discreto "Administracao" no rodapé -> /admin-login.
+### 2026-04-25 — Taxas de Pagamento + Pesquisa de Satisfação + Remarketing
+- **Taxas Financeiras**: Sub-aba "Taxas" no Financeiro (Pix / Crédito / Débito). Cada uma com % e taxa fixa (R$). Resumo financeiro mostra Bruto / Taxa / Líquido. Endpoints `GET/PUT /api/scheduling/financial/payment-fees` e `financial/summary` enriquecido.
+- **Pesquisa de Satisfação**: parâmetro `survey_minutes_after` em notification_settings + mini-página pública 1-5 estrelas (`/api/public/apt/review/{token}`). Token gerado ao concluir agendamento. Variável `{link_avaliacao}` no template `pos_atendimento`.
+- **Lembrete de Retorno**: parâmetro `return_reminder_days` + template novo `retorno` com variável `{link_agendar}` (URL pública com `?name=&phone=` pré-preenchidos).
+- **Remarketing/Campanha**: nova aba na "Agendamento de Mensagens" com filtros: clientes inativos há X dias, nunca voltaram, aniversariantes do mês, por serviço específico, todos ativos. Envio em massa imediato OU agendado com substituição de variáveis (`{nome}`, `{ultimo_atendimento}`, `{dias_sem_voltar}`, `{ultimo_servico}`, `{aniversario}`, `{link_agendar}`).
+- **Scheduler de notificações**: novo `/app/backend/scheduler.py` que roda a cada 60s e dispara: lembretes (`reminder_minutes_before`), pesquisas de satisfação (`survey_minutes_after`) e mensagens agendadas em massa (`scheduled_messages`).
 
-## Recent Changes (Feb 2026 - iter 25)
-- [x] **Agenda — novo layout**: 4 cards de métricas no topo (Total Geral / Hoje / Concluidos / Taxa Conclusao %) com ícones coloridos; barra de filtros avançados (busca por cliente/servico/profissional, status dropdown, profissional dropdown, data inicial + final) com botão "Limpar filtros"; pills de filtro rápido mantidas (Hoje/Pendentes/Confirmados/Concluidos/Todos) com contador.
-- [x] **WhatsApp — não enviava mensagem após agendamento**: fix em `notifications.py`. Causa 1: template salvo com `{var}` (chave única) mas o renderer só trocava `{{var}}` (duplas). Agora o `render_template` aceita ambas as sintaxes + mapa de aliases (`nome`→`nome_cliente`, `profissional`→`nome_profissional`, etc.). Causa 2: antes o backend tentava enviar mesmo com a conexão marcada como `disconnected` no Baileys; agora valida status no microserviço antes e loga claramente quando pula.
+### Sessões anteriores
+- Variável `{link_confirmar}` no template lembrete
+- Botão "Confirmar" no painel cliente público (substituindo badge "Pendente")
+- Bug fix: modal mobile "Novo Agendamento" não estourar mais (overflow-x-hidden + min-w-0 nos inputs)
+- Bug fix: WhatsApp `onWhatsApp()` antes de enviar (resolve "Aguardando mensagem" e bug do +62)
+- Step 3 Agenda Pública: data dd/mm/aa + filtro de horários passados quando hoje
+- Bottom Navigation Bar mobile (esconde sidebar)
+- TV Indoor com layouts (lista/grade) e painel global do Super Admin
+- Multi-turnos/intervalos para profissionais (`shifts` por dia)
+- CRUD de Categorias (Editar/Excluir)
+- Permissão `own_appointments_only`
 
-## Backlog
+## Backlog / Roadmap
+
+### P0
+- Inserir cards de Planos/Preços na Landing Page com botão "Contratar"
+
 ### P1
-- [ ] Extrair lógica de consumo de créditos duplicada (scheduling + public) para helper
-- [ ] Unit test / ESLint no-undef CI gate para pegar ReferenceError em runtime
-- [ ] Refatorar Dashboard.js (>3300 linhas) e SchedulingPages.js (>1200 linhas)
-- [ ] **Guia ao cliente**: ícone no atalho só aparece se empresa fizer upload em Config > Personalização (logo_url vazia → logo padrão)
+- Refatoração do `Dashboard.js` (+4700 linhas → quebrar em Tabs/AgendaTab.js, ConfigTab.js, etc.)
+- Integração Stripe (Cartão + Pix)
+
 ### P2
-- [ ] Stripe integration
-- [ ] Notificações push
-- [ ] Relatórios gráficos
-- [ ] Campanha de aniversário automática (varre clients com birth_date=hoje)
-- [ ] Shadcn Calendar no lugar dos HTML5 date
+- Notificações Push (Web Push API)
+- Relatórios avançados (gráficos, dashboards analíticos)
+- Re-sync features no Super Admin (endpoint backend já existe, falta UI)
+
+## Key DB Collections
+- `clients` (campos: name, phone, email, birth_date, company_id, id)
+- `appointments` (campos: status, confirm_token, cancel_token, review_token, review_rating, review_comment, reminder_sent_at, survey_sent_at)
+- `notification_settings` (booking_reminder_24h, reminder_minutes_before, survey_enabled, survey_minutes_after, return_reminder_enabled, return_reminder_days)
+- `payment_fees` (pix_pct, pix_fixed, credit_pct, credit_fixed, debit_pct, debit_fixed)
+- `scheduled_messages` (status, scheduled_at, recipient, recipient_name, message, campaign_filter)
+
+## Critical Notes for Next Agent
+- Cliente é `db.clients` com `birth_date` (NÃO `db.customers` / `birthday`)
+- WhatsApp microservice precisa de redeploy no Render para mudanças do `index.js` entrarem em produção
+- Variável `{link_agendar}` usa `FRONTEND_PUBLIC_URL` ou `PUBLIC_URL` do env do backend (configurar em produção)
+
+## Test Credentials
+- Boss admin: `admin@boss.com.br` / `boss123` (via /boss/login)
+- Super admin: `admin@agentcrm.com` / `admin123` (via /admin-login)
