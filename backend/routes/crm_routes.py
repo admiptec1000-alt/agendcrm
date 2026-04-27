@@ -428,6 +428,12 @@ async def create_campaign(
         "ticket_status": data.ticket_status or "fechado",
         "messages": data.messages or ([data.message_template] if data.message_template else []),
         "attachment_url": data.attachment_url,
+        "anti_block": (data.anti_block.model_dump() if data.anti_block else {
+            "enabled": True, "interval_min_seconds": 30, "interval_max_seconds": 90,
+            "burst_size": 50, "burst_pause_seconds": 300, "daily_limit": 250,
+            "hourly_limit": 50, "escalate_after": 100, "escalate_factor": 1.5,
+            "only_with_phone_validated": True,
+        }),
         "status": "programada" if data.scheduled_at else "draft",
         "sent_count": 0,
         "failed_count": 0,
@@ -558,12 +564,13 @@ async def run_campaign_now(
     if not msgs:
         raise HTTPException(status_code=400, detail="Sem mensagens definidas")
 
+    import asyncio as _asyncio
+    import random as _random
     import httpx as _httpx
     import os as _os
     wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
     conn_id = camp.get("connection_id")
     if not conn_id:
-        # fallback: any connected
         c2 = await db.channel_connections.find_one(
             {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"}, {"_id":0,"id":1}
         )
@@ -571,7 +578,70 @@ async def run_campaign_now(
             raise HTTPException(status_code=400, detail="Nenhuma conexao WhatsApp ativa")
         conn_id = c2["id"]
 
-    sent, failed = 0, 0
+    # Anti-block policy (from campaign or sane defaults)
+    ab = camp.get("anti_block") or {}
+    ab_enabled = ab.get("enabled", True)
+    interval_min = max(0, int(ab.get("interval_min_seconds", 30) or 0))
+    interval_max = max(interval_min, int(ab.get("interval_max_seconds", 90) or 0))
+    burst_size = max(1, int(ab.get("burst_size", 50) or 1))
+    burst_pause = max(0, int(ab.get("burst_pause_seconds", 300) or 0))
+    daily_limit = max(1, int(ab.get("daily_limit", 250) or 250))
+    escalate_after = max(0, int(ab.get("escalate_after", 100) or 0))
+    escalate_factor = float(ab.get("escalate_factor", 1.5) or 1.0)
+
+    # Hard cap by daily limit
+    if len(audience) > daily_limit:
+        audience = audience[:daily_limit]
+
+    # Long campaigns (>5min total) become "em_execucao" + hand off to async task
+    estimated_seconds = len(audience) * ((interval_min + interval_max) / 2 if ab_enabled else 0)
+    if ab_enabled and estimated_seconds > 300:
+        # Mark and process in background; return immediately
+        await db.campaigns.update_one(
+            {"id": campaign_id},
+            {"$set": {"status": "em_execucao", "started_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        async def _runner():
+            try:
+                from motor.motor_asyncio import AsyncIOMotorClient as _Cli
+                cli = _Cli(_os.environ["MONGO_URL"])
+                bdb = cli[_os.environ["DB_NAME"]]
+                sent_x, failed_x, count = 0, 0, 0
+                async with _httpx.AsyncClient(timeout=30.0) as client:
+                    for person in audience:
+                        for tpl in msgs:
+                            mtxt = (tpl or "").replace("{nome}", person.get("name") or "").replace("{numero}", person.get("phone") or "")
+                            try:
+                                rr = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": mtxt})
+                                rs = rr.json() if rr.status_code == 200 else {}
+                                if rs.get("success"): sent_x += 1
+                                else: failed_x += 1
+                            except Exception:
+                                failed_x += 1
+                        count += 1
+                        # escalate
+                        cur_min, cur_max = interval_min, interval_max
+                        if escalate_after and count > escalate_after:
+                            cur_min = int(cur_min * escalate_factor)
+                            cur_max = int(cur_max * escalate_factor)
+                        # burst pause
+                        if burst_size and count % burst_size == 0 and count < len(audience):
+                            await _asyncio.sleep(burst_pause)
+                        elif count < len(audience):
+                            await _asyncio.sleep(_random.randint(cur_min, max(cur_min, cur_max)))
+                await bdb.campaigns.update_one(
+                    {"id": campaign_id},
+                    {"$set": {"status": "concluida", "sent_count": sent_x, "failed_count": failed_x,
+                              "completed_at": datetime.now(timezone.utc).isoformat()}}
+                )
+            except Exception as _e:
+                await bdb.campaigns.update_one({"id": campaign_id},
+                    {"$set": {"status": "cancelada", "error": str(_e)[:200]}})
+        _asyncio.create_task(_runner())
+        return {"queued": True, "audience": len(audience), "estimated_minutes": int(estimated_seconds // 60)}
+
+    # Otherwise execute synchronously (small campaigns)
+    sent, failed, count = 0, 0, 0
     async with _httpx.AsyncClient(timeout=30.0) as client:
         for person in audience:
             for tpl in msgs:
@@ -611,6 +681,17 @@ async def run_campaign_now(
                         "created_at": datetime.now(timezone.utc).isoformat(),
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     })
+            count += 1
+            # apply small synchronous delay between recipients (except last)
+            if ab_enabled and count < len(audience):
+                cur_min, cur_max = interval_min, interval_max
+                if escalate_after and count > escalate_after:
+                    cur_min = int(cur_min * escalate_factor)
+                    cur_max = int(cur_max * escalate_factor)
+                if burst_size and count % burst_size == 0:
+                    await _asyncio.sleep(burst_pause)
+                else:
+                    await _asyncio.sleep(_random.randint(cur_min, max(cur_min, cur_max)))
 
     await db.campaigns.update_one(
         {"id": campaign_id},

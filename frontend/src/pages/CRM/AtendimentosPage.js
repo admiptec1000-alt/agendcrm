@@ -53,6 +53,7 @@ const AtendimentosPage = () => {
   const [queues, setQueues] = useState([]);
   const [messageInput, setMessageInput] = useState('');
   const [allTags, setAllTags] = useState([]);
+  const [presenceMap, setPresenceMap] = useState({}); // phone -> {presence, updated_at}
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef(null);
   const selectedRef = useRef(null);
@@ -112,7 +113,7 @@ const AtendimentosPage = () => {
     }
   }, []);
 
-  // Polling: refresh selected ticket every 4s, list every 8s
+  // Polling: refresh selected ticket every 4s, list every 8s, presence every 5s
   useEffect(() => {
     const ticketInterval = setInterval(async () => {
       const cur = selectedRef.current;
@@ -129,7 +130,17 @@ const AtendimentosPage = () => {
       }
     }, 4000);
     const listInterval = setInterval(() => { loadData(); }, 8000);
-    return () => { clearInterval(ticketInterval); clearInterval(listInterval); };
+    const presenceInterval = setInterval(async () => {
+      try {
+        const r = await channelsAPI.getContactPresence();
+        const map = {};
+        for (const p of r.data || []) {
+          map[p.phone] = { presence: p.presence, updated_at: p.updated_at };
+        }
+        setPresenceMap(map);
+      } catch (e) {}
+    }, 5000);
+    return () => { clearInterval(ticketInterval); clearInterval(listInterval); clearInterval(presenceInterval); };
   }, [loadData]);
 
   const handleSelectTicket = (ticket) => {
@@ -446,10 +457,29 @@ const AtendimentosPage = () => {
                 <p className="font-semibold text-sm text-slate-900 truncate">
                   {selectedTicket.customer_name} <span className="text-slate-400 font-normal">#{selectedTicket.id.substring(0, 4)}</span>
                 </p>
-                <p className="text-xs text-slate-500 truncate">
-                  {selectedTicket.customer_phone}
-                  {(selectedTicket.value > 0) && <span className="ml-2 text-emerald-700 font-semibold">{formatBRL(selectedTicket.value)}</span>}
-                </p>
+                {(() => {
+                  const pres = presenceMap[selectedTicket.customer_phone]?.presence;
+                  const isTyping = pres === 'composing';
+                  const isRecording = pres === 'recording';
+                  if (isTyping || isRecording) {
+                    return (
+                      <p className="text-xs text-emerald-600 truncate flex items-center gap-1.5" data-testid="typing-indicator">
+                        <span className="flex gap-0.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </span>
+                        <span className="font-medium italic">{isRecording ? 'gravando audio...' : 'digitando...'}</span>
+                      </p>
+                    );
+                  }
+                  return (
+                    <p className="text-xs text-slate-500 truncate">
+                      {selectedTicket.customer_phone}
+                      {(selectedTicket.value > 0) && <span className="ml-2 text-emerald-700 font-semibold">{formatBRL(selectedTicket.value)}</span>}
+                    </p>
+                  );
+                })()}
               </div>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
@@ -544,7 +574,19 @@ const AtendimentosPage = () => {
                           </button>
                         </>
                       ) : msg.delivery_status === 'pending' ? (
-                        <Check className="w-3 h-3 inline text-slate-400" />
+                        <Check className="w-3 h-3 inline text-slate-400" title="Enviando" />
+                      ) : msg.delivery_status === 'sent' ? (
+                        <Check className="w-3 h-3 inline text-slate-400" title="Enviada" />
+                      ) : msg.delivery_status === 'delivered' ? (
+                        <span className="inline-flex" title="Entregue">
+                          <Check className="w-3 h-3 text-slate-400" />
+                          <Check className="w-3 h-3 text-slate-400 -ml-1.5" />
+                        </span>
+                      ) : (msg.delivery_status === 'read' || msg.delivery_status === 'played') ? (
+                        <span className="inline-flex" title="Lida" data-testid="msg-read">
+                          <Check className="w-3 h-3 text-blue-500" />
+                          <Check className="w-3 h-3 text-blue-500 -ml-1.5" />
+                        </span>
                       ) : (
                         <CheckCircle2 className="w-3 h-3 inline text-blue-500" />
                       )

@@ -253,6 +253,7 @@ export const channelsAPI = {
   getChatMessages: (params) => api.get('/channels/chat/messages', { params }),
   sendChatMessage: (data) => api.post('/channels/chat/messages', data),
   getServiceHealth: () => api.get('/channels/service-health'),
+  getContactPresence: () => api.get('/channels/contact-presence'),
   getWaContacts: (connId) => api.get(`/channels/connections/${connId}/wa-contacts`),
   importWaContacts: (connId, data) => api.post(`/channels/connections/${connId}/import-contacts`, data),
 };

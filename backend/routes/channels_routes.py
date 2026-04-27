@@ -8,7 +8,7 @@ import uuid
 import httpx
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 logger = logging.getLogger(__name__)
@@ -381,6 +381,57 @@ async def send_whatsapp_message(
 
 
 # === WEBHOOKS FROM WHATSAPP SERVICE ===
+@router.post("/webhook/presence")
+async def webhook_presence(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
+    """Body: {instance_id, phone, presence: 'composing'|'paused'|'available'|'unavailable'|'recording'}"""
+    data = await request.json()
+    instance_id = data.get("instance_id")
+    phone = (data.get("phone") or "").strip()
+    presence = data.get("presence") or "available"
+    conn = await db.channel_connections.find_one({"id": instance_id})
+    if not conn or not phone:
+        return {"ok": False}
+    await db.contact_presence.update_one(
+        {"company_id": conn["company_id"], "phone": phone},
+        {"$set": {"presence": presence, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    return {"ok": True}
+
+
+@router.post("/webhook/message-status")
+async def webhook_message_status(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
+    """Body: {instance_id, message_id, status: 'sent'|'delivered'|'read'|'played'}
+    Updates the matching outbound agent message in tickets."""
+    data = await request.json()
+    instance_id = data.get("instance_id")
+    message_id = data.get("message_id")
+    status_v = data.get("status")
+    conn = await db.channel_connections.find_one({"id": instance_id})
+    if not conn or not message_id or not status_v:
+        return {"ok": False}
+    await db.tickets.update_one(
+        {"company_id": conn["company_id"], "messages.wa_message_id": message_id},
+        {"$set": {"messages.$.delivery_status": status_v,
+                  "messages.$.delivery_updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"ok": True}
+
+
+@router.get("/contact-presence")
+async def list_contact_presence(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Recent presence updates (last 60s) for the current company. UI polls this to show typing."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    docs = await db.contact_presence.find(
+        {"company_id": user["company_id"], "updated_at": {"$gt": cutoff}},
+        {"_id": 0}
+    ).to_list(500)
+    return docs
+
+
 @router.post("/webhook/connected")
 async def webhook_connected(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
     data = await request.json()

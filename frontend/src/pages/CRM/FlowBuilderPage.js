@@ -2,15 +2,15 @@ import React, { useState, useEffect, useCallback } from 'react';
 import ReactFlow, {
   Background, Controls, MiniMap,
   applyNodeChanges, applyEdgeChanges, addEdge,
-  MarkerType,
+  MarkerType, Handle, Position,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { crmAPI, aiAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
-  Save, Play, Plus, Trash2, X, MessageSquare, MenuSquare,
+  Save, Plus, Trash2, X, MessageSquare, MenuSquare,
   Shuffle, Clock, Ticket as TicketIcon, Tag, Bot, Globe, Zap,
-  ChevronLeft, Pencil
+  ChevronLeft
 } from 'lucide-react';
 
 const NODE_TYPES = [
@@ -27,13 +27,42 @@ const NODE_TYPES = [
 
 const NODE_TYPE_BY_KEY = Object.fromEntries(NODE_TYPES.map(t => [t.type, t]));
 
-// Node component
-const FlowNode = ({ data }) => {
+// Node component with connection handles + inline delete
+const FlowNode = ({ data, id }) => {
   const cfg = NODE_TYPE_BY_KEY[data.nodeType] || NODE_TYPES[1];
   const Icon = cfg.icon;
   const summary = data.config?.summary || data.label || cfg.label;
+  const isStart = data.nodeType === 'start';
+
   return (
-    <div className="rounded-lg shadow-md bg-white border-2 min-w-[200px] max-w-[260px]" style={{ borderColor: cfg.color }}>
+    <div
+      className="rounded-lg shadow-md bg-white border-2 min-w-[200px] max-w-[260px] group relative"
+      style={{ borderColor: cfg.color }}
+      data-testid={`flow-node-${data.nodeType}`}
+    >
+      {/* Target handle (input) — hidden on start */}
+      {!isStart && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          style={{ background: cfg.color, width: 10, height: 10, border: '2px solid white' }}
+          isConnectable
+        />
+      )}
+
+      {/* Inline delete button (X) — visible on hover */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (data.onDelete) data.onDelete(id);
+        }}
+        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-opacity shadow-md z-10"
+        title="Excluir no"
+        data-testid={`delete-node-${id}`}
+      >
+        <X className="w-3 h-3" />
+      </button>
+
       <div className="px-3 py-1.5 flex items-center gap-2 text-white text-xs font-semibold rounded-t-md" style={{ background: cfg.color }}>
         <Icon className="w-3.5 h-3.5" />
         <span>{cfg.label}</span>
@@ -41,6 +70,14 @@ const FlowNode = ({ data }) => {
       <div className="p-2.5">
         <p className="text-[12px] text-slate-700 line-clamp-3">{summary}</p>
       </div>
+
+      {/* Source handle (output) — bottom of node */}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        style={{ background: cfg.color, width: 10, height: 10, border: '2px solid white' }}
+        isConnectable
+      />
     </div>
   );
 };
@@ -63,14 +100,32 @@ const FlowBuilderPage = () => {
     aiAPI.listAgents().then(r => setAiAgents(r.data)).catch(() => {});
   }, []);
 
+  const deleteNode = useCallback((nodeId) => {
+    setNodes(ns => ns.filter(n => n.id !== nodeId));
+    setEdges(es => es.filter(e => e.source !== nodeId && e.target !== nodeId));
+    setSelectedNode(null);
+  }, []);
+
+  // Inject onDelete into node data so the inline X works
+  const decorateNode = useCallback((n) => ({
+    ...n,
+    type: 'flow',
+    data: { ...n.data, onDelete: deleteNode },
+  }), [deleteNode]);
+
   const onNodesChange = useCallback(changes => setNodes(ns => applyNodeChanges(changes, ns)), []);
   const onEdgesChange = useCallback(changes => setEdges(es => applyEdgeChanges(changes, es)), []);
-  const onConnect = useCallback(params => setEdges(es => addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, es)), []);
+  const onConnect = useCallback(params => setEdges(es => addEdge({
+    ...params,
+    markerEnd: { type: MarkerType.ArrowClosed },
+    style: { strokeWidth: 2 },
+    animated: true,
+  }, es)), []);
 
   const openFlow = (flow) => {
     setCurrentFlow(flow);
     setShowFlowsList(false);
-    setNodes((flow.nodes || []).map(n => ({ ...n, type: 'flow' })));
+    setNodes((flow.nodes || []).map(decorateNode));
     setEdges(flow.edges || []);
   };
 
@@ -93,7 +148,16 @@ const FlowBuilderPage = () => {
   const saveFlow = async () => {
     if (!currentFlow) return;
     try {
-      await crmAPI.updateFlow(currentFlow.id, { nodes, edges });
+      // Strip non-serializable fields (onDelete callback) before saving
+      const cleanNodes = nodes.map(n => ({
+        ...n,
+        data: {
+          nodeType: n.data?.nodeType,
+          label: n.data?.label,
+          config: n.data?.config,
+        },
+      }));
+      await crmAPI.updateFlow(currentFlow.id, { nodes: cleanNodes, edges });
       toast.success('Fluxo salvo!');
       reload();
     } catch (e) { toast.error('Erro ao salvar'); }
@@ -105,21 +169,16 @@ const FlowBuilderPage = () => {
     const summary = typeKey === 'start' ? 'Inicio do fluxo'
       : typeKey === 'message' ? 'Clique para configurar a mensagem'
       : `Configure ${cfg.label}`;
-    setNodes(ns => [...ns, {
+    const newNode = {
       id, type: 'flow',
-      position: { x: 250 + (ns.length * 30), y: 80 + (ns.length * 30) },
-      data: { nodeType: typeKey, label: cfg.label, config: { summary } }
-    }]);
+      position: { x: 250 + (nodes.length * 30), y: 80 + (nodes.length * 30) },
+      data: { nodeType: typeKey, label: cfg.label, config: { summary }, onDelete: deleteNode }
+    };
+    setNodes(ns => [...ns, newNode]);
   };
 
   const updateNodeConfig = (nodeId, config) => {
     setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, data: { ...n.data, config: { ...config, summary: buildSummary(n.data.nodeType, config) } } } : n));
-  };
-
-  const deleteNode = (nodeId) => {
-    setNodes(ns => ns.filter(n => n.id !== nodeId));
-    setEdges(es => es.filter(e => e.source !== nodeId && e.target !== nodeId));
-    setSelectedNode(null);
   };
 
   if (showFlowsList) {
@@ -187,6 +246,11 @@ const FlowBuilderPage = () => {
             <Save className="w-3.5 h-3.5" /> Salvar
           </button>
         </div>
+        {nodes.length > 0 && edges.length === 0 && (
+          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 bg-amber-50 border border-amber-200 text-amber-800 text-[11px] px-3 py-1.5 rounded-lg shadow-sm pointer-events-none">
+            💡 Arraste do <span className="font-bold">circulo inferior</span> de um no ate o <span className="font-bold">circulo superior</span> de outro para conectar
+          </div>
+        )}
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -195,6 +259,7 @@ const FlowBuilderPage = () => {
           onConnect={onConnect}
           onNodeClick={(_, n) => setSelectedNode(n)}
           nodeTypes={nodeTypes}
+          deleteKeyCode={['Backspace', 'Delete']}
           fitView
         >
           <Background />

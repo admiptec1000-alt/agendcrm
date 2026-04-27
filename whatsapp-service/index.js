@@ -134,6 +134,38 @@ async function createConnection(instanceId) {
     }
   });
 
+  // Forward presence updates (typing/recording) so the UI can show
+  // "digitando..." and similar indicators in real time.
+  sock.ev.on('presence.update', async ({ id, presences }) => {
+    try {
+      if (!id || id.endsWith('@g.us') || id === 'status@broadcast') return;
+      const phone = id.replace('@s.whatsapp.net', '');
+      const p = presences?.[id] || Object.values(presences || {})[0];
+      if (!p) return;
+      const presence = p.lastKnownPresence || 'available';
+      await axios.post(`${FASTAPI_URL}/api/channels/webhook/presence`, {
+        instance_id: instanceId, phone, presence,
+      }, { timeout: 5000 }).catch(() => {});
+    } catch (_) {}
+  });
+
+  // Forward read receipts / delivery acks (Baileys status numbers:
+  // 1=error, 2=pending, 3=sent, 4=delivered, 5=read, 6=played)
+  sock.ev.on('messages.update', async (updates) => {
+    for (const u of updates) {
+      try {
+        const num = u.update?.status;
+        if (num === undefined || num === null) continue;
+        const map = { 1: 'failed', 2: 'pending', 3: 'sent', 4: 'delivered', 5: 'read', 6: 'played' };
+        const status = map[num];
+        if (!status) continue;
+        await axios.post(`${FASTAPI_URL}/api/channels/webhook/message-status`, {
+          instance_id: instanceId, message_id: u.key?.id, status,
+        }, { timeout: 5000 }).catch(() => {});
+      } catch (_) {}
+    }
+  });
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     // Capture both 'notify' (real-time push) and 'append' (background sync)
     if (type !== 'notify' && type !== 'append') return;
@@ -322,11 +354,11 @@ app.post('/instances/:id/send', async (req, res) => {
 
     const payload = { text: message };
     const sent = await instance.sock.sendMessage(targetJid, payload);
-    // Cache the original payload so getMessage() can satisfy WhatsApp retry
-    // requests (otherwise some recipients receive an empty/blank message).
     if (sent?.key?.id) {
       rememberSent(targetJid, sent.key.id, sent.message || { conversation: message });
     }
+    // Subscribe to this contact's presence so future typing events come through
+    try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
     res.json({ success: true, jid: targetJid, message_id: sent?.key?.id });
   } catch (e) {
     console.error(`[${req.params.id}] send error:`, e.message);

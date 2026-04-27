@@ -186,8 +186,21 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
     ticket_status: campaign?.ticket_status || 'fechado',
     messages: campaign?.messages?.length ? campaign.messages : ['', '', '', '', ''],
     attachment_url: campaign?.attachment_url || '',
+    anti_block: campaign?.anti_block || {
+      enabled: true,
+      interval_min_seconds: 30,
+      interval_max_seconds: 90,
+      burst_size: 50,
+      burst_pause_seconds: 300,
+      daily_limit: 250,
+      hourly_limit: 50,
+      escalate_after: 100,
+      escalate_factor: 1.5,
+      only_with_phone_validated: true,
+    },
   });
   const [activeMsg, setActiveMsg] = useState(0);
+  const [activeTab, setActiveTab] = useState('config'); // config | messages | params
   const [tags, setTags] = useState([]);
   const [conns, setConns] = useState([]);
   const [lists, setLists] = useState([]);
@@ -230,6 +243,7 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
       ticket_status: form.ticket_status,
       messages: cleanMessages,
       attachment_url: form.attachment_url || null,
+      anti_block: form.anti_block,
     };
     try {
       if (isEditing) await crmAPI.updateCampaign(campaign.id, payload);
@@ -247,7 +261,14 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
 
+        <div className="px-5 pt-3 border-b border-slate-200 flex gap-1">
+          <ModalTab active={activeTab === 'config'} onClick={() => setActiveTab('config')} label="Configuracao" testId="tab-config" />
+          <ModalTab active={activeTab === 'messages'} onClick={() => setActiveTab('messages')} label="Mensagens" testId="tab-messages" />
+          <ModalTab active={activeTab === 'params'} onClick={() => setActiveTab('params')} label="Parametros" testId="tab-params" />
+        </div>
+
         <div className="p-5 space-y-4">
+          {activeTab === 'config' && (<>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="md:col-span-1">
               <label className="text-[10px] font-bold uppercase text-slate-400">Nome</label>
@@ -346,8 +367,10 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
             </div>
           </div>
 
-          {/* Messages 1..5 */}
-          <div className="border-t border-slate-200 pt-4">
+          </>)}
+
+          {activeTab === 'messages' && (
+          <div>
             <p className="text-[11px] font-semibold text-slate-700 mb-2 flex items-center gap-1"><MessageSquare className="w-3.5 h-3.5" /> Mensagens (envio sequencial)</p>
             <div className="flex gap-1 mb-2 border-b border-slate-200">
               {[0,1,2,3,4].map(i => (
@@ -368,11 +391,16 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
               onChange={e => setMsg(activeMsg, e.target.value)}
               placeholder={`Mensagem ${activeMsg + 1}`}
               className="input-field w-full text-sm"
-              rows={5}
+              rows={8}
               data-testid={`msg-textarea-${activeMsg+1}`}
             />
             <p className="text-[10px] text-slate-400 mt-1">Utilize variaveis como {'{nome}'}, {'{numero}'}.</p>
           </div>
+          )}
+
+          {activeTab === 'params' && (
+          <AntiBlockTab anti_block={form.anti_block} onChange={(ab) => setForm({...form, anti_block: ab})} />
+          )}
         </div>
 
         <div className="flex justify-between items-center gap-2 p-4 border-t border-slate-200">
@@ -388,6 +416,106 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
     </div>
   );
 };
+
+const ModalTab = ({ active, onClick, label, testId }) => (
+  <button
+    onClick={onClick}
+    data-testid={testId}
+    className={`px-4 py-2 text-xs font-semibold relative -mb-px ${active ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-slate-700'}`}
+  >
+    {label}
+  </button>
+);
+
+const AntiBlockTab = ({ anti_block, onChange }) => {
+  const ab = anti_block || {};
+  const upd = (k, v) => onChange({ ...ab, [k]: v });
+  const numeric = (v, def) => {
+    const n = parseFloat(v);
+    return isNaN(n) ? def : n;
+  };
+  return (
+    <div className="space-y-4" data-testid="antiblock-tab">
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+        <p className="text-[11px] font-bold text-amber-900 mb-1">⚠ Politicas anti-bloqueio do WhatsApp</p>
+        <p className="text-[11px] text-amber-800 leading-relaxed">
+          Estas configuracoes simulam comportamento humano para reduzir o risco do seu numero ser bloqueado.
+          Recomendado para numeros nao-Business: maximo 250 msgs/dia e intervalos randomicos de 30-90s.
+        </p>
+      </div>
+
+      <label className="flex items-start gap-2 p-3 rounded-lg border border-slate-200 cursor-pointer">
+        <input type="checkbox" checked={!!ab.enabled} onChange={e => upd('enabled', e.target.checked)} className="mt-1" data-testid="ab-enabled" />
+        <div className="flex-1">
+          <p className="text-sm font-semibold">Ativar protecao anti-bloqueio</p>
+          <p className="text-[11px] text-slate-500">Recomendado. Aplica delays randomicos e pausas entre lotes.</p>
+        </div>
+      </label>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-[10px] font-bold uppercase text-slate-400">Intervalo minimo (s)</label>
+          <input type="number" min="0" value={ab.interval_min_seconds ?? 30} onChange={e => upd('interval_min_seconds', numeric(e.target.value, 30))} className="input-field w-full text-sm" data-testid="ab-min" />
+        </div>
+        <div>
+          <label className="text-[10px] font-bold uppercase text-slate-400">Intervalo maximo (s)</label>
+          <input type="number" min="0" value={ab.interval_max_seconds ?? 90} onChange={e => upd('interval_max_seconds', numeric(e.target.value, 90))} className="input-field w-full text-sm" data-testid="ab-max" />
+        </div>
+      </div>
+
+      <div className="bg-slate-50 rounded-lg p-3 space-y-3">
+        <p className="text-[11px] font-bold text-slate-700">Pausa entre lotes</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">A cada (msgs)</label>
+            <input type="number" min="1" value={ab.burst_size ?? 50} onChange={e => upd('burst_size', numeric(e.target.value, 50))} className="input-field w-full text-sm" data-testid="ab-burst" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Pausa de (s)</label>
+            <input type="number" min="0" value={ab.burst_pause_seconds ?? 300} onChange={e => upd('burst_pause_seconds', numeric(e.target.value, 300))} className="input-field w-full text-sm" data-testid="ab-burst-pause" />
+          </div>
+        </div>
+        <p className="text-[10px] text-slate-500">Ex: a cada 50 mensagens, pausa 5 minutos. Simula descanso humano.</p>
+      </div>
+
+      <div className="bg-slate-50 rounded-lg p-3 space-y-3">
+        <p className="text-[11px] font-bold text-slate-700">Escalonamento progressivo</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Apos N mensagens</label>
+            <input type="number" min="0" value={ab.escalate_after ?? 100} onChange={e => upd('escalate_after', numeric(e.target.value, 100))} className="input-field w-full text-sm" data-testid="ab-escalate-after" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Multiplicador</label>
+            <input type="number" min="1" step="0.1" value={ab.escalate_factor ?? 1.5} onChange={e => upd('escalate_factor', numeric(e.target.value, 1.5))} className="input-field w-full text-sm" data-testid="ab-escalate-factor" />
+          </div>
+        </div>
+        <p className="text-[10px] text-slate-500">Ex: apos 100 envios, multiplica intervalos por 1.5x (30-90s vira 45-135s).</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-[10px] font-bold uppercase text-slate-400">Limite por dia</label>
+          <input type="number" min="1" value={ab.daily_limit ?? 250} onChange={e => upd('daily_limit', numeric(e.target.value, 250))} className="input-field w-full text-sm" data-testid="ab-daily" />
+          <p className="text-[10px] text-slate-400 mt-0.5">Numero nao-Business: ate 250</p>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold uppercase text-slate-400">Limite por hora</label>
+          <input type="number" min="1" value={ab.hourly_limit ?? 50} onChange={e => upd('hourly_limit', numeric(e.target.value, 50))} className="input-field w-full text-sm" data-testid="ab-hourly" />
+        </div>
+      </div>
+
+      <label className="flex items-start gap-2 p-2 rounded-md cursor-pointer">
+        <input type="checkbox" checked={!!ab.only_with_phone_validated} onChange={e => upd('only_with_phone_validated', e.target.checked)} className="mt-0.5" />
+        <div>
+          <p className="text-xs font-semibold">Enviar apenas para numeros validados</p>
+          <p className="text-[10px] text-slate-500">Verifica se o numero existe no WhatsApp antes de enviar (recomendado).</p>
+        </div>
+      </label>
+    </div>
+  );
+};
+
 
 const AudienceModal = ({ campaign, data, onClose }) => (
   <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>

@@ -242,6 +242,20 @@ class QuickResponseCreate(BaseModel):
     shortcut: Optional[str] = None
 
 # Campaign Models
+class CampaignAntiBlock(BaseModel):
+    """Anti-block / human-like sending policies."""
+    enabled: bool = True
+    interval_min_seconds: int = 30      # min delay between two messages
+    interval_max_seconds: int = 90      # max delay between two messages
+    burst_size: int = 50                # after N messages...
+    burst_pause_seconds: int = 300      # ...pause this long
+    daily_limit: int = 250              # max messages per 24h window
+    hourly_limit: int = 50              # max messages per hour
+    escalate_after: int = 100           # after N msgs, increase interval
+    escalate_factor: float = 1.5        # multiplier applied to min/max
+    only_with_phone_validated: bool = True
+
+
 class CampaignCreate(BaseModel):
     name: str
     type: str = "broadcast"  # broadcast | drip
@@ -261,6 +275,8 @@ class CampaignCreate(BaseModel):
     # Messages (1..5 sequential)
     messages: List[str] = []
     attachment_url: Optional[str] = None
+    # Anti-block parameters
+    anti_block: Optional[CampaignAntiBlock] = None
     # Legacy fields (kept for backwards compatibility)
     message_template: Optional[str] = None
     target_audience: Optional[str] = None
@@ -280,6 +296,7 @@ class CampaignUpdate(BaseModel):
     ticket_status: Optional[str] = None
     messages: Optional[List[str]] = None
     attachment_url: Optional[str] = None
+    anti_block: Optional[CampaignAntiBlock] = None
     status: Optional[str] = None  # draft | programada | em_execucao | concluida | cancelada
 
 # AI Chat Models
