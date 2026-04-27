@@ -20,9 +20,30 @@ const AUTH_DIR = process.env.AUTH_DIR
   ? path.resolve(process.env.AUTH_DIR)
   : path.join(__dirname, 'auth_sessions');
 console.log(`[whatsapp-service] Using AUTH_DIR=${AUTH_DIR}`);
+console.log(`[whatsapp-service] Webhook target FASTAPI_URL=${FASTAPI_URL}`);
 
 // Store connections per company
 const connections = {};
+
+// In-memory store of recently sent messages so Baileys can satisfy
+// retry/decryption requests with the original payload (otherwise the WA
+// server resends an EMPTY message to the recipient — a known Baileys
+// pitfall when getMessage returns {conversation:''}).
+// Keyed by `${jid}:${msgId}`.
+const sentMessageStore = {};
+const SENT_STORE_MAX = 500;
+function rememberSent(jid, msgId, message) {
+  if (!jid || !msgId || !message) return;
+  const key = `${jid}:${msgId}`;
+  sentMessageStore[key] = message;
+  const keys = Object.keys(sentMessageStore);
+  if (keys.length > SENT_STORE_MAX) {
+    delete sentMessageStore[keys[0]];
+  }
+}
+function recallSent(jid, msgId) {
+  return sentMessageStore[`${jid}:${msgId}`];
+}
 
 // Ensure auth directory
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
@@ -48,9 +69,14 @@ async function createConnection(instanceId) {
     // (helps avoid "Aguardando mensagem..." prekey placeholder on recipients)
     markOnlineOnConnect: true,
     syncFullHistory: false,
-    // Return empty message body for retry requests so Baileys can handle
-    // pre-key re-sends without throwing and leaving recipient on placeholder
-    getMessage: async () => ({ conversation: '' }),
+    // Return the original message body when the WA server requests a retry
+    // (otherwise recipients receive an EMPTY message). We look up the
+    // outbound payload we cached at send-time.
+    getMessage: async (key) => {
+      const cached = recallSent(key?.remoteJid, key?.id);
+      if (cached) return cached;
+      return { conversation: '' };
+    },
   });
 
   const instance = {
@@ -109,13 +135,45 @@ async function createConnection(instanceId) {
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    // Capture both 'notify' (real-time push) and 'append' (background sync)
+    if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
       if (msg.key.fromMe) continue;
-      const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+      // Skip status broadcasts and groups (focus on 1-on-1 for CRM)
+      const remoteJid = msg.key.remoteJid || '';
+      if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') continue;
+
+      const m = msg.message || {};
+      // Support a variety of message types
+      let text = m.conversation
+        || m.extendedTextMessage?.text
+        || m.imageMessage?.caption
+        || m.videoMessage?.caption
+        || m.documentMessage?.caption
+        || m.documentWithCaptionMessage?.message?.documentMessage?.caption
+        || m.buttonsResponseMessage?.selectedDisplayText
+        || m.listResponseMessage?.title
+        || m.templateButtonReplyMessage?.selectedDisplayText
+        || '';
+
+      // Provide a placeholder for media-only messages so the agent sees them
+      if (!text) {
+        if (m.imageMessage) text = '[Imagem]';
+        else if (m.videoMessage) text = '[Video]';
+        else if (m.audioMessage) text = '[Audio]';
+        else if (m.stickerMessage) text = '[Figurinha]';
+        else if (m.documentMessage) text = `[Documento] ${m.documentMessage.fileName || ''}`.trim();
+        else if (m.locationMessage) text = '[Localizacao]';
+        else if (m.contactMessage) text = `[Contato] ${m.contactMessage.displayName || ''}`.trim();
+      }
       if (!text) continue;
-      const phone = msg.key.remoteJid?.replace('@s.whatsapp.net', '') || '';
+
+      const phone = remoteJid.replace('@s.whatsapp.net', '');
       const pushName = msg.pushName || '';
+      // Coerce Baileys Long timestamp into a plain int for JSON serialization
+      let ts = msg.messageTimestamp;
+      if (ts && typeof ts === 'object' && typeof ts.toNumber === 'function') ts = ts.toNumber();
+      else if (typeof ts !== 'number') ts = Number(ts) || 0;
 
       try {
         await axios.post(`${FASTAPI_URL}/api/channels/webhook/message`, {
@@ -124,10 +182,10 @@ async function createConnection(instanceId) {
           name: pushName,
           message: text,
           message_id: msg.key.id,
-          timestamp: msg.messageTimestamp
-        });
+          timestamp: ts,
+        }, { timeout: 10000 });
       } catch (e) {
-        console.error(`[${instanceId}] Webhook error:`, e.message);
+        console.error(`[${instanceId}] Webhook POST failed (${FASTAPI_URL}):`, e.message);
       }
     }
   });
@@ -262,8 +320,14 @@ app.post('/instances/:id/send', async (req, res) => {
       targetJid = phone;
     }
 
-    await instance.sock.sendMessage(targetJid, { text: message });
-    res.json({ success: true, jid: targetJid });
+    const payload = { text: message };
+    const sent = await instance.sock.sendMessage(targetJid, payload);
+    // Cache the original payload so getMessage() can satisfy WhatsApp retry
+    // requests (otherwise some recipients receive an empty/blank message).
+    if (sent?.key?.id) {
+      rememberSent(targetJid, sent.key.id, sent.message || { conversation: message });
+    }
+    res.json({ success: true, jid: targetJid, message_id: sent?.key?.id });
   } catch (e) {
     console.error(`[${req.params.id}] send error:`, e.message);
     res.status(500).json({ success: false, error: e.message });

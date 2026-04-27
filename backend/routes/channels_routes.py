@@ -407,7 +407,8 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     instance_id = data.get("instance_id")
     conn = await db.channel_connections.find_one({"id": instance_id})
     if not conn:
-        return {"ok": False}
+        logger.warning(f"[webhook/message] instance not found: {instance_id}")
+        return {"ok": False, "error": "instance_not_found"}
 
     company_id = conn["company_id"]
     phone = (data.get("phone") or "").strip()
@@ -415,6 +416,7 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     text = data.get("message") or ""
     msg_id = data.get("message_id")
     ts_raw = data.get("timestamp")
+    logger.info(f"[webhook/message] {company_id[:8]} phone={phone} mid={msg_id} text='{text[:40]}'")
 
     # Filter out messages older than the moment this channel was connected.
     # The WA microservice forwards messageTimestamp in seconds.
@@ -427,7 +429,14 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         try:
             connected_at_dt = datetime.fromisoformat(connected_at_iso.replace("Z", "+00:00"))
             connected_at_ts = int(connected_at_dt.timestamp())
-            if msg_ts < connected_at_ts - 5:  # 5s grace
+            # Drop only messages that are clearly historical (older than 1h
+            # before the connection moment). 1h grace absorbs any clock skew
+            # between the Node.js microservice host and the backend.
+            if msg_ts < connected_at_ts - 3600:
+                logger.info(
+                    f"[webhook] ignoring old WA msg (msg_ts={msg_ts} < conn_ts={connected_at_ts}) "
+                    f"phone={phone} mid={msg_id}"
+                )
                 return {"ok": True, "ignored": "older_than_connected_at"}
         except Exception:
             pass
