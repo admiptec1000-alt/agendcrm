@@ -21,7 +21,7 @@ const fmtDateTime = (iso) => {
 };
 
 const CampaignsPage = () => {
-  const [tab, setTab] = useState('listagem'); // listagem | listas
+  const [tab, setTab] = useState('listagem'); // listagem | listas | params
   const [campaigns, setCampaigns] = useState([]);
   const [search, setSearch] = useState('');
   const [showCampModal, setShowCampModal] = useState(false);
@@ -77,6 +77,7 @@ const CampaignsPage = () => {
       <div className="flex gap-1 mb-4 border-b border-slate-200">
         <TabBtn active={tab === 'listagem'} onClick={() => setTab('listagem')} label="Listagem" testId="tab-listagem" />
         <TabBtn active={tab === 'listas'} onClick={() => setTab('listas')} label="Listas de Contato" testId="tab-listas" />
+        <TabBtn active={tab === 'params'} onClick={() => setTab('params')} label="Parametros" testId="tab-params-page" />
       </div>
 
       {tab === 'listagem' && (
@@ -138,6 +139,7 @@ const CampaignsPage = () => {
       )}
 
       {tab === 'listas' && <ContactListsTab />}
+      {tab === 'params' && <AntiBlockSettingsTab />}
 
       {showCampModal && (
         <CampaignModal
@@ -186,21 +188,9 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
     ticket_status: campaign?.ticket_status || 'fechado',
     messages: campaign?.messages?.length ? campaign.messages : ['', '', '', '', ''],
     attachment_url: campaign?.attachment_url || '',
-    anti_block: campaign?.anti_block || {
-      enabled: true,
-      interval_min_seconds: 30,
-      interval_max_seconds: 90,
-      burst_size: 50,
-      burst_pause_seconds: 300,
-      daily_limit: 250,
-      hourly_limit: 50,
-      escalate_after: 100,
-      escalate_factor: 1.5,
-      only_with_phone_validated: true,
-    },
   });
   const [activeMsg, setActiveMsg] = useState(0);
-  const [activeTab, setActiveTab] = useState('config'); // config | messages | params
+  const [activeTab, setActiveTab] = useState('config'); // config | messages
   const [tags, setTags] = useState([]);
   const [conns, setConns] = useState([]);
   const [lists, setLists] = useState([]);
@@ -243,7 +233,6 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
       ticket_status: form.ticket_status,
       messages: cleanMessages,
       attachment_url: form.attachment_url || null,
-      anti_block: form.anti_block,
     };
     try {
       if (isEditing) await crmAPI.updateCampaign(campaign.id, payload);
@@ -264,7 +253,6 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
         <div className="px-5 pt-3 border-b border-slate-200 flex gap-1">
           <ModalTab active={activeTab === 'config'} onClick={() => setActiveTab('config')} label="Configuracao" testId="tab-config" />
           <ModalTab active={activeTab === 'messages'} onClick={() => setActiveTab('messages')} label="Mensagens" testId="tab-messages" />
-          <ModalTab active={activeTab === 'params'} onClick={() => setActiveTab('params')} label="Parametros" testId="tab-params" />
         </div>
 
         <div className="p-5 space-y-4">
@@ -397,10 +385,6 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
             <p className="text-[10px] text-slate-400 mt-1">Utilize variaveis como {'{nome}'}, {'{numero}'}.</p>
           </div>
           )}
-
-          {activeTab === 'params' && (
-          <AntiBlockTab anti_block={form.anti_block} onChange={(ab) => setForm({...form, anti_block: ab})} />
-          )}
         </div>
 
         <div className="flex justify-between items-center gap-2 p-4 border-t border-slate-200">
@@ -516,6 +500,43 @@ const AntiBlockTab = ({ anti_block, onChange }) => {
   );
 };
 
+
+const AntiBlockSettingsTab = () => {
+  const [ab, setAb] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    crmAPI.getCampaignSettings().then(r => setAb(r.data?.anti_block || {})).catch(() => setAb({}));
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await crmAPI.updateCampaignSettings({ anti_block: ab });
+      toast.success('Parametros salvos');
+    } catch (e) { toast.error('Erro ao salvar'); }
+    finally { setSaving(false); }
+  };
+
+  if (!ab) return <div className="text-center py-12 text-slate-400 text-sm">Carregando...</div>;
+
+  return (
+    <div data-testid="antiblock-settings-page">
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <p className="text-sm text-slate-600 max-w-2xl">
+          Configuracoes de <span className="font-semibold">protecao anti-bloqueio</span> aplicadas a <span className="font-semibold">todas as campanhas</span> da empresa.
+          Campanhas individuais podem sobrescrever estes valores.
+        </p>
+        <button onClick={save} disabled={saving} className="btn-primary text-sm" data-testid="save-params-btn">
+          {saving ? 'Salvando...' : 'Salvar Parametros'}
+        </button>
+      </div>
+      <div className="card max-w-2xl p-5">
+        <AntiBlockTab anti_block={ab} onChange={setAb} />
+      </div>
+    </div>
+  );
+};
 
 const AudienceModal = ({ campaign, data, onClose }) => (
   <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>

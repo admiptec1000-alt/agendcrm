@@ -378,6 +378,52 @@ async def create_quick_response(
     await db.quick_responses.insert_one(response)
     return {k: v for k, v in response.items() if k != "_id"}
 
+# === CAMPAIGN GLOBAL SETTINGS (anti-block policy per company) ===
+class CampaignSettingsUpdate(BaseModel):
+    anti_block: dict
+
+
+@router.get("/campaign-settings")
+async def get_campaign_settings(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    doc = await db.campaign_settings.find_one({"company_id": user["company_id"]}, {"_id": 0})
+    if not doc:
+        doc = {
+            "company_id": user["company_id"],
+            "anti_block": {
+                "enabled": True,
+                "interval_min_seconds": 30,
+                "interval_max_seconds": 90,
+                "burst_size": 50,
+                "burst_pause_seconds": 300,
+                "daily_limit": 250,
+                "hourly_limit": 50,
+                "escalate_after": 100,
+                "escalate_factor": 1.5,
+                "only_with_phone_validated": True,
+            }
+        }
+    return doc
+
+
+@router.put("/campaign-settings")
+async def update_campaign_settings(
+    data: CampaignSettingsUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    await db.campaign_settings.update_one(
+        {"company_id": user["company_id"]},
+        {"$set": {"anti_block": data.anti_block,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    doc = await db.campaign_settings.find_one({"company_id": user["company_id"]}, {"_id": 0})
+    return doc
+
+
 # Campaigns
 @router.get("/campaigns")
 async def list_campaigns(
@@ -578,8 +624,11 @@ async def run_campaign_now(
             raise HTTPException(status_code=400, detail="Nenhuma conexao WhatsApp ativa")
         conn_id = c2["id"]
 
-    # Anti-block policy (from campaign or sane defaults)
+    # Anti-block policy: campaign-level override OR company-level settings
     ab = camp.get("anti_block") or {}
+    if not ab:
+        settings = await db.campaign_settings.find_one({"company_id": user["company_id"]}, {"_id": 0})
+        ab = (settings or {}).get("anti_block") or {}
     ab_enabled = ab.get("enabled", True)
     interval_min = max(0, int(ab.get("interval_min_seconds", 30) or 0))
     interval_max = max(interval_min, int(ab.get("interval_max_seconds", 90) or 0))

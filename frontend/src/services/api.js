@@ -133,6 +133,9 @@ export const crmAPI = {
   deleteCampaign: (id) => api.delete(`/crm/campaigns/${id}`),
   previewCampaignAudience: (id) => api.post(`/crm/campaigns/${id}/preview-audience`),
   runCampaign: (id) => api.post(`/crm/campaigns/${id}/run`),
+  // Campaign settings (global anti-block)
+  getCampaignSettings: () => api.get('/crm/campaign-settings'),
+  updateCampaignSettings: (data) => api.put('/crm/campaign-settings', data),
   // Retry
   retryMessage: (ticketId, messageId) => api.post(`/crm/tickets/${ticketId}/messages/${messageId}/retry`),
 };
