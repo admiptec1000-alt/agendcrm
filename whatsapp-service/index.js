@@ -22,6 +22,18 @@ const AUTH_DIR = process.env.AUTH_DIR
 console.log(`[whatsapp-service] Using AUTH_DIR=${AUTH_DIR}`);
 console.log(`[whatsapp-service] Webhook target FASTAPI_URL=${FASTAPI_URL}`);
 
+// CRITICAL: Baileys often throws async errors deep inside its internal retry
+// logic (e.g. "Connection Closed" 428 while sending a retry request after a
+// `No session record` decryption failure on @lid JIDs). Without these
+// handlers the entire Node.js process crashes, which on Render triggers a
+// full restart + wipes all connections in memory. Swallow them.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err?.message || err, '\n  at:', err?.stack?.split('\n')[1]);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason?.message || reason);
+});
+
 // Store connections per company
 const connections = {};
 
@@ -107,14 +119,30 @@ async function createConnection(instanceId) {
 
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const errMsg = lastDisconnect?.error?.message || 'Connection closed';
+      const isConflict = errMsg.includes('conflict') || errMsg.includes('replaced') || statusCode === 440;
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      const shouldReconnect = !isLoggedOut && !isConflict;
       instance.status = 'disconnected';
-      instance.lastError = lastDisconnect?.error?.message || 'Connection closed';
-      console.log(`[${instanceId}] Disconnected: ${instance.lastError}`);
+      instance.lastError = errMsg;
+      console.log(`[${instanceId}] Disconnected: ${errMsg} (status=${statusCode})`);
 
-      if (shouldReconnect) {
+      if (isConflict) {
+        // Another session took over (user opened WhatsApp Web elsewhere, or
+        // rapid reconnect caused duplicate socket). Reconnecting immediately
+        // would fight the other session forever — wait longer and only retry
+        // once. User should close other sessions first.
+        console.log(`[${instanceId}] CONFLICT — waiting 60s before single retry (close other WhatsApp Web sessions!)`);
+        setTimeout(() => {
+          if (connections[instanceId]?.status === 'disconnected') {
+            createConnection(instanceId).catch(e => console.error(`[${instanceId}] retry failed:`, e.message));
+          }
+        }, 60000);
+      } else if (shouldReconnect) {
         console.log(`[${instanceId}] Reconnecting in 5s...`);
-        setTimeout(() => createConnection(instanceId), 5000);
+        setTimeout(() => {
+          createConnection(instanceId).catch(e => console.error(`[${instanceId}] reconnect failed:`, e.message));
+        }, 5000);
       } else {
         // Logged out - clean auth
         try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (e) {}
@@ -404,14 +432,14 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.0',
+    version: 'v2.1.1',
   });
 });
 
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.0',
+    version: 'v2.1.1',
     built_at: '2026-04-27',
     features: {
       sent_message_store: true,       // anti blank message fix
@@ -422,6 +450,8 @@ app.get('/version', (req, res) => {
       notify_and_append: true,        // both upsert types
       long_ts_coercion: true,         // Long -> Number
       jid_normalization: true,        // @s.whatsapp.net vs @lid
+      crash_guard: true,              // uncaughtException handler (v2.1.1)
+      conflict_backoff: true,         // slow retry on stream:error conflict (v2.1.1)
     },
     fastapi_url: FASTAPI_URL,
   });
