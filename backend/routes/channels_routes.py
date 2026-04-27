@@ -44,6 +44,38 @@ async def service_health(user: dict = Depends(get_current_user)):
         }
 
 
+@router.get("/service-version-check")
+async def service_version_check(user: dict = Depends(get_current_user)):
+    """Probe the WA microservice to confirm the latest patches are deployed.
+    Used by the 'Verificar Deploy' button after the user redeploys on Render.
+    """
+    checks = {
+        "online": False,
+        "has_contacts_endpoint": False,
+        "url": WA_SERVICE_URL,
+        "details": [],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{WA_SERVICE_URL}/health")
+            if r.status_code == 200:
+                checks["online"] = True
+                checks["details"].append("✓ Microservico online")
+            else:
+                checks["details"].append(f"✗ Health retornou HTTP {r.status_code}")
+            # Probe contacts endpoint (only exists in the redeployed version)
+            r2 = await client.get(f"{WA_SERVICE_URL}/instances/__probe__/contacts")
+            if r2.status_code != 404:
+                checks["has_contacts_endpoint"] = True
+                checks["details"].append("✓ Endpoint /contacts presente (redeploy OK)")
+            else:
+                checks["details"].append("✗ Endpoint /contacts ausente — REDEPLOY PENDENTE")
+    except Exception as e:
+        checks["details"].append(f"✗ Erro: {str(e)[:120]}")
+    checks["redeploy_done"] = checks["online"] and checks["has_contacts_endpoint"]
+    return checks
+
+
 # === MODELS ===
 class ConnectionCreate(BaseModel):
     name: str

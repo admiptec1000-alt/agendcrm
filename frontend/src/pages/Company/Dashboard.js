@@ -2946,12 +2946,30 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
 
       {tab === 'conexoes' && (
         <div>
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-4 flex-wrap">
             <button onClick={() => addConnection('whatsapp')} className="btn-primary text-sm flex items-center gap-2" data-testid="add-whatsapp-btn">
               <Plus className="w-4 h-4" /> WhatsApp
             </button>
             <button onClick={() => addConnection('instagram')} className="btn-secondary text-sm flex items-center gap-2" data-testid="add-instagram-btn">
               <Plus className="w-4 h-4" /> Instagram
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const r = await channelsAPI.serviceVersionCheck();
+                  const ok = r.data.redeploy_done;
+                  toast[ok ? 'success' : 'error'](
+                    (ok ? '✓ Microserviço atualizado!' : '✗ Microserviço NÃO está atualizado')
+                    + '\n' + (r.data.details || []).join('\n'),
+                    { duration: 8000 }
+                  );
+                } catch (e) { toast.error('Erro ao verificar deploy'); }
+              }}
+              className="btn-secondary text-sm flex items-center gap-2 ml-auto"
+              data-testid="verify-deploy-btn"
+              title="Verifica se o microservico Node.js no Render foi redeployado com os patches mais recentes"
+            >
+              ✓ Verificar Deploy
             </button>
           </div>
           <div className="space-y-3">
