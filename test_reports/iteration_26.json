@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 26 — Atendimento (omnichannel) epic. 10/10 backend pytest cases PASSED (100%) covering ticket CRUD with value/tags, GET single ticket, add/remove tag idempotent ($addToSet/$pull), TicketUpdate extended fields, send-message on whatsapp w/o connection (returns delivery_status='failed', no 500), kanban-v2 totals_by_column, webhook auto-create + idempotency + push-message, scheduled-messages create. Frontend smoke verified: AtendimentosPage renders with tags inline, value badge in card, edit-contact + schedule-message modals open, message send works. Kanban shows 'Total: R$ 1500,50' badge per column AND value chip on each card — feature working end-to-end. ONE UI BUG FOUND: New Ticket modal sends customer_email='' (empty string) which 422s due to Pydantic EmailStr validation; null is accepted.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/crm/tickets", "issue": "customer_email Optional[EmailStr] rejects empty string. UI sends '' when user leaves field blank → 422. Either coerce '' → None server-side or convert in frontend before submit."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AtendimentosPage > NewTicketModal", "issue": "Submitting with empty email field returns 422 ('Erro ao criar ticket'). Toast shows generic error. Frontend must send customer_email: form.customer_email || null in handleCreateTicket / NewTicketModal onSave (currently sends empty string).", "selector": "[data-testid='save-new-ticket']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_26.py",
+    "/app/test_reports/pytest/iteration_26.xml"
+  ],
+  "action_items": [
+    "Fix NewTicketModal in /app/frontend/src/pages/CRM/AtendimentosPage.js (line ~664-665): replace onSave({ ...form, value: parseFloat(form.value) || 0 }) with onSave({ ...form, customer_email: form.customer_email || null, value: parseFloat(form.value) || 0 }). Also apply the same null-coercion to EditContactModal save handler (line ~190 already does || null for customer_email — confirm it works). Alternatively: change TicketCreate.customer_email to allow empty string by coercing in a validator.",
+    "Consider: when toast shows 'Erro ao criar ticket', surface server validation message (e.detail) for better UX."
+  ],
+  "critical_code_review_comments": [
+    "crm_routes.py POST /tickets/{id}/messages: WhatsApp send graciously catches exceptions and sets delivery_status='failed' — verified does not throw 500 even when WA_SERVICE_URL host is unreachable. Good resilience.",
+    "crm_routes.py kanban-v2: totals_by_column iterates all tickets in memory after load (already 2000-cap). For multi-thousand ticket companies, prefer aggregation pipeline ($group sum). Acceptable now.",
+    "channels_routes.py webhook_message: idempotency only fires when msg_id is provided; if microservice forgets to send message_id, duplicates can occur. Consider also dedup via (phone, content, created_at-window) or 409 from microservice.",
+    "channels_routes.py webhook_message: no auth — any caller knowing instance_id can inject a ticket. Behind ingress so OK; but consider HMAC signature header for hardening.",
+    "models.py TicketCreate.customer_email Optional[EmailStr] does not coerce '' to None — root cause of UI 422. Add a @field_validator to convert empty/whitespace to None.",
+    "AtendimentosPage.js: handleSendMessage sets delivery_status='failed' when WA inactive — confirmed UI must already render the failed indicator (verified UI renders delivery_status pill via existing logic).",
+    "Frontend toast.error in handleCreateTicket masks the 422 detail — debugging is harder without console; consider e?.response?.data?.detail."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_26.py (new)",
+    "/app/test_reports/iteration_26.json (new)",
+    "/app/test_reports/pytest/iteration_26.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "90% (1 modal-create bug)"},
+  "test_credentials": "crm@test.com / crm123 (CRM-only company), admin@boss.com.br / boss123 (scheduling)",
+  "seed_data_creation": "All test data prefixed TEST_ and cleaned up by tests; manually deleted any leftover via curl.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is 100% green for the new endpoints (ticket value/tags, single-GET, tag add/remove, kanban-v2 totals_by_column, webhook auto-create+idempotency+push, scheduled-messages, TicketUpdate extended fields). Verified UI displays: (a) value badge R$ in conversation list and chat header, (b) Total: R$ X per Kanban column header, (c) value chip + tag chips on Kanban cards. Schedule modal and Edit Contact modal open OK. The ONE bug is NewTicketModal sending customer_email='' which 422s. Once fixed by main agent, retest by clicking new-ticket-btn → fill name+phone+value (leave email empty) → save-new-ticket → verify ticket appears in list. Note: existing tickets created without email (via curl with null) work fine, that's why the page already shows 'Joao Silva' and 'Teste Valor' tickets seeded via curl by the previous session. Tag picker UI requires existing tags in /api/crm/tags collection — empty by default. Drag-and-drop between Kanban columns NOT exercised by playwright (HTML5 dnd hard to automate); backend move endpoint covered by iteration_25 tests.",
+  "rca of the issue": "NewTicketModal initial state form.customer_email='' (empty string, not null). On submit, onSave spreads form so payload includes customer_email: ''. Pydantic v2 EmailStr requires a valid email format and rejects empty strings → FastAPI returns 422. Confirmed via curl: POST /api/crm/tickets with customer_email:'' → 422; with customer_email:null → 200. Mitigation: in NewTicketModal save click and/or in handleCreateTicket, normalize: customer_email: form.customer_email?.trim() || null. Same defensive normalization should be applied in EditContactModal save (line 187 already passes form.customer_email || null — verify ok)."
+}

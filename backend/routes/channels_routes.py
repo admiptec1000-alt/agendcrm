@@ -319,13 +319,71 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     if not conn:
         return {"ok": False}
 
-    # Log incoming message
+    company_id = conn["company_id"]
+    phone = (data.get("phone") or "").strip()
+    name = data.get("name") or phone or "Cliente"
+    text = data.get("message") or ""
+    msg_id = data.get("message_id")
+
+    # Log incoming message (raw)
     await db.message_log.insert_one({
-        "id": str(uuid.uuid4()), "company_id": conn["company_id"], "connection_id": instance_id,
-        "direction": "incoming", "phone": data.get("phone"), "sender_name": data.get("name"),
-        "message": data.get("message"), "message_id": data.get("message_id"),
+        "id": str(uuid.uuid4()), "company_id": company_id, "connection_id": instance_id,
+        "direction": "incoming", "phone": phone, "sender_name": data.get("name"),
+        "message": text, "message_id": msg_id,
         "created_at": datetime.now(timezone.utc).isoformat()
     })
+
+    # Find or create open ticket for this phone (so it appears in Atendimentos UI)
+    if not phone:
+        return {"ok": True}
+
+    ticket = await db.tickets.find_one({
+        "company_id": company_id,
+        "customer_phone": phone,
+        "status": {"$nin": ["fechado"]}
+    })
+
+    new_message = {
+        "id": str(uuid.uuid4()),
+        "content": text,
+        "sender_type": "user",
+        "sender_id": None,
+        "sender_name": name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "wa_message_id": msg_id,
+    }
+
+    if not ticket:
+        ticket_id = str(uuid.uuid4())
+        ticket = {
+            "id": ticket_id,
+            "company_id": company_id,
+            "customer_name": name,
+            "customer_phone": phone,
+            "customer_email": None,
+            "status": "aberto",
+            "priority": "medium",
+            "channel": "whatsapp",
+            "description": text[:140] if text else None,
+            "assigned_to": None,
+            "messages": [new_message],
+            "tags": [],
+            "value": 0.0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.tickets.insert_one(ticket)
+    else:
+        # Idempotency: skip if same wa message id already pushed
+        existing_ids = [m.get("wa_message_id") for m in (ticket.get("messages") or [])]
+        if msg_id and msg_id in existing_ids:
+            return {"ok": True, "duplicate": True}
+        await db.tickets.update_one(
+            {"id": ticket["id"]},
+            {"$push": {"messages": new_message},
+             "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+
     return {"ok": True}
 
 

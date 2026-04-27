@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { crmAPI } from '../../services/api';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, X, MessageSquare, Phone } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Phone } from 'lucide-react';
 
 const COLORS = ['#4F46E5','#EF4444','#F59E0B','#10B981','#06B6D4','#8B5CF6','#EC4899','#64748B'];
 
@@ -91,15 +91,20 @@ const KanbanPage = () => {
                 className="flex-shrink-0 w-72 snap-start"
                 data-testid={`kanban-col-${col.id}`}
               >
-                <div className="rounded-t-xl px-3 py-2.5 flex items-center gap-2 text-white shadow-sm" style={{ background: col.color }}>
-                  <span className="font-semibold text-sm flex-1 truncate">{col.name}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 font-bold">{tickets.length}</span>
-                  {!col.is_native && (
-                    <>
-                      <button onClick={() => openEditCol(col)} className="p-1 rounded hover:bg-white/20" title="Editar"><Pencil className="w-3 h-3" /></button>
-                      <button onClick={() => deleteCol(col)} className="p-1 rounded hover:bg-white/20" title="Excluir"><Trash2 className="w-3 h-3" /></button>
-                    </>
-                  )}
+                <div className="rounded-t-xl px-3 py-2.5 text-white shadow-sm" style={{ background: col.color }}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm flex-1 truncate">{col.name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 font-bold">{tickets.length}</span>
+                    {!col.is_native && (
+                      <>
+                        <button onClick={() => openEditCol(col)} className="p-1 rounded hover:bg-white/20" title="Editar"><Pencil className="w-3 h-3" /></button>
+                        <button onClick={() => deleteCol(col)} className="p-1 rounded hover:bg-white/20" title="Excluir"><Trash2 className="w-3 h-3" /></button>
+                      </>
+                    )}
+                  </div>
+                  <div className="text-[11px] font-bold mt-1 text-white/95" data-testid={`kanban-col-total-${col.id}`}>
+                    Total: R$ {((data.totals_by_column || {})[col.id] || 0).toFixed(2).replace('.', ',')}
+                  </div>
                 </div>
                 <div className="bg-slate-50 rounded-b-xl p-2 min-h-[400px] space-y-2">
                   {tickets.length === 0 ? (
@@ -117,7 +122,12 @@ const KanbanPage = () => {
                         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white flex items-center justify-center text-[11px] font-bold flex-shrink-0">
                           {(t.customer_name || '?').charAt(0).toUpperCase()}
                         </div>
-                        <p className="text-[13px] font-semibold text-slate-900 truncate">{t.customer_name}</p>
+                        <p className="text-[13px] font-semibold text-slate-900 truncate flex-1">{t.customer_name}</p>
+                        {(t.value > 0) && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold flex-shrink-0">
+                            R$ {Number(t.value).toFixed(2).replace('.', ',')}
+                          </span>
+                        )}
                       </div>
                       {t.last_message && <p className="text-[11px] text-slate-500 truncate">{t.last_message}</p>}
                       <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">

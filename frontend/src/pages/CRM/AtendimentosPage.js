@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { crmAPI } from '../../services/api';
+import { crmAPI, channelsAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
   Search, Plus, X, Phone, Mail, Send, Paperclip, Smile, Mic,
-  Clock, MessageSquare, Users, Filter, ChevronLeft, MoreVertical,
-  Zap, Tag, User, Hash, ArrowRightLeft, Ban, CheckCircle2,
-  Instagram, Globe, Smartphone
+  Clock, MessageSquare, ChevronLeft, MoreVertical,
+  Tag, User, Hash, ArrowRightLeft, Ban, CheckCircle2, Check,
+  Instagram, Globe, Smartphone, DollarSign, CalendarClock,
+  Pencil, Trash2, AlertCircle
 } from 'lucide-react';
 
 const CHANNEL_ICONS = {
@@ -25,6 +26,17 @@ const STATUS_COLORS = {
   fechado: { bg: 'bg-slate-100', text: 'text-slate-600', label: 'Fechado' },
 };
 
+const formatTime = (isoDate) => {
+  if (!isoDate) return '';
+  const d = new Date(isoDate);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  if (isToday) return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+};
+
+const formatBRL = (v) => `R$ ${(Number(v) || 0).toFixed(2).replace('.', ',')}`;
+
 const AtendimentosPage = () => {
   const { user } = useAuth();
   const [tickets, setTickets] = useState([]);
@@ -32,15 +44,29 @@ const AtendimentosPage = () => {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showContactInfo, setShowContactInfo] = useState(false);
   const [showNewTicket, setShowNewTicket] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  const [showEditContact, setShowEditContact] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState('atendendo');
   const [channelFilter, setChannelFilter] = useState('');
   const [messageInput, setMessageInput] = useState('');
+  const [allTags, setAllTags] = useState([]);
+  const [sending, setSending] = useState(false);
   const messagesEndRef = useRef(null);
+  const selectedRef = useRef(null);
 
-  useEffect(() => { loadData(); }, [activeTab, channelFilter, searchTerm]);
+  // Keep selectedRef in sync (used inside polling closure)
+  useEffect(() => { selectedRef.current = selectedTicket; }, [selectedTicket]);
 
-  const loadData = async () => {
+  // Auto scroll on new messages
+  useEffect(() => {
+    if (selectedTicket?.messages?.length) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [selectedTicket?.messages?.length, selectedTicket?.id]);
+
+  const loadData = useCallback(async () => {
     try {
       const params = { tab: activeTab };
       if (channelFilter) params.channel = channelFilter;
@@ -52,7 +78,34 @@ const AtendimentosPage = () => {
       setTickets(ticketsRes.data);
       setCounts(countsRes.data);
     } catch (e) { /* silent */ }
+  }, [activeTab, channelFilter, searchTerm]);
+
+  const loadTags = async () => {
+    try { const r = await crmAPI.listTags(); setAllTags(r.data); } catch (e) {}
   };
+
+  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadTags(); }, []);
+
+  // Polling: refresh selected ticket every 4s, list every 8s
+  useEffect(() => {
+    const ticketInterval = setInterval(async () => {
+      const cur = selectedRef.current;
+      if (cur?.id) {
+        try {
+          const r = await crmAPI.getTicket(cur.id);
+          // only update if message count changed (to avoid input rerender flicker)
+          const currentCount = (selectedRef.current?.messages || []).length;
+          const newCount = (r.data.messages || []).length;
+          if (newCount !== currentCount || r.data.updated_at !== selectedRef.current?.updated_at) {
+            setSelectedTicket(r.data);
+          }
+        } catch (e) {}
+      }
+    }, 4000);
+    const listInterval = setInterval(() => { loadData(); }, 8000);
+    return () => { clearInterval(ticketInterval); clearInterval(listInterval); };
+  }, [loadData]);
 
   const handleSelectTicket = (ticket) => {
     setSelectedTicket(ticket);
@@ -60,16 +113,25 @@ const AtendimentosPage = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedTicket) return;
+    if (!messageInput.trim() || !selectedTicket || sending) return;
+    setSending(true);
+    const text = messageInput;
+    setMessageInput('');
     try {
-      await crmAPI.addMessage(selectedTicket.id, { content: messageInput, sender_type: 'agent' });
-      setMessageInput('');
-      // Reload ticket
-      const updatedTickets = await crmAPI.getTickets({ tab: activeTab });
-      setTickets(updatedTickets.data);
-      const updated = updatedTickets.data.find(t => t.id === selectedTicket.id);
-      if (updated) setSelectedTicket(updated);
-    } catch (e) { toast.error('Erro ao enviar mensagem'); }
+      const res = await crmAPI.addMessage(selectedTicket.id, { content: text, sender_type: 'agent' });
+      if (res.data?.delivery_status === 'failed') {
+        toast.error(`Mensagem nao entregue: ${res.data.delivery_error || 'erro'}`);
+      }
+      // Refresh selected ticket immediately
+      const r = await crmAPI.getTicket(selectedTicket.id);
+      setSelectedTicket(r.data);
+      loadData();
+    } catch (e) {
+      toast.error('Erro ao enviar mensagem');
+      setMessageInput(text);
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleCreateTicket = async (form) => {
@@ -85,13 +147,66 @@ const AtendimentosPage = () => {
     }
   };
 
-  const formatTime = (isoDate) => {
-    if (!isoDate) return '';
-    const d = new Date(isoDate);
-    const now = new Date();
-    const isToday = d.toDateString() === now.toDateString();
-    if (isToday) return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  const handleAddTag = async (tagName) => {
+    if (!selectedTicket) return;
+    try {
+      const r = await crmAPI.addTicketTag(selectedTicket.id, tagName);
+      setSelectedTicket(r.data);
+      setShowTagPicker(false);
+      loadData();
+      toast.success('Tag adicionada');
+    } catch (e) { toast.error('Erro ao adicionar tag'); }
+  };
+
+  const handleRemoveTag = async (tagName) => {
+    if (!selectedTicket) return;
+    try {
+      const r = await crmAPI.removeTicketTag(selectedTicket.id, tagName);
+      setSelectedTicket(r.data);
+      loadData();
+    } catch (e) { toast.error('Erro ao remover tag'); }
+  };
+
+  const handleScheduleMessage = async ({ message, scheduled_at }) => {
+    if (!selectedTicket) return;
+    try {
+      await channelsAPI.createScheduledMessage({
+        recipient: selectedTicket.customer_phone,
+        channel: selectedTicket.channel || 'whatsapp',
+        message,
+        scheduled_at,
+      });
+      toast.success('Mensagem agendada');
+      setShowSchedule(false);
+    } catch (e) { toast.error('Erro ao agendar'); }
+  };
+
+  const handleSaveContact = async (form) => {
+    if (!selectedTicket) return;
+    try {
+      const r = await crmAPI.updateTicket(selectedTicket.id, {
+        customer_name: form.customer_name,
+        customer_phone: form.customer_phone,
+        customer_email: form.customer_email || null,
+        value: parseFloat(form.value) || 0,
+        description: form.description,
+        channel: form.channel,
+      });
+      setSelectedTicket(r.data);
+      loadData();
+      toast.success('Contato atualizado');
+      setShowEditContact(false);
+    } catch (e) { toast.error('Erro ao salvar'); }
+  };
+
+  const handleDeleteTicket = async () => {
+    if (!selectedTicket || !window.confirm(`Excluir o atendimento "${selectedTicket.customer_name}"?`)) return;
+    try {
+      await crmAPI.deleteTicket(selectedTicket.id);
+      toast.success('Atendimento excluido');
+      setSelectedTicket(null);
+      loadData();
+    } catch (e) { toast.error('Erro ao excluir'); }
   };
 
   const getLastMessage = (ticket) => {
@@ -103,7 +218,7 @@ const AtendimentosPage = () => {
     <div className="flex h-full w-full overflow-hidden" data-testid="atendimentos-page">
       {/* === CONVERSATION LIST === */}
       <div className={`${selectedTicket ? 'hidden lg:flex' : 'flex'} flex-col w-full lg:w-[380px] border-r border-slate-200 bg-white flex-shrink-0`}>
-        {/* Modern header with gradient and KPIs */}
+        {/* Header with KPIs */}
         <div className="px-4 pt-4 pb-3 bg-gradient-to-br from-primary to-indigo-600 text-white">
           <div className="flex items-center justify-between mb-3">
             <div>
@@ -114,12 +229,10 @@ const AtendimentosPage = () => {
               onClick={() => setShowNewTicket(true)}
               className="w-11 h-11 rounded-2xl bg-white/15 hover:bg-white/25 backdrop-blur active:scale-95 transition-all flex items-center justify-center shadow-lg"
               data-testid="new-ticket-btn"
-              title="Novo atendimento"
             >
               <Plus className="w-5 h-5" />
             </button>
           </div>
-          {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/70" />
             <input
@@ -132,7 +245,7 @@ const AtendimentosPage = () => {
           </div>
         </div>
 
-        {/* Channel filter chips */}
+        {/* Channel filter */}
         <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto">
           {[
             { v: '', label: 'Todos' },
@@ -145,9 +258,7 @@ const AtendimentosPage = () => {
               key={c.v}
               onClick={() => setChannelFilter(c.v)}
               className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap transition-all ${
-                channelFilter === c.v
-                  ? 'bg-primary text-white shadow-sm'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                channelFilter === c.v ? 'bg-primary text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
               data-testid={`channel-chip-${c.v || 'all'}`}
             >
@@ -162,7 +273,7 @@ const AtendimentosPage = () => {
           <TabButton active={activeTab === 'aguardando'} onClick={() => setActiveTab('aguardando')} label="Aguardando" count={counts.aguardando} testId="tab-aguardando" />
         </div>
 
-        {/* Conversation List */}
+        {/* List */}
         <div className="flex-1 overflow-y-auto">
           {tickets.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
@@ -191,7 +302,6 @@ const AtendimentosPage = () => {
                   isSelected ? 'bg-primary/5 border-l-2 border-l-primary' : 'hover:bg-slate-50'
                 }`}
               >
-                {/* Avatar */}
                 <div className="relative flex-shrink-0">
                   <div className="w-11 h-11 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-sm">
                     {ticket.customer_name?.substring(0, 2).toUpperCase()}
@@ -200,8 +310,6 @@ const AtendimentosPage = () => {
                     <ChIcon className={`w-2.5 h-2.5 ${ch.color}`} />
                   </div>
                 </div>
-
-                {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-0.5">
                     <p className="font-medium text-sm text-slate-900 truncate">{ticket.customer_name}</p>
@@ -212,18 +320,21 @@ const AtendimentosPage = () => {
                     {lastMsg.content}
                   </p>
                   <div className="flex items-center gap-1 flex-wrap">
-                    {ticket.tags?.map((tag, i) => (
-                      <span key={`tag-${tag}-${i}`} className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">{tag}</span>
-                    ))}
-                    {ticket.status && STATUS_COLORS[ticket.status] && (
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${STATUS_COLORS[ticket.status].bg} ${STATUS_COLORS[ticket.status].text}`}>
-                        {STATUS_COLORS[ticket.status].label}
-                      </span>
+                    {ticket.tags?.slice(0, 2).map((tag, i) => {
+                      const td = allTags.find(t => t.name === tag);
+                      return (
+                        <span
+                          key={`tag-${tag}-${i}`}
+                          className="text-[9px] px-1.5 py-0.5 rounded font-medium"
+                          style={td ? { background: `${td.color}1A`, color: td.color } : { background: 'rgba(79,70,229,0.1)', color: 'rgb(79,70,229)' }}
+                        >{tag}</span>
+                      );
+                    })}
+                    {(ticket.value > 0) && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold">{formatBRL(ticket.value)}</span>
                     )}
                   </div>
                 </div>
-
-                {/* Actions */}
                 <div className="flex flex-col items-center gap-1 flex-shrink-0">
                   {ticket.messages?.length > 0 && (
                     <span className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] flex items-center justify-center font-bold">
@@ -239,69 +350,119 @@ const AtendimentosPage = () => {
 
       {/* === CHAT AREA === */}
       {selectedTicket ? (
-        <div className="flex-1 flex flex-col bg-[#ECE5DD]">
+        <div className="flex-1 flex flex-col bg-[#ECE5DD] min-w-0">
           {/* Chat Header */}
           <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3">
             <button onClick={() => setSelectedTicket(null)} className="lg:hidden p-1 rounded hover:bg-slate-100" data-testid="back-to-list">
               <ChevronLeft className="w-5 h-5" />
             </button>
-            <div className="cursor-pointer flex items-center gap-3 flex-1" onClick={() => setShowContactInfo(!showContactInfo)} data-testid="open-contact-info">
-              <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-sm">
+            <div className="cursor-pointer flex items-center gap-3 flex-1 min-w-0" onClick={() => setShowContactInfo(!showContactInfo)} data-testid="open-contact-info">
+              <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-sm flex-shrink-0">
                 {selectedTicket.customer_name?.substring(0, 2).toUpperCase()}
               </div>
-              <div>
-                <p className="font-semibold text-sm text-slate-900">
+              <div className="min-w-0">
+                <p className="font-semibold text-sm text-slate-900 truncate">
                   {selectedTicket.customer_name} <span className="text-slate-400 font-normal">#{selectedTicket.id.substring(0, 4)}</span>
                 </p>
-                <p className="text-xs text-slate-500">
-                  Atribuido a: {selectedTicket.assigned_to || user?.name || 'Admin'}
+                <p className="text-xs text-slate-500 truncate">
+                  {selectedTicket.customer_phone}
+                  {(selectedTicket.value > 0) && <span className="ml-2 text-emerald-700 font-semibold">{formatBRL(selectedTicket.value)}</span>}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-1">
-              <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Transferir"><ArrowRightLeft className="w-4 h-4" /></button>
-              <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Fechar"><Ban className="w-4 h-4" /></button>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button onClick={() => setShowEditContact(true)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Editar contato" data-testid="edit-contact-btn"><Pencil className="w-4 h-4" /></button>
+              <button onClick={handleDeleteTicket} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Excluir atendimento" data-testid="delete-ticket-btn"><Trash2 className="w-4 h-4" /></button>
+              <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hidden sm:block" title="Transferir"><ArrowRightLeft className="w-4 h-4" /></button>
+              <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hidden sm:block" title="Fechar"><Ban className="w-4 h-4" /></button>
               <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Mais"><MoreVertical className="w-4 h-4" /></button>
             </div>
           </div>
 
+          {/* Tags Bar */}
+          <div className="bg-white/80 px-4 py-2 border-b border-slate-200 flex items-center gap-1.5 flex-wrap">
+            <Tag className="w-3 h-3 text-slate-400" />
+            <span className="text-[10px] text-slate-400 font-semibold uppercase">Tags:</span>
+            {(selectedTicket.tags || []).map((t, i) => {
+              const td = allTags.find(at => at.name === t);
+              return (
+                <span
+                  key={`htag-${t}-${i}`}
+                  className="text-[10px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1"
+                  style={td ? { background: `${td.color}22`, color: td.color } : { background: '#E2E8F0', color: '#475569' }}
+                >
+                  {t}
+                  <button onClick={() => handleRemoveTag(t)} className="hover:opacity-70" data-testid={`remove-tag-${t}`}>
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </span>
+              );
+            })}
+            <div className="relative">
+              <button
+                onClick={() => setShowTagPicker(!showTagPicker)}
+                className="text-[10px] px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-slate-500 hover:border-primary hover:text-primary flex items-center gap-1"
+                data-testid="add-tag-btn"
+              >
+                <Plus className="w-2.5 h-2.5" /> Tag
+              </button>
+              {showTagPicker && (
+                <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg p-2 w-56" data-testid="tag-picker">
+                  <p className="text-[10px] font-bold uppercase text-slate-400 mb-2 px-1">Adicionar tag</p>
+                  {allTags.length === 0 && <p className="text-xs text-slate-500 px-2 py-1">Cadastre tags em CRM &gt; Tags</p>}
+                  <div className="max-h-48 overflow-y-auto space-y-1">
+                    {allTags
+                      .filter(t => !selectedTicket.tags?.includes(t.name))
+                      .map(t => (
+                        <button
+                          key={t.id}
+                          onClick={() => handleAddTag(t.name)}
+                          className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-slate-100 flex items-center gap-2"
+                          data-testid={`tag-option-${t.name}`}
+                        >
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ background: t.color }} />
+                          <span className="truncate">{t.name}</span>
+                        </button>
+                      ))}
+                  </div>
+                  <button onClick={() => setShowTagPicker(false)} className="w-full text-[10px] text-slate-400 mt-2 py-1 hover:text-slate-600">fechar</button>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-4 py-6">
-            {/* Tags bar */}
-            <div className="flex items-center gap-1.5 mb-4 px-2">
-              <Tag className="w-3 h-3 text-slate-400" />
-              <span className="text-[10px] text-slate-400">Tags:</span>
-              {(selectedTicket.tags?.length > 0 ? selectedTicket.tags : ['Sem tags']).map((t, i) => (
-                <span key={`tag-${t}-${i}`} className="text-[10px] px-2 py-0.5 rounded-full bg-white/80 text-slate-600">{t}</span>
-              ))}
-            </div>
-
-            {/* Date divider */}
+          <div className="flex-1 overflow-y-auto px-4 py-4">
             <div className="flex items-center justify-center mb-4">
-              <span className="text-[10px] bg-white/90 text-slate-500 px-3 py-1 rounded-lg shadow-sm">HOJE</span>
+              <span className="text-[10px] bg-white/90 text-slate-500 px-3 py-1 rounded-lg shadow-sm">CONVERSA</span>
             </div>
 
-            {/* Messages */}
             {selectedTicket.messages?.map((msg) => (
               <div key={msg.id} className={`flex mb-3 ${msg.sender_type === 'agent' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[75%] rounded-xl px-4 py-2.5 shadow-sm ${
-                  msg.sender_type === 'agent'
-                    ? 'bg-[#D9FDD3] text-slate-800 rounded-tr-sm'
-                    : 'bg-white text-slate-800 rounded-tl-sm'
+                  msg.sender_type === 'agent' ? 'bg-[#D9FDD3] text-slate-800 rounded-tr-sm' : 'bg-white text-slate-800 rounded-tl-sm'
                 }`}>
                   {msg.sender_type === 'agent' && (
                     <p className="text-[10px] font-bold text-emerald-700 mb-0.5">{msg.sender_name || 'Admin'}</p>
                   )}
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                  <p className="text-[10px] text-slate-400 text-right mt-1">
+                  <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                  <p className="text-[10px] text-slate-400 text-right mt-1 flex items-center justify-end gap-1">
                     {formatTime(msg.created_at)}
-                    {msg.sender_type === 'agent' && <CheckCircle2 className="w-3 h-3 inline ml-1 text-blue-500" />}
+                    {msg.sender_type === 'agent' && (
+                      msg.delivery_status === 'failed' ? (
+                        <span title={msg.delivery_error || 'Falha'} className="text-red-500"><AlertCircle className="w-3 h-3 inline" /></span>
+                      ) : msg.delivery_status === 'pending' ? (
+                        <Check className="w-3 h-3 inline text-slate-400" />
+                      ) : (
+                        <CheckCircle2 className="w-3 h-3 inline text-blue-500" />
+                      )
+                    )}
                   </p>
                 </div>
               </div>
             ))}
 
-            {selectedTicket.messages?.length === 0 && (
+            {(!selectedTicket.messages || selectedTicket.messages.length === 0) && (
               <div className="text-center py-12">
                 <p className="text-sm text-slate-400 bg-white/80 inline-block px-4 py-2 rounded-lg">Nenhuma mensagem nesta conversa</p>
               </div>
@@ -310,22 +471,31 @@ const AtendimentosPage = () => {
           </div>
 
           {/* Message Input */}
-          <div className="bg-white border-t border-slate-200 px-4 py-3">
+          <div className="bg-white border-t border-slate-200 px-3 py-3">
             <div className="flex items-center gap-2">
-              <button className="p-2 rounded-full hover:bg-slate-100 text-slate-500"><Paperclip className="w-5 h-5" /></button>
-              <div className="flex-1 relative">
+              <button
+                onClick={() => setShowSchedule(true)}
+                className="p-2 rounded-full hover:bg-primary/10 text-primary"
+                title="Agendar mensagem"
+                data-testid="schedule-message-btn"
+              >
+                <CalendarClock className="w-5 h-5" />
+              </button>
+              <button className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hidden sm:block"><Paperclip className="w-5 h-5" /></button>
+              <div className="flex-1 relative min-w-0">
                 <input
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                  placeholder="Digite uma mensagem ou aperte / para respostas rapidas"
+                  placeholder="Digite uma mensagem"
                   className="w-full px-4 py-2.5 bg-slate-50 rounded-full border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                   data-testid="message-input"
+                  disabled={sending}
                 />
               </div>
-              <button className="p-2 rounded-full hover:bg-slate-100 text-slate-500"><Smile className="w-5 h-5" /></button>
+              <button className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hidden sm:block"><Smile className="w-5 h-5" /></button>
               {messageInput.trim() ? (
-                <button onClick={handleSendMessage} className="p-2.5 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors" data-testid="send-message-btn">
+                <button onClick={handleSendMessage} disabled={sending} className="p-2.5 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50" data-testid="send-message-btn">
                   <Send className="w-5 h-5" />
                 </button>
               ) : (
@@ -361,14 +531,21 @@ const AtendimentosPage = () => {
                 {selectedTicket.customer_name?.substring(0, 2).toUpperCase()}
               </div>
               <p className="font-semibold text-slate-900">{selectedTicket.customer_name}</p>
+              {(selectedTicket.value > 0) && (
+                <p className="text-sm text-emerald-600 font-bold mt-1">{formatBRL(selectedTicket.value)}</p>
+              )}
             </div>
+            <button onClick={() => setShowEditContact(true)} className="w-full btn-secondary text-xs flex items-center justify-center gap-1">
+              <Pencil className="w-3 h-3" /> Editar contato
+            </button>
           </div>
           <div className="p-4 space-y-4">
             <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={selectedTicket.customer_phone} />
             <InfoRow icon={<Mail className="w-4 h-4" />} label="Email" value={selectedTicket.customer_email || 'Nao informado'} />
+            <InfoRow icon={<DollarSign className="w-4 h-4" />} label="Valor" value={formatBRL(selectedTicket.value)} />
             <InfoRow icon={<Hash className="w-4 h-4" />} label="Canal" value={selectedTicket.channel} />
             <InfoRow icon={<Clock className="w-4 h-4" />} label="Criado em" value={formatTime(selectedTicket.created_at)} />
-            <InfoRow icon={<User className="w-4 h-4" />} label="Atribuido a" value={selectedTicket.assigned_to || 'Admin'} />
+            <InfoRow icon={<User className="w-4 h-4" />} label="Atribuido a" value={selectedTicket.assigned_to || user?.name || 'Admin'} />
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Status</p>
               {STATUS_COLORS[selectedTicket.status] && (
@@ -378,15 +555,6 @@ const AtendimentosPage = () => {
               )}
             </div>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Tags</p>
-              <div className="flex flex-wrap gap-1.5">
-                {(selectedTicket.tags?.length > 0 ? selectedTicket.tags : []).map((t, i) => (
-                  <span key={`dtag-${t}-${i}`} className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">{t}</span>
-                ))}
-                <button className="text-xs px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-slate-400 hover:border-primary hover:text-primary transition-colors">+ Tag</button>
-              </div>
-            </div>
-            <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Descricao</p>
               <p className="text-sm text-slate-600">{selectedTicket.description || 'Sem descricao'}</p>
             </div>
@@ -394,8 +562,22 @@ const AtendimentosPage = () => {
         </div>
       )}
 
-      {/* New Ticket Modal */}
+      {/* Modals */}
       {showNewTicket && <NewTicketModal onClose={() => setShowNewTicket(false)} onSave={handleCreateTicket} />}
+      {showSchedule && selectedTicket && (
+        <ScheduleMessageModal
+          recipient={selectedTicket.customer_phone}
+          onClose={() => setShowSchedule(false)}
+          onSave={handleScheduleMessage}
+        />
+      )}
+      {showEditContact && selectedTicket && (
+        <EditContactModal
+          ticket={selectedTicket}
+          onClose={() => setShowEditContact(false)}
+          onSave={handleSaveContact}
+        />
+      )}
     </div>
   );
 };
@@ -431,41 +613,44 @@ const InfoRow = ({ icon, label, value }) => (
   </div>
 );
 
-const formatTime = (isoDate) => {
-  if (!isoDate) return '';
-  const d = new Date(isoDate);
-  const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  if (isToday) return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-};
-
 const NewTicketModal = ({ onClose, onSave }) => {
   const [form, setForm] = useState({
     customer_name: '', customer_phone: '', customer_email: '',
-    description: '', priority: 'medium', channel: 'whatsapp', status: 'aberto'
+    description: '', priority: 'medium', channel: 'whatsapp', status: 'aberto',
+    value: 0,
   });
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <h3 className="text-lg font-bold font-heading text-slate-900">Novo Atendimento</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="space-y-3">
-          <input value={form.customer_name} onChange={e => setForm({...form, customer_name: e.target.value})} placeholder="Nome do cliente" className="input-field" data-testid="new-ticket-name" />
-          <input value={form.customer_phone} onChange={e => setForm({...form, customer_phone: e.target.value})} placeholder="Telefone (WhatsApp)" className="input-field" data-testid="new-ticket-phone" />
-          <input value={form.customer_email} onChange={e => setForm({...form, customer_email: e.target.value})} placeholder="Email (opcional)" className="input-field" type="email" />
-          <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Descricao ou primeira mensagem" className="input-field" rows={2} />
+          <input value={form.customer_name} onChange={e => setForm({...form, customer_name: e.target.value})} placeholder="Nome do cliente" className="input-field w-full" data-testid="new-ticket-name" />
+          <input value={form.customer_phone} onChange={e => setForm({...form, customer_phone: e.target.value})} placeholder="Telefone (WhatsApp)" className="input-field w-full" data-testid="new-ticket-phone" />
+          <input value={form.customer_email} onChange={e => setForm({...form, customer_email: e.target.value})} placeholder="Email (opcional)" className="input-field w-full" type="email" />
+          <div className="relative">
+            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              value={form.value}
+              onChange={e => setForm({...form, value: e.target.value})}
+              placeholder="Valor do negocio (R$)"
+              className="input-field w-full pl-9"
+              type="number" step="0.01" min="0"
+              data-testid="new-ticket-value"
+            />
+          </div>
+          <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Descricao ou primeira mensagem" className="input-field w-full" rows={2} />
           <div className="grid grid-cols-2 gap-3">
-            <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field text-sm">
+            <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field text-sm w-full">
               <option value="whatsapp">WhatsApp</option>
               <option value="instagram">Instagram</option>
               <option value="web">Web</option>
               <option value="email">Email</option>
             </select>
-            <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})} className="input-field text-sm">
+            <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})} className="input-field text-sm w-full">
               <option value="low">Baixa</option>
               <option value="medium">Media</option>
               <option value="high">Alta</option>
@@ -475,12 +660,140 @@ const NewTicketModal = ({ onClose, onSave }) => {
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
           <button
-            onClick={() => { if (form.customer_name && form.customer_phone) onSave(form); else toast.error('Preencha nome e telefone'); }}
+            onClick={() => {
+              if (form.customer_name && form.customer_phone) {
+                onSave({ ...form, value: parseFloat(form.value) || 0 });
+              } else { toast.error('Preencha nome e telefone'); }
+            }}
             className="btn-primary text-sm"
             data-testid="save-new-ticket"
           >
             Criar Atendimento
           </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const EditContactModal = ({ ticket, onClose, onSave }) => {
+  const [form, setForm] = useState({
+    customer_name: ticket.customer_name || '',
+    customer_phone: ticket.customer_phone || '',
+    customer_email: ticket.customer_email || '',
+    value: ticket.value || 0,
+    description: ticket.description || '',
+    channel: ticket.channel || 'whatsapp',
+  });
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="edit-contact-modal">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="text-lg font-bold font-heading text-slate-900">Editar Contato</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Nome</label>
+            <input value={form.customer_name} onChange={e => setForm({...form, customer_name: e.target.value})} className="input-field w-full" data-testid="edit-contact-name" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Telefone</label>
+            <input value={form.customer_phone} onChange={e => setForm({...form, customer_phone: e.target.value})} className="input-field w-full" data-testid="edit-contact-phone" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Email</label>
+            <input value={form.customer_email} onChange={e => setForm({...form, customer_email: e.target.value})} className="input-field w-full" type="email" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Valor (R$)</label>
+            <div className="relative">
+              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                value={form.value}
+                onChange={e => setForm({...form, value: e.target.value})}
+                className="input-field w-full pl-9"
+                type="number" step="0.01" min="0"
+                data-testid="edit-contact-value"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Canal</label>
+            <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field text-sm w-full">
+              <option value="whatsapp">WhatsApp</option>
+              <option value="instagram">Instagram</option>
+              <option value="web">Web</option>
+              <option value="email">Email</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Observacoes</label>
+            <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} className="input-field w-full" rows={2} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
+          <button onClick={() => onSave(form)} className="btn-primary text-sm" data-testid="save-contact-btn">Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ScheduleMessageModal = ({ recipient, onClose, onSave }) => {
+  const tomorrow = new Date(Date.now() + 24 * 3600 * 1000);
+  const defaultDateTime = `${tomorrow.toISOString().slice(0, 10)}T09:00`;
+  const [message, setMessage] = useState('');
+  const [scheduledAt, setScheduledAt] = useState(defaultDateTime);
+
+  const handleSave = () => {
+    if (!message.trim()) { toast.error('Digite a mensagem'); return; }
+    if (!scheduledAt) { toast.error('Selecione data/hora'); return; }
+    const iso = new Date(scheduledAt).toISOString();
+    onSave({ message, scheduled_at: iso });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="schedule-modal">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="text-lg font-bold font-heading text-slate-900 flex items-center gap-2">
+            <CalendarClock className="w-5 h-5 text-primary" /> Agendar Mensagem
+          </h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Destinatario</label>
+            <input value={recipient || ''} disabled className="input-field w-full bg-slate-50" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Data e Hora</label>
+            <input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={e => setScheduledAt(e.target.value)}
+              className="input-field w-full"
+              data-testid="schedule-datetime"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Mensagem</label>
+            <textarea
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              placeholder="Digite a mensagem que sera enviada..."
+              className="input-field w-full"
+              rows={4}
+              data-testid="schedule-message-text"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
+          <button onClick={handleSave} className="btn-primary text-sm" data-testid="save-schedule-btn">Agendar</button>
         </div>
       </div>
     </div>

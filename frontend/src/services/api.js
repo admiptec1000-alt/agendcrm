@@ -84,11 +84,14 @@ export const superAdminAPI = {
 export const crmAPI = {
   // Tickets
   getTickets: (params) => api.get('/crm/tickets', { params }),
+  getTicket: (id) => api.get(`/crm/tickets/${id}`),
   getTicketCounts: () => api.get('/crm/tickets/counts'),
   createTicket: (data) => api.post('/crm/tickets', data),
   updateTicket: (id, data) => api.put(`/crm/tickets/${id}`, data),
   deleteTicket: (id) => api.delete(`/crm/tickets/${id}`),
   addMessage: (ticketId, data) => api.post(`/crm/tickets/${ticketId}/messages`, data),
+  addTicketTag: (ticketId, tag) => api.post(`/crm/tickets/${ticketId}/tags/add`, { tag }),
+  removeTicketTag: (ticketId, tag) => api.post(`/crm/tickets/${ticketId}/tags/remove`, { tag }),
   // Kanban
   getKanban: () => api.get('/crm/kanban'),
   getKanbanV2: () => api.get('/crm/kanban-v2'),

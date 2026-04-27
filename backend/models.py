@@ -129,12 +129,20 @@ class TicketCreate(BaseModel):
     priority: str = "medium"
     channel: str = "web"
     description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    value: Optional[float] = 0.0
 
 class TicketUpdate(BaseModel):
     status: Optional[TicketStatus] = None
     assigned_to: Optional[str] = None
     priority: Optional[str] = None
     description: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_email: Optional[str] = None
+    channel: Optional[str] = None
+    tags: Optional[List[str]] = None
+    value: Optional[float] = None
 
 class MessageCreate(BaseModel):
     content: str

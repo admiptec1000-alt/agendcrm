@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import os
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -56,7 +57,20 @@ async def get_ticket_counts(
     aguardando = await db.tickets.count_documents({"company_id": company_id, "status": {"$in": ["pago", "bloqueado"]}})
     total = await db.tickets.count_documents({"company_id": company_id})
     return {"atendendo": atendendo, "aguardando": aguardando, "total": total}
-    return tickets
+
+
+@router.get("/tickets/{ticket_id}")
+async def get_ticket(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    ticket = await db.tickets.find_one(
+        {"id": ticket_id, "company_id": user["company_id"]}, {"_id": 0}
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    return ticket
 
 @router.post("/tickets")
 async def create_ticket(
@@ -77,7 +91,8 @@ async def create_ticket(
         "description": data.description,
         "assigned_to": None,
         "messages": [],
-        "tags": [],
+        "tags": data.tags or [],
+        "value": float(data.value or 0),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
@@ -135,15 +150,87 @@ async def add_message_to_ticket(
         "sender_type": data.sender_type,
         "sender_id": user["id"],
         "sender_name": user["name"],
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "delivery_status": "pending",
     }
-    
+
+    # If agent and channel is whatsapp, actually send via Baileys
+    delivery_error = None
+    if data.sender_type == "agent" and ticket.get("channel") == "whatsapp" and ticket.get("customer_phone"):
+        try:
+            import httpx
+            import os as _os
+            wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+            # Pick first connected WhatsApp connection of the company
+            conn = await db.channel_connections.find_one(
+                {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"},
+                {"_id": 0, "id": 1}
+            )
+            if conn:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post(
+                        f"{wa_url}/instances/{conn['id']}/send",
+                        json={"phone": ticket["customer_phone"], "message": data.content}
+                    )
+                    res = resp.json() if resp.status_code == 200 else {}
+                    if res.get("success"):
+                        message["delivery_status"] = "sent"
+                    else:
+                        message["delivery_status"] = "failed"
+                        delivery_error = res.get("error", "Falha ao enviar")
+            else:
+                message["delivery_status"] = "failed"
+                delivery_error = "Nenhuma conexao WhatsApp ativa"
+        except Exception as e:
+            message["delivery_status"] = "failed"
+            delivery_error = str(e)[:120]
+
+    if delivery_error:
+        message["delivery_error"] = delivery_error
+
     await db.tickets.update_one(
         {"id": ticket_id},
         {"$push": {"messages": message}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
     )
-    
+
     return message
+
+
+# === TICKET TAGS ===
+class TicketTagToggle(BaseModel):
+    tag: str
+
+
+@router.post("/tickets/{ticket_id}/tags/add")
+async def add_tag_to_ticket(
+    ticket_id: str,
+    data: TicketTagToggle,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    res = await db.tickets.update_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"$addToSet": {"tags": data.tag}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    return await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
+
+
+@router.post("/tickets/{ticket_id}/tags/remove")
+async def remove_tag_from_ticket(
+    ticket_id: str,
+    data: TicketTagToggle,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    res = await db.tickets.update_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"$pull": {"tags": data.tag}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    return await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
 
 # Kanban
 @router.get("/kanban")
@@ -578,7 +665,13 @@ async def get_kanban_v2(
         else:
             grouped[NATIVE_FIRST_COLUMN["id"]].append(t)
 
-    return {"columns": columns, "tickets_by_column": grouped}
+    # Compute total value per column
+    totals_by_column = {
+        col_id: sum(float(t.get("value") or 0) for t in items)
+        for col_id, items in grouped.items()
+    }
+
+    return {"columns": columns, "tickets_by_column": grouped, "totals_by_column": totals_by_column}
 
 
 @router.put("/tickets/{ticket_id}/kanban-column")
