@@ -132,6 +132,13 @@ class TicketCreate(BaseModel):
     tags: Optional[List[str]] = None
     value: Optional[float] = 0.0
 
+    @field_validator("customer_email", mode="before")
+    @classmethod
+    def _empty_email_to_none(cls, v):
+        if v in ("", None) or (isinstance(v, str) and not v.strip()):
+            return None
+        return v
+
 class TicketUpdate(BaseModel):
     status: Optional[TicketStatus] = None
     assigned_to: Optional[str] = None

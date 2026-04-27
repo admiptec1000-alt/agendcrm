@@ -11,6 +11,16 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-27 — Atendimento Omnichannel: Tags inline, Valor, Real-time, Agendamento
+- **Real-time WhatsApp na UI Atendimento**: Polling de 4s no ticket selecionado e 8s na lista. Webhook `/api/channels/webhook/message` agora **auto-cria ou anexa mensagem** no ticket existente (procura por phone+status!=fechado). Idempotência por `wa_message_id`. Antes: mensagens iam para `message_log` mas não apareciam no chat.
+- **Envio de WhatsApp via Atendimento**: `POST /crm/tickets/{id}/messages` com `sender_type='agent'` e ticket.channel='whatsapp' agora chama o microserviço Baileys. Retorna `delivery_status` (sent/failed/pending) + `delivery_error`. UI mostra ícone vermelho (failed) ou check azul (sent). Resiliente a microserviço offline (não 500).
+- **Tags inline no chat**: Header da conversa tem barra de tags com chips coloridos (cor da tag). Botão "+ Tag" abre dropdown com tags da empresa (de `/crm/tags`). Endpoints novos: `POST /crm/tickets/{id}/tags/add` e `/remove` (idempotent via `$addToSet/$pull`).
+- **Campo "Valor" do contato**: TicketCreate/Update aceita `value: float`. Modal "Novo Atendimento" tem campo R$. Modal "Editar Contato" novo (modern CRUD) acessível via lápis no header. Valor exibido: badge no card da lista, header do chat, painel info.
+- **Kanban com somatória de valores**: `GET /crm/kanban-v2` agora retorna `totals_by_column` (soma dos `value` por coluna). Header de cada coluna mostra "Total: R$ X" e cada card mostra o valor em chip esmeralda.
+- **Agendamento de mensagens inline**: Botão calendário no input do chat abre modal com datetime + textarea. Cria via `/channels/scheduled-messages`. Scheduler em background (já existente) processa.
+- **CRUD moderno de Lead/Cliente**: Modal de Editar Contato com nome, telefone, email, valor, canal, observações. Botão de excluir atendimento no header.
+- **Hardening**: TicketCreate.customer_email agora aceita string vazia (validador coerce para None) — UI envia "" quando user deixa em branco.
+
 ### 2026-04-25 — Taxas de Pagamento + Pesquisa de Satisfação + Remarketing
 - **Taxas Financeiras**: Sub-aba "Taxas" no Financeiro (Pix / Crédito / Débito). Cada uma com % e taxa fixa (R$). Resumo financeiro mostra Bruto / Taxa / Líquido. Endpoints `GET/PUT /api/scheduling/financial/payment-fees` e `financial/summary` enriquecido.
 - **Pesquisa de Satisfação**: parâmetro `survey_minutes_after` em notification_settings + mini-página pública 1-5 estrelas (`/api/public/apt/review/{token}`). Token gerado ao concluir agendamento. Variável `{link_avaliacao}` no template `pos_atendimento`.
@@ -33,16 +43,20 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 ## Backlog / Roadmap
 
 ### P0
-- Inserir cards de Planos/Preços na Landing Page com botão "Contratar"
+- (nenhum bloqueador conhecido)
 
 ### P1
-- Refatoração do `Dashboard.js` (+4700 linhas → quebrar em Tabs/AgendaTab.js, ConfigTab.js, etc.)
+- Inserir cards de Planos/Preços na Landing Page com botão "Contratar"
+- Refatoração do `Dashboard.js` (+5000 linhas → quebrar em Tabs/AgendaTab.js, ConfigTab.js, etc.)
 - Integração Stripe (Cartão + Pix)
+- Notificações Push (Web Push API)
 
 ### P2
-- Notificações Push (Web Push API)
 - Relatórios avançados (gráficos, dashboards analíticos)
 - Re-sync features no Super Admin (endpoint backend já existe, falta UI)
+- Drag-and-drop de tickets entre colunas do Kanban com persistência via novo endpoint (já tem move-column endpoint)
+- WebSocket/SSE entre microserviço Node.js e backend FastAPI (substituir polling para latência menor)
+- HMAC signature header no webhook /channels/webhook/message para hardening
 
 ## Key DB Collections
 - `clients` (campos: name, phone, email, birth_date, company_id, id)

@@ -142,7 +142,7 @@ const AtendimentosPage = () => {
       await loadData();
       setSelectedTicket(res.data);
     } catch (e) {
-      toast.error('Erro ao criar ticket');
+      toast.error(e?.response?.data?.detail || 'Erro ao criar ticket');
       setShowNewTicket(false);
     }
   };
@@ -662,7 +662,11 @@ const NewTicketModal = ({ onClose, onSave }) => {
           <button
             onClick={() => {
               if (form.customer_name && form.customer_phone) {
-                onSave({ ...form, value: parseFloat(form.value) || 0 });
+                onSave({
+                  ...form,
+                  customer_email: form.customer_email?.trim() || null,
+                  value: parseFloat(form.value) || 0,
+                });
               } else { toast.error('Preencha nome e telefone'); }
             }}
             className="btn-primary text-sm"
