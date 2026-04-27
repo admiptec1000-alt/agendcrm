@@ -4,7 +4,7 @@ from database import get_database
 from auth import get_current_user
 from models import (
     TicketCreate, TicketUpdate, MessageCreate, QuickResponseCreate,
-    CampaignCreate, FlowCreate, FlowUpdate, AIChatRequest, AIChatResponse,
+    CampaignCreate, CampaignUpdate, FlowCreate, FlowUpdate, AIChatRequest, AIChatResponse,
     TicketStatus
 )
 import uuid
@@ -160,30 +160,40 @@ async def add_message_to_ticket(
         try:
             import httpx
             import os as _os
+            import logging as _lg
+            _log = _lg.getLogger(__name__)
             wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
-            # Pick first connected WhatsApp connection of the company
-            conn = await db.channel_connections.find_one(
-                {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"},
-                {"_id": 0, "id": 1}
-            )
-            if conn:
-                async with httpx.AsyncClient(timeout=15.0) as client:
+            # Prefer ticket's bound connection, fall back to first connected
+            conn_id = ticket.get("connection_id")
+            if not conn_id:
+                conn = await db.channel_connections.find_one(
+                    {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"},
+                    {"_id": 0, "id": 1}
+                )
+                conn_id = conn["id"] if conn else None
+            if conn_id:
+                async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(
-                        f"{wa_url}/instances/{conn['id']}/send",
+                        f"{wa_url}/instances/{conn_id}/send",
                         json={"phone": ticket["customer_phone"], "message": data.content}
                     )
-                    res = resp.json() if resp.status_code == 200 else {}
-                    if res.get("success"):
+                    try:
+                        res = resp.json()
+                    except Exception:
+                        res = {}
+                    if resp.status_code == 200 and res.get("success"):
                         message["delivery_status"] = "sent"
+                        message["wa_message_id"] = res.get("jid")
                     else:
                         message["delivery_status"] = "failed"
-                        delivery_error = res.get("error", "Falha ao enviar")
+                        delivery_error = res.get("error") or f"HTTP {resp.status_code}: {resp.text[:80]}"
+                        _log.warning(f"WA send failed for ticket {ticket_id}: {delivery_error}")
             else:
                 message["delivery_status"] = "failed"
                 delivery_error = "Nenhuma conexao WhatsApp ativa"
         except Exception as e:
             message["delivery_status"] = "failed"
-            delivery_error = str(e)[:120]
+            delivery_error = str(e)[:200]
 
     if delivery_error:
         message["delivery_error"] = delivery_error
@@ -377,8 +387,23 @@ async def list_campaigns(
     campaigns = await db.campaigns.find(
         {"company_id": user["company_id"]},
         {"_id": 0}
-    ).to_list(1000)
+    ).sort("created_at", -1).to_list(1000)
+    # Enrich with connection name + list name for the list view
+    conn_ids = list({c.get("connection_id") for c in campaigns if c.get("connection_id")})
+    list_ids = list({c.get("contact_list_id") for c in campaigns if c.get("contact_list_id")})
+    conns = {}
+    if conn_ids:
+        async for cn in db.channel_connections.find({"id": {"$in": conn_ids}}, {"_id":0,"id":1,"name":1}):
+            conns[cn["id"]] = cn.get("name")
+    lists = {}
+    if list_ids:
+        async for ln in db.contact_lists.find({"id": {"$in": list_ids}}, {"_id":0,"id":1,"name":1}):
+            lists[ln["id"]] = ln.get("name")
+    for c in campaigns:
+        c["connection_name"] = conns.get(c.get("connection_id"), "-")
+        c["contact_list_name"] = lists.get(c.get("contact_list_id"), "-")
     return campaigns
+
 
 @router.post("/campaigns")
 async def create_campaign(
@@ -391,15 +416,417 @@ async def create_campaign(
         "company_id": user["company_id"],
         "name": data.name,
         "type": data.type,
-        "message_template": data.message_template,
-        "target_audience": data.target_audience,
+        "audience_mode": data.audience_mode,
+        "tag_ids": data.tag_ids or [],
+        "contact_list_id": data.contact_list_id,
+        "connection_id": data.connection_id,
         "scheduled_at": data.scheduled_at,
-        "status": "draft",
+        "confirmation_enabled": data.confirmation_enabled,
+        "open_ticket": data.open_ticket,
+        "assigned_user_id": data.assigned_user_id,
+        "queue_id": data.queue_id,
+        "ticket_status": data.ticket_status or "fechado",
+        "messages": data.messages or ([data.message_template] if data.message_template else []),
+        "attachment_url": data.attachment_url,
+        "status": "programada" if data.scheduled_at else "draft",
         "sent_count": 0,
+        "failed_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.campaigns.insert_one(campaign)
     return {k: v for k, v in campaign.items() if k != "_id"}
+
+
+@router.put("/campaigns/{campaign_id}")
+async def update_campaign(
+    campaign_id: str,
+    data: CampaignUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if not update:
+        raise HTTPException(status_code=400, detail="Sem dados")
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.campaigns.update_one(
+        {"id": campaign_id, "company_id": user["company_id"]}, {"$set": update}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    return await db.campaigns.find_one({"id": campaign_id}, {"_id": 0})
+
+
+@router.delete("/campaigns/{campaign_id}")
+async def delete_campaign(
+    campaign_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    res = await db.campaigns.delete_one({"id": campaign_id, "company_id": user["company_id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    return {"message": "Removida"}
+
+
+async def _resolve_campaign_audience(db: AsyncIOMotorDatabase, company_id: str, c: dict) -> List[dict]:
+    """Return [{name, phone}] based on campaign filters."""
+    mode = c.get("audience_mode") or "tags"
+    out: List[dict] = []
+    if mode == "list":
+        cl_id = c.get("contact_list_id")
+        if not cl_id:
+            return []
+        cl = await db.contact_lists.find_one({"id": cl_id, "company_id": company_id}, {"_id": 0})
+        if not cl:
+            return []
+        for it in (cl.get("contacts") or []):
+            if it.get("phone"):
+                out.append({"name": it.get("name") or "", "phone": it["phone"]})
+        return out
+
+    # Pull all clients for the company once
+    clients = await db.clients.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+
+    if mode == "all":
+        for cli in clients:
+            if cli.get("phone"):
+                out.append({"name": cli.get("name") or "", "phone": cli["phone"]})
+        return out
+
+    if mode == "no_tag":
+        for cli in clients:
+            if cli.get("phone") and not (cli.get("tags") or []):
+                out.append({"name": cli.get("name") or "", "phone": cli["phone"]})
+        return out
+
+    # mode == 'tags'
+    tag_ids = c.get("tag_ids") or []
+    if not tag_ids:
+        return []
+    # Resolve tag names
+    tag_docs = await db.tags.find({"id": {"$in": tag_ids}, "company_id": company_id}, {"_id":0,"name":1}).to_list(50)
+    tag_names = {t["name"] for t in tag_docs}
+    for cli in clients:
+        client_tags = set(cli.get("tags") or [])
+        if cli.get("phone") and (client_tags & tag_names):
+            out.append({"name": cli.get("name") or "", "phone": cli["phone"]})
+    # Also include tickets with such tags (they may not yet be "clients")
+    async for t in db.tickets.find(
+        {"company_id": company_id, "tags": {"$in": list(tag_names)}},
+        {"_id": 0, "customer_name": 1, "customer_phone": 1}
+    ):
+        if t.get("customer_phone"):
+            out.append({"name": t.get("customer_name") or "", "phone": t["customer_phone"]})
+    # Dedup by phone
+    seen = set()
+    dedup = []
+    for it in out:
+        if it["phone"] in seen:
+            continue
+        seen.add(it["phone"])
+        dedup.append(it)
+    return dedup
+
+
+@router.post("/campaigns/{campaign_id}/preview-audience")
+async def preview_campaign_audience(
+    campaign_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    camp = await db.campaigns.find_one({"id": campaign_id, "company_id": user["company_id"]}, {"_id": 0})
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    audience = await _resolve_campaign_audience(db, user["company_id"], camp)
+    return {"count": len(audience), "preview": audience[:50]}
+
+
+@router.post("/campaigns/{campaign_id}/run")
+async def run_campaign_now(
+    campaign_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Send the campaign immediately (ignores scheduled_at)."""
+    camp = await db.campaigns.find_one({"id": campaign_id, "company_id": user["company_id"]}, {"_id": 0})
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    audience = await _resolve_campaign_audience(db, user["company_id"], camp)
+    if not audience:
+        raise HTTPException(status_code=400, detail="Audiencia vazia")
+    msgs = [m for m in (camp.get("messages") or []) if m and m.strip()]
+    if not msgs:
+        raise HTTPException(status_code=400, detail="Sem mensagens definidas")
+
+    import httpx as _httpx
+    import os as _os
+    wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+    conn_id = camp.get("connection_id")
+    if not conn_id:
+        # fallback: any connected
+        c2 = await db.channel_connections.find_one(
+            {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"}, {"_id":0,"id":1}
+        )
+        if not c2:
+            raise HTTPException(status_code=400, detail="Nenhuma conexao WhatsApp ativa")
+        conn_id = c2["id"]
+
+    sent, failed = 0, 0
+    async with _httpx.AsyncClient(timeout=30.0) as client:
+        for person in audience:
+            for tpl in msgs:
+                msg = (tpl or "").replace("{nome}", person.get("name") or "").replace("{numero}", person.get("phone") or "")
+                try:
+                    r = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": msg})
+                    res = r.json() if r.status_code == 200 else {}
+                    if res.get("success"):
+                        sent += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+
+            if camp.get("open_ticket"):
+                # Create ticket if none open for this phone
+                existing = await db.tickets.find_one({
+                    "company_id": user["company_id"],
+                    "customer_phone": person["phone"],
+                    "status": {"$ne": "fechado"}
+                })
+                if not existing:
+                    await db.tickets.insert_one({
+                        "id": str(uuid.uuid4()),
+                        "company_id": user["company_id"],
+                        "customer_name": person.get("name") or person["phone"],
+                        "customer_phone": person["phone"],
+                        "channel": "whatsapp",
+                        "status": camp.get("ticket_status") or "aberto",
+                        "priority": "medium",
+                        "tags": [],
+                        "value": 0.0,
+                        "messages": [],
+                        "assigned_to": camp.get("assigned_user_id"),
+                        "queue_id": camp.get("queue_id"),
+                        "connection_id": conn_id,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    })
+
+    await db.campaigns.update_one(
+        {"id": campaign_id},
+        {"$set": {"status": "concluida", "sent_count": sent, "failed_count": failed,
+                  "completed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"sent": sent, "failed": failed, "total": len(audience)}
+
+
+# === QUEUES (Filas & Chatbot) ===
+class QueueCreate(BaseModel):
+    name: str
+    color: Optional[str] = "#4F46E5"
+    description: Optional[str] = ""
+    welcome_message: Optional[str] = ""
+    bot_flow_id: Optional[str] = None
+
+
+class QueueUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = None
+    welcome_message: Optional[str] = None
+    bot_flow_id: Optional[str] = None
+
+
+@router.get("/queues")
+async def list_queues(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    return await db.queues.find({"company_id": user["company_id"]}, {"_id": 0}).sort("name", 1).to_list(200)
+
+
+@router.post("/queues")
+async def create_queue(
+    data: QueueCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": data.name,
+        "color": data.color or "#4F46E5",
+        "description": data.description or "",
+        "welcome_message": data.welcome_message or "",
+        "bot_flow_id": data.bot_flow_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.queues.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@router.put("/queues/{queue_id}")
+async def update_queue(
+    queue_id: str,
+    data: QueueUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if not update:
+        raise HTTPException(status_code=400, detail="Sem dados")
+    res = await db.queues.update_one(
+        {"id": queue_id, "company_id": user["company_id"]}, {"$set": update}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Fila nao encontrada")
+    return await db.queues.find_one({"id": queue_id}, {"_id": 0})
+
+
+@router.delete("/queues/{queue_id}")
+async def delete_queue(
+    queue_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    res = await db.queues.delete_one({"id": queue_id, "company_id": user["company_id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Fila nao encontrada")
+    return {"message": "Removida"}
+
+
+# === CONTACT LISTS ===
+class ContactItem(BaseModel):
+    name: Optional[str] = ""
+    phone: str
+
+
+class ContactListCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    contacts: Optional[List[ContactItem]] = None
+
+
+class ContactListUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    contacts: Optional[List[ContactItem]] = None
+
+
+@router.get("/contact-lists")
+async def list_contact_lists(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    out = await db.contact_lists.find({"company_id": user["company_id"]}, {"_id": 0}).sort("name", 1).to_list(200)
+    for o in out:
+        o["count"] = len(o.get("contacts") or [])
+    return out
+
+
+@router.post("/contact-lists")
+async def create_contact_list(
+    data: ContactListCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    contacts = [c.model_dump() for c in (data.contacts or [])]
+    doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": data.name,
+        "description": data.description or "",
+        "contacts": contacts,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.contact_lists.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@router.put("/contact-lists/{list_id}")
+async def update_contact_list(
+    list_id: str,
+    data: ContactListUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    update = {}
+    if data.name is not None: update["name"] = data.name
+    if data.description is not None: update["description"] = data.description
+    if data.contacts is not None: update["contacts"] = [c.model_dump() for c in data.contacts]
+    if not update:
+        raise HTTPException(status_code=400, detail="Sem dados")
+    res = await db.contact_lists.update_one(
+        {"id": list_id, "company_id": user["company_id"]}, {"$set": update}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Lista nao encontrada")
+    return await db.contact_lists.find_one({"id": list_id}, {"_id": 0})
+
+
+@router.delete("/contact-lists/{list_id}")
+async def delete_contact_list(
+    list_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    res = await db.contact_lists.delete_one({"id": list_id, "company_id": user["company_id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Lista nao encontrada")
+    return {"message": "Removida"}
+
+
+# === RETRY MESSAGE ===
+@router.post("/tickets/{ticket_id}/messages/{message_id}/retry")
+async def retry_ticket_message(
+    ticket_id: str,
+    message_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    msg = next((m for m in (ticket.get("messages") or []) if m.get("id") == message_id), None)
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    if msg.get("sender_type") != "agent" or ticket.get("channel") != "whatsapp":
+        raise HTTPException(status_code=400, detail="Reenvio so para mensagens de agente em WhatsApp")
+    if not ticket.get("customer_phone"):
+        raise HTTPException(status_code=400, detail="Sem telefone")
+
+    import httpx as _httpx
+    import os as _os
+    wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+    # Prefer ticket's connection_id
+    conn_id = ticket.get("connection_id")
+    if not conn_id:
+        c2 = await db.channel_connections.find_one(
+            {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"}, {"_id":0,"id":1}
+        )
+        conn_id = c2["id"] if c2 else None
+    if not conn_id:
+        raise HTTPException(status_code=400, detail="Nenhuma conexao WhatsApp ativa")
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{wa_url}/instances/{conn_id}/send",
+                                  json={"phone": ticket["customer_phone"], "message": msg["content"]})
+            res = r.json() if r.status_code == 200 else {}
+        if res.get("success"):
+            await db.tickets.update_one(
+                {"id": ticket_id, "messages.id": message_id},
+                {"$set": {"messages.$.delivery_status": "sent", "messages.$.delivery_error": None}}
+            )
+            return {"ok": True}
+        else:
+            err = res.get("error", "Falha ao reenviar")
+            await db.tickets.update_one(
+                {"id": ticket_id, "messages.id": message_id},
+                {"$set": {"messages.$.delivery_status": "failed", "messages.$.delivery_error": err}}
+            )
+            raise HTTPException(status_code=502, detail=err)
+    except _httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=str(e)[:120])
 
 # Flow Builder
 @router.get("/flows")

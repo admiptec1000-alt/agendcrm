@@ -18,6 +18,8 @@ import TagsPage from '../CRM/TagsPage';
 import KanbanPage from '../CRM/KanbanPage';
 import AIPage from '../CRM/AIPage';
 import WhatsAppConnectionsPage from '../CRM/WhatsAppConnectionsPage';
+import CampaignsPage from '../CRM/CampaignsPage';
+import QueuesPage from '../CRM/QueuesPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 
 const ICON_MAP = {
@@ -586,7 +588,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
   }
   switch (page) {
     case 'dashboard': return <DashboardPage setActivePage={setActivePage} menuGroups={menuGroups} />;
-    case 'kanban': return <KanbanPage />;
+    case 'kanban': return <KanbanPage setActivePage={setActivePage} />;
     case 'atendimentos': return <AtendimentosPage />;
     case 'contatos': return <ContactsPage />;
     case 'respostas_rapidas': return <QuickResponsesPage />;
@@ -596,6 +598,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'agente_ia': return <AIPage />;
     case 'conexoes': return <ConexoesPage />;
     case 'chat_interno': return <ChatInternoPage />;
+    case 'filas_chatbot': return <QueuesPage />;
     case 'calendario': return <CalendarPageFull />;
     case 'agenda': return <AgendaPage />;
     case 'agendamentos': return <MessageSchedulingPage />;
@@ -1393,22 +1396,7 @@ const QuickResponsesPage = () => {
 };
 
 /* ========== CAMPAIGNS ========== */
-const CampaignsPage = () => {
-  const [items, setItems] = useState([]);
-  useEffect(() => { crmAPI.getCampaigns().then(r => setItems(r.data)).catch(() => {}); }, []);
-  return (
-    <div className="animate-fade-in" data-testid="campaigns-page">
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-slate-600 text-sm">{items.length} campanhas</p>
-        <button className="btn-primary text-sm flex items-center gap-2"><Plus className="w-4 h-4" /> Nova Campanha</button>
-      </div>
-      <div className="card">
-        {items.length === 0 ? <p className="text-center py-8 text-sm text-slate-500">Nenhuma campanha criada</p> :
-          items.map(i => <div key={i.id} className="p-3 border-b border-slate-100"><p className="font-medium text-sm">{i.name}</p><p className="text-xs text-slate-500">{i.status} - {i.type}</p></div>)}
-      </div>
-    </div>
-  );
-};
+// Removed inline CampaignsPage — now imported from ../CRM/CampaignsPage
 
 /* ========== TAGS ========== */
 // eslint-disable-next-line no-unused-vars
@@ -3086,6 +3074,21 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
     }
   };
 
+  const [showImport, setShowImport] = useState(false);
+  const [importMode, setImportMode] = useState('all');
+  const [importing, setImporting] = useState(false);
+
+  const handleImport = async () => {
+    setImporting(true);
+    try {
+      const r = await channelsAPI.importWaContacts(conn.id, { mode: importMode });
+      toast.success(`${r.data.imported} contatos importados (${r.data.new_clients} novos)`);
+      setShowImport(false);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Erro ao importar');
+    } finally { setImporting(false); }
+  };
+
   return (
     <div className="card !p-5" data-testid={`conn-${conn.id}`}>
       <div className="flex items-start justify-between gap-4">
@@ -3109,6 +3112,16 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
           )}
           {(conn.status === 'connected' || conn.status === 'connecting') && (
             <button onClick={() => onDisconnect(conn.id)} className="text-sm text-red-500 hover:text-red-700 font-medium">Desconectar</button>
+          )}
+          {conn.status === 'connected' && conn.type === 'whatsapp' && (
+            <button
+              onClick={() => setShowImport(true)}
+              className="text-xs text-emerald-700 hover:text-emerald-800 font-semibold px-2 py-1 rounded-md hover:bg-emerald-50"
+              data-testid={`import-contacts-${conn.id}`}
+              title="Importar contatos do WhatsApp"
+            >
+              Importar contatos
+            </button>
           )}
           {(conn.status !== 'connected') && (
             <button
@@ -3144,6 +3157,48 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {showImport && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={() => setShowImport(false)} data-testid={`import-modal-${conn.id}`}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md my-8" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <h3 className="text-base font-bold">Importar Contatos do WhatsApp</h3>
+              <button onClick={() => setShowImport(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-4 space-y-3">
+              <p className="text-xs text-slate-500">Escolha quais contatos do seu WhatsApp deseja importar para o CRM:</p>
+              <label className="flex items-start gap-2 p-3 rounded-lg border border-slate-200 hover:border-primary cursor-pointer">
+                <input type="radio" name="import-mode" value="all" checked={importMode === 'all'} onChange={e => setImportMode(e.target.value)} className="mt-1" data-testid={`import-mode-all-${conn.id}`} />
+                <div>
+                  <p className="text-sm font-semibold">Todos os contatos</p>
+                  <p className="text-[11px] text-slate-500">Importa todos, com e sem nome</p>
+                </div>
+              </label>
+              <label className="flex items-start gap-2 p-3 rounded-lg border border-slate-200 hover:border-primary cursor-pointer">
+                <input type="radio" name="import-mode" value="with_name" checked={importMode === 'with_name'} onChange={e => setImportMode(e.target.value)} className="mt-1" data-testid={`import-mode-with-${conn.id}`} />
+                <div>
+                  <p className="text-sm font-semibold">Apenas com nome cadastrado</p>
+                  <p className="text-[11px] text-slate-500">Pula contatos sem nome (apenas numero)</p>
+                </div>
+              </label>
+              <label className="flex items-start gap-2 p-3 rounded-lg border border-slate-200 hover:border-primary cursor-pointer">
+                <input type="radio" name="import-mode" value="without_name" checked={importMode === 'without_name'} onChange={e => setImportMode(e.target.value)} className="mt-1" data-testid={`import-mode-without-${conn.id}`} />
+                <div>
+                  <p className="text-sm font-semibold">Apenas sem nome</p>
+                  <p className="text-[11px] text-slate-500">Importa somente os contatos identificados por numero</p>
+                </div>
+              </label>
+              <p className="text-[10px] text-slate-400">Os contatos sao adicionados como Clientes/Leads no CRM. Conversas existentes nao sao importadas — apenas mensagens novas (apos a conexao) sincronizam.</p>
+            </div>
+            <div className="flex justify-end gap-2 p-3 border-t border-slate-200">
+              <button onClick={() => setShowImport(false)} className="btn-secondary text-sm">Cancelar</button>
+              <button onClick={handleImport} disabled={importing} className="btn-primary text-sm disabled:opacity-50" data-testid={`do-import-${conn.id}`}>
+                {importing ? 'Importando...' : 'Importar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

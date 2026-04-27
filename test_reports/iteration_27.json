@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 27 — Epic Campanhas+Atendimento+Kanban+WhatsApp. Backend: 19/19 pytest cases PASSED (100%) covering Queues CRUD, Contact Lists CRUD, Campaigns with new fields (audience_mode, tag_ids, contact_list_id, connection_id, scheduled_at, confirmation_enabled, open_ticket, queue_id, ticket_status, messages[5], attachment_url), campaign enrichment (connection_name/contact_list_name), preview-audience in all 4 modes (all/no_tag/tags/list), run validations (empty audience→400, no-messages→400), retry message 404/400 paths, webhook_connected persisting connected_at, webhook_message filtering older-than-connected_at timestamps, wa-contacts/import-contacts graceful handling when microservice offline (never 500), and TicketUpdate accepting queue_id+connection_id. Frontend smoke verified: (a) Atendimentos chips reduced to 'Todos'+'WhatsApp' only (Instagram/Web/Email removed), (b) Filtros button toggles filters-panel with Conexão/Usuário/Tag/Fila selects, (c) Campanhas page renders Listagem+Listas de Contato tabs with full table columns Nome/Status/Lista/Conexão/Agendamento/Concluída/Confirmação/Ações and 'Nova Campanha' modal exposes camp-name, camp-audience-mode, camp-connection, camp-scheduled, msg-tab-1..5 and save button, (d) Filas & Chatbot route renders QueuesPage with new-queue-btn and queue cards (not placeholder), (e) Kanban cards show open-ticket MessageSquare icons + 'Total: R$ 250,00' badge on column header, (f) Conexoes shows 'Importar contatos' button only for connected WhatsApp instance.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_27.py",
+    "/app/test_reports/pytest/iteration_27.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "crm_routes.py run_campaign: retries are not implemented (single attempt per message). If a template is empty after trimming we could surface better error. Already 400 for no valid messages — good.",
+    "crm_routes.py run_campaign/_resolve_campaign_audience: preview also dedups, but 'tags' path concatenates tickets+clients. OK.",
+    "channels_routes.py import_whatsapp_contacts: treats empty microservice response as 'no contacts' and returns 200 with imported=0. When offline, raises 502 as expected. No 500.",
+    "channels_routes.py webhook_message: connected_at filter uses 5s grace and integer seconds; good enough for WA timestamps.",
+    "scheduling_routes.py create_client does NOT persist 'tags' field — not a regression for this epic but surfaces when users try to create tagged clients via Clientes/Leads. If tags on clients are desired they must be added to ClientCreate model. Out of scope for iteration 27 but worth noting.",
+    "crm_routes.py queue DELETE does NOT unset queue_id on tickets referring to it (orphaned queue_id on tickets). Non-critical but could be cleaned up in future.",
+    "CampaignsPage.js camp-list select only renders when audience_mode==='list' (conditional) — expected UX."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_27.py (new)",
+    "/app/test_reports/iteration_27.json (new)",
+    "/app/test_reports/pytest/iteration_27.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% smoke"},
+  "test_credentials": "crm@test.com / crm123 (CRM company)",
+  "seed_data_creation": "All test-created docs prefixed TEST_ and cleaned up inside each test (queues/contact-lists/campaigns/tickets/tags/clients).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully green for iteration 27 endpoints. When retesting, note: (1) /api/scheduling/clients.create does not persist 'tags' — if a future test needs tagged clients, insert via tickets.tags instead (campaign resolver also queries tickets). (2) The whatsapp-service microservice is offline in this preview — import-contacts returns 502 'Microservico indisponivel' gracefully and wa-contacts returns {contacts:[], error:...}; never 500. (3) Existing /api/crm/tickets POST still rejects customer_email='' (iteration_26 known issue) — frontend NewTicketModal should send null, not empty string. Verify fix if main agent applied it. (4) Kanban open-ticket flow uses sessionStorage 'open_ticket_id' + navigation — icon click was NOT exercised end-to-end by Playwright here, only the icon presence (data-testid='open-ticket-*') was confirmed. Main agent can self-test that click by inspecting AtendimentosPage useEffect on mount. (5) For 'camp-list' select to appear in Nova Campanha modal, first change 'Tipo de audiencia' to 'Lista de contatos'.",
+  "rca of the issue": "No issues found in this iteration. All 19 backend endpoints behave exactly as spec'd, including defensive graceful errors (502 vs 500) when WA microservice is offline."
+}

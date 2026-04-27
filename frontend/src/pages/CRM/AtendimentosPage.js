@@ -1,21 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { crmAPI, channelsAPI } from '../../services/api';
+import { crmAPI, channelsAPI, schedulingAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
   Search, Plus, X, Phone, Mail, Send, Paperclip, Smile, Mic,
   Clock, MessageSquare, ChevronLeft, MoreVertical,
   Tag, User, Hash, ArrowRightLeft, Ban, CheckCircle2, Check,
-  Instagram, Globe, Smartphone, DollarSign, CalendarClock,
-  Pencil, Trash2, AlertCircle
+  Smartphone, DollarSign, CalendarClock,
+  Pencil, Trash2, AlertCircle, Filter, RefreshCw, Bot
 } from 'lucide-react';
-
-const CHANNEL_ICONS = {
-  whatsapp: { icon: Smartphone, color: 'text-emerald-600', bg: 'bg-emerald-100', label: 'WhatsApp' },
-  instagram: { icon: Instagram, color: 'text-pink-600', bg: 'bg-pink-100', label: 'Instagram' },
-  web: { icon: Globe, color: 'text-blue-600', bg: 'bg-blue-100', label: 'Web' },
-  email: { icon: Mail, color: 'text-violet-600', bg: 'bg-violet-100', label: 'Email' },
-};
 
 const STATUS_COLORS = {
   aberto: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Aberto' },
@@ -50,6 +43,14 @@ const AtendimentosPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState('atendendo');
   const [channelFilter, setChannelFilter] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterConnId, setFilterConnId] = useState('');
+  const [filterUserId, setFilterUserId] = useState('');
+  const [filterTagName, setFilterTagName] = useState('');
+  const [filterQueueId, setFilterQueueId] = useState('');
+  const [connections, setConnections] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [queues, setQueues] = useState([]);
   const [messageInput, setMessageInput] = useState('');
   const [allTags, setAllTags] = useState([]);
   const [sending, setSending] = useState(false);
@@ -75,17 +76,41 @@ const AtendimentosPage = () => {
         crmAPI.getTickets(params),
         crmAPI.getTicketCounts()
       ]);
-      setTickets(ticketsRes.data);
+      let list = ticketsRes.data;
+      // Client-side filtering for connection/user/tag/queue
+      if (filterConnId) list = list.filter(t => t.connection_id === filterConnId);
+      if (filterUserId) list = list.filter(t => t.assigned_to === filterUserId);
+      if (filterTagName) list = list.filter(t => (t.tags || []).includes(filterTagName));
+      if (filterQueueId) list = list.filter(t => t.queue_id === filterQueueId);
+      setTickets(list);
       setCounts(countsRes.data);
     } catch (e) { /* silent */ }
-  }, [activeTab, channelFilter, searchTerm]);
+  }, [activeTab, channelFilter, searchTerm, filterConnId, filterUserId, filterTagName, filterQueueId]);
 
   const loadTags = async () => {
     try { const r = await crmAPI.listTags(); setAllTags(r.data); } catch (e) {}
   };
 
+  const loadAux = async () => {
+    try {
+      const [c, q] = await Promise.all([channelsAPI.getConnections(), crmAPI.listQueues()]);
+      setConnections(c.data); setQueues(q.data);
+      try { const u = await schedulingAPI.getCompanyUsers(); setUsers(u.data); }
+      catch (_) { setUsers([]); }
+    } catch (e) {}
+  };
+
   useEffect(() => { loadData(); }, [loadData]);
-  useEffect(() => { loadTags(); }, []);
+  useEffect(() => { loadTags(); loadAux(); }, []);
+
+  // Auto-open ticket via sessionStorage (used by Kanban "open atendimento" icon)
+  useEffect(() => {
+    const tid = sessionStorage.getItem('open_ticket_id');
+    if (tid) {
+      sessionStorage.removeItem('open_ticket_id');
+      crmAPI.getTicket(tid).then(r => setSelectedTicket(r.data)).catch(() => {});
+    }
+  }, []);
 
   // Polling: refresh selected ticket every 4s, list every 8s
   useEffect(() => {
@@ -209,6 +234,16 @@ const AtendimentosPage = () => {
     } catch (e) { toast.error('Erro ao excluir'); }
   };
 
+  const handleRetryMessage = async (msgId) => {
+    if (!selectedTicket) return;
+    try {
+      await crmAPI.retryMessage(selectedTicket.id, msgId);
+      toast.success('Reenviada');
+      const r = await crmAPI.getTicket(selectedTicket.id);
+      setSelectedTicket(r.data);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Falha no reenvio'); }
+  };
+
   const getLastMessage = (ticket) => {
     if (ticket.messages?.length > 0) return ticket.messages[ticket.messages.length - 1];
     return { content: ticket.description || 'Sem mensagens', sender_type: 'system' };
@@ -245,14 +280,11 @@ const AtendimentosPage = () => {
           </div>
         </div>
 
-        {/* Channel filter */}
+        {/* Filter row: WhatsApp toggle + Filters button */}
         <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto">
           {[
             { v: '', label: 'Todos' },
             { v: 'whatsapp', label: 'WhatsApp' },
-            { v: 'instagram', label: 'Instagram' },
-            { v: 'web', label: 'Web' },
-            { v: 'email', label: 'Email' },
           ].map(c => (
             <button
               key={c.v}
@@ -265,7 +297,59 @@ const AtendimentosPage = () => {
               {c.label}
             </button>
           ))}
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`ml-auto text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap flex items-center gap-1 transition-all ${
+              (filterConnId || filterUserId || filterTagName || filterQueueId)
+                ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+            data-testid="toggle-filters"
+          >
+            <Filter className="w-3 h-3" /> Filtros
+            {(filterConnId || filterUserId || filterTagName || filterQueueId) && (
+              <span className="ml-0.5 w-4 h-4 rounded-full bg-white text-primary text-[9px] font-bold flex items-center justify-center">
+                {[filterConnId, filterUserId, filterTagName, filterQueueId].filter(Boolean).length}
+              </span>
+            )}
+          </button>
         </div>
+
+        {showFilters && (
+          <div className="px-3 py-2.5 border-b border-slate-200 bg-slate-50 space-y-2" data-testid="filters-panel">
+            <FilterSelect
+              label="Conexao" icon={<Smartphone className="w-3 h-3" />}
+              value={filterConnId} onChange={setFilterConnId}
+              options={[{ value: '', label: 'Todas' }, ...connections.map(c => ({ value: c.id, label: c.name }))]}
+              testId="filter-connection"
+            />
+            <FilterSelect
+              label="Usuario" icon={<User className="w-3 h-3" />}
+              value={filterUserId} onChange={setFilterUserId}
+              options={[{ value: '', label: 'Todos' }, ...users.map(u => ({ value: u.id, label: u.name }))]}
+              testId="filter-user"
+            />
+            <FilterSelect
+              label="Tag" icon={<Tag className="w-3 h-3" />}
+              value={filterTagName} onChange={setFilterTagName}
+              options={[{ value: '', label: 'Todas' }, ...allTags.map(t => ({ value: t.name, label: t.name }))]}
+              testId="filter-tag"
+            />
+            <FilterSelect
+              label="Fila" icon={<Bot className="w-3 h-3" />}
+              value={filterQueueId} onChange={setFilterQueueId}
+              options={[{ value: '', label: 'Todas' }, ...queues.map(q => ({ value: q.id, label: q.name }))]}
+              testId="filter-queue"
+            />
+            {(filterConnId || filterUserId || filterTagName || filterQueueId) && (
+              <button
+                onClick={() => { setFilterConnId(''); setFilterUserId(''); setFilterTagName(''); setFilterQueueId(''); }}
+                className="text-[10px] text-primary hover:underline font-semibold"
+              >
+                Limpar filtros
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="flex border-b border-slate-200">
@@ -289,8 +373,6 @@ const AtendimentosPage = () => {
           )}
           {tickets.map((ticket) => {
             const lastMsg = getLastMessage(ticket);
-            const ch = CHANNEL_ICONS[ticket.channel] || CHANNEL_ICONS.web;
-            const ChIcon = ch.icon;
             const isSelected = selectedTicket?.id === ticket.id;
 
             return (
@@ -306,8 +388,8 @@ const AtendimentosPage = () => {
                   <div className="w-11 h-11 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-sm">
                     {ticket.customer_name?.substring(0, 2).toUpperCase()}
                   </div>
-                  <div className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full ${ch.bg} flex items-center justify-center`}>
-                    <ChIcon className={`w-2.5 h-2.5 ${ch.color}`} />
+                  <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-100 flex items-center justify-center">
+                    <Smartphone className="w-2.5 h-2.5 text-emerald-600" />
                   </div>
                 </div>
                 <div className="flex-1 min-w-0">
@@ -446,18 +528,31 @@ const AtendimentosPage = () => {
                     <p className="text-[10px] font-bold text-emerald-700 mb-0.5">{msg.sender_name || 'Admin'}</p>
                   )}
                   <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
-                  <p className="text-[10px] text-slate-400 text-right mt-1 flex items-center justify-end gap-1">
+                  <div className="text-[10px] text-slate-400 text-right mt-1 flex items-center justify-end gap-1">
                     {formatTime(msg.created_at)}
                     {msg.sender_type === 'agent' && (
                       msg.delivery_status === 'failed' ? (
-                        <span title={msg.delivery_error || 'Falha'} className="text-red-500"><AlertCircle className="w-3 h-3 inline" /></span>
+                        <>
+                          <span title={msg.delivery_error || 'Falha'} className="text-red-500"><AlertCircle className="w-3 h-3 inline" /></span>
+                          <button
+                            onClick={() => handleRetryMessage(msg.id)}
+                            className="text-[10px] text-primary font-semibold hover:underline ml-1 flex items-center gap-0.5"
+                            title="Reenviar"
+                            data-testid={`retry-msg-${msg.id}`}
+                          >
+                            <RefreshCw className="w-2.5 h-2.5" /> Reenviar
+                          </button>
+                        </>
                       ) : msg.delivery_status === 'pending' ? (
                         <Check className="w-3 h-3 inline text-slate-400" />
                       ) : (
                         <CheckCircle2 className="w-3 h-3 inline text-blue-500" />
                       )
                     )}
-                  </p>
+                  </div>
+                  {msg.delivery_status === 'failed' && msg.delivery_error && (
+                    <p className="text-[9px] text-red-500 mt-0.5 italic">{msg.delivery_error}</p>
+                  )}
                 </div>
               </div>
             ))}
@@ -610,6 +705,22 @@ const InfoRow = ({ icon, label, value }) => (
       <span className="text-slate-400">{icon}</span>
       <span className="text-sm text-slate-700">{value}</span>
     </div>
+  </div>
+);
+
+const FilterSelect = ({ label, icon, value, onChange, options, testId }) => (
+  <div>
+    <label className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+      {icon} {label}
+    </label>
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="w-full mt-0.5 px-2 py-1.5 text-xs rounded-md border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+      data-testid={testId}
+    >
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
   </div>
 );
 

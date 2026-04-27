@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { crmAPI } from '../../services/api';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, X, Phone } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Phone, MessageSquare } from 'lucide-react';
 
 const COLORS = ['#4F46E5','#EF4444','#F59E0B','#10B981','#06B6D4','#8B5CF6','#EC4899','#64748B'];
 
-const KanbanPage = () => {
+const KanbanPage = ({ setActivePage }) => {
   const [data, setData] = useState({ columns: [], tickets_by_column: {} });
   const [loading, setLoading] = useState(true);
   const [showColModal, setShowColModal] = useState(false);
@@ -128,6 +128,18 @@ const KanbanPage = () => {
                             R$ {Number(t.value).toFixed(2).replace('.', ',')}
                           </span>
                         )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { sessionStorage.setItem('open_ticket_id', t.id); } catch (_) {}
+                            if (setActivePage) setActivePage('atendimentos');
+                          }}
+                          className="p-1 rounded hover:bg-primary/10 text-primary flex-shrink-0"
+                          title="Abrir atendimento"
+                          data-testid={`open-ticket-${t.id}`}
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                       {t.last_message && <p className="text-[11px] text-slate-500 truncate">{t.last_message}</p>}
                       <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">

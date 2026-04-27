@@ -262,6 +262,89 @@ async def disconnect_channel(
     return await db.channel_connections.find_one({"id": conn_id}, {"_id": 0})
 
 
+# === WHATSAPP CONTACTS IMPORT ===
+class ImportWaContactsRequest(BaseModel):
+    mode: str = "all"  # all | with_name | without_name
+    list_id: Optional[str] = None  # optional contact_lists doc to populate
+
+
+@router.get("/connections/{conn_id}/wa-contacts")
+async def get_whatsapp_contacts(
+    conn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(f"{WA_SERVICE_URL}/instances/{conn_id}/contacts")
+            data = r.json() if r.status_code == 200 else {"contacts": []}
+        return data
+    except Exception as e:
+        logger.warning(f"wa-contacts fetch failed: {e}")
+        return {"contacts": [], "error": str(e)[:120]}
+
+
+@router.post("/connections/{conn_id}/import-contacts")
+async def import_whatsapp_contacts(
+    conn_id: str,
+    body: ImportWaContactsRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{WA_SERVICE_URL}/instances/{conn_id}/contacts")
+            payload = r.json() if r.status_code == 200 else {"contacts": []}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Microservico indisponivel: {str(e)[:80]}")
+
+    raw = payload.get("contacts") or []
+    filtered = []
+    for c in raw:
+        phone = (c.get("phone") or "").strip()
+        name = (c.get("name") or "").strip()
+        if not phone:
+            continue
+        if body.mode == "with_name" and not name:
+            continue
+        if body.mode == "without_name" and name:
+            continue
+        filtered.append({"phone": phone, "name": name})
+
+    # Insert/upsert into clients collection (lightweight)
+    upserted = 0
+    for it in filtered:
+        existing = await db.clients.find_one({"company_id": user["company_id"], "phone": it["phone"]})
+        if not existing:
+            await db.clients.insert_one({
+                "id": str(uuid.uuid4()),
+                "company_id": user["company_id"],
+                "name": it["name"] or it["phone"],
+                "phone": it["phone"],
+                "tags": [],
+                "source": "whatsapp_import",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            upserted += 1
+
+    # Optionally append to a contact list
+    appended = 0
+    if body.list_id:
+        await db.contact_lists.update_one(
+            {"id": body.list_id, "company_id": user["company_id"]},
+            {"$push": {"contacts": {"$each": filtered}}}
+        )
+        appended = len(filtered)
+
+    return {"total_remote": len(raw), "imported": len(filtered), "new_clients": upserted, "list_appended": appended}
+
+
 # === SEND MESSAGE VIA WHATSAPP ===
 class SendMessageRequest(BaseModel):
     phone: str
@@ -304,9 +387,16 @@ async def webhook_connected(request: Request, db: AsyncIOMotorDatabase = Depends
     instance_id = data.get("instance_id")
     phone = data.get("phone", "")
     name = data.get("name", "")
+    now_iso = datetime.now(timezone.utc).isoformat()
     await db.channel_connections.update_one(
         {"id": instance_id},
-        {"$set": {"status": "connected", "phone": phone, "connected_name": name, "last_connected": datetime.now(timezone.utc).isoformat()}}
+        {"$set": {
+            "status": "connected",
+            "phone": phone,
+            "connected_name": name,
+            "last_connected": now_iso,
+            "connected_at": now_iso,  # timestamp used to filter older WA messages
+        }}
     )
     return {"ok": True}
 
@@ -324,6 +414,23 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     name = data.get("name") or phone or "Cliente"
     text = data.get("message") or ""
     msg_id = data.get("message_id")
+    ts_raw = data.get("timestamp")
+
+    # Filter out messages older than the moment this channel was connected.
+    # The WA microservice forwards messageTimestamp in seconds.
+    try:
+        msg_ts = int(ts_raw) if ts_raw is not None else None
+    except (TypeError, ValueError):
+        msg_ts = None
+    connected_at_iso = conn.get("connected_at")
+    if msg_ts and connected_at_iso:
+        try:
+            connected_at_dt = datetime.fromisoformat(connected_at_iso.replace("Z", "+00:00"))
+            connected_at_ts = int(connected_at_dt.timestamp())
+            if msg_ts < connected_at_ts - 5:  # 5s grace
+                return {"ok": True, "ignored": "older_than_connected_at"}
+        except Exception:
+            pass
 
     # Log incoming message (raw)
     await db.message_log.insert_one({

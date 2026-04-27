@@ -150,6 +150,8 @@ class TicketUpdate(BaseModel):
     channel: Optional[str] = None
     tags: Optional[List[str]] = None
     value: Optional[float] = None
+    queue_id: Optional[str] = None
+    connection_id: Optional[str] = None
 
 class MessageCreate(BaseModel):
     content: str
@@ -242,10 +244,43 @@ class QuickResponseCreate(BaseModel):
 # Campaign Models
 class CampaignCreate(BaseModel):
     name: str
-    type: str
-    message_template: str
+    type: str = "broadcast"  # broadcast | drip
+    # Audience selection (one mode):
+    audience_mode: str = "tags"  # tags | list | no_tag | all
+    tag_ids: Optional[List[str]] = None         # when audience_mode == tags
+    contact_list_id: Optional[str] = None       # when audience_mode == list
+    # Channel + scheduling
+    connection_id: Optional[str] = None
+    scheduled_at: Optional[str] = None  # ISO datetime; null = send now
+    confirmation_enabled: bool = False
+    # Ticket auto-creation upon delivery
+    open_ticket: bool = False
+    assigned_user_id: Optional[str] = None
+    queue_id: Optional[str] = None
+    ticket_status: Optional[str] = "fechado"
+    # Messages (1..5 sequential)
+    messages: List[str] = []
+    attachment_url: Optional[str] = None
+    # Legacy fields (kept for backwards compatibility)
+    message_template: Optional[str] = None
     target_audience: Optional[str] = None
+
+
+class CampaignUpdate(BaseModel):
+    name: Optional[str] = None
+    audience_mode: Optional[str] = None
+    tag_ids: Optional[List[str]] = None
+    contact_list_id: Optional[str] = None
+    connection_id: Optional[str] = None
     scheduled_at: Optional[str] = None
+    confirmation_enabled: Optional[bool] = None
+    open_ticket: Optional[bool] = None
+    assigned_user_id: Optional[str] = None
+    queue_id: Optional[str] = None
+    ticket_status: Optional[str] = None
+    messages: Optional[List[str]] = None
+    attachment_url: Optional[str] = None
+    status: Optional[str] = None  # draft | programada | em_execucao | concluida | cancelada
 
 # AI Chat Models
 class AIChatRequest(BaseModel):

@@ -170,6 +170,33 @@ app.get('/instances/:id/status', (req, res) => {
   });
 });
 
+// Return WhatsApp contacts (from internal Baileys store) so backend can offer
+// "Import contacts" UX after a fresh connection. Best-effort: Baileys does not
+// expose a guaranteed contacts API — we return whatever we cached.
+app.get('/instances/:id/contacts', async (req, res) => {
+  const instance = connections[req.params.id];
+  if (!instance?.sock || instance.status !== 'connected') {
+    return res.status(400).json({ contacts: [], error: 'Not connected' });
+  }
+  try {
+    const store = instance.sock.store;
+    const contacts = [];
+    // Modern Baileys: contacts on sock itself
+    const map = (instance.sock.contacts || (store && store.contacts) || {});
+    for (const jid of Object.keys(map)) {
+      if (!jid.endsWith('@s.whatsapp.net')) continue; // skip groups/broadcasts
+      const c = map[jid] || {};
+      contacts.push({
+        phone: jid.split('@')[0],
+        name: c.name || c.notify || c.verifiedName || '',
+      });
+    }
+    res.json({ contacts });
+  } catch (e) {
+    res.status(500).json({ contacts: [], error: e.message });
+  }
+});
+
 app.post('/instances/:id/send', async (req, res) => {
   const instance = connections[req.params.id];
   if (!instance?.sock || instance.status !== 'connected') {

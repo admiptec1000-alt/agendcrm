@@ -118,6 +118,23 @@ export const crmAPI = {
   createTag: (data) => api.post('/crm/tags', data),
   updateTag: (id, data) => api.put(`/crm/tags/${id}`, data),
   deleteTag: (id) => api.delete(`/crm/tags/${id}`),
+  // Queues
+  listQueues: () => api.get('/crm/queues'),
+  createQueue: (data) => api.post('/crm/queues', data),
+  updateQueue: (id, data) => api.put(`/crm/queues/${id}`, data),
+  deleteQueue: (id) => api.delete(`/crm/queues/${id}`),
+  // Contact Lists
+  listContactLists: () => api.get('/crm/contact-lists'),
+  createContactList: (data) => api.post('/crm/contact-lists', data),
+  updateContactList: (id, data) => api.put(`/crm/contact-lists/${id}`, data),
+  deleteContactList: (id) => api.delete(`/crm/contact-lists/${id}`),
+  // Campaigns extended
+  updateCampaign: (id, data) => api.put(`/crm/campaigns/${id}`, data),
+  deleteCampaign: (id) => api.delete(`/crm/campaigns/${id}`),
+  previewCampaignAudience: (id) => api.post(`/crm/campaigns/${id}/preview-audience`),
+  runCampaign: (id) => api.post(`/crm/campaigns/${id}/run`),
+  // Retry
+  retryMessage: (ticketId, messageId) => api.post(`/crm/tickets/${ticketId}/messages/${messageId}/retry`),
 };
 
 // Scheduling API
@@ -236,6 +253,8 @@ export const channelsAPI = {
   getChatMessages: (params) => api.get('/channels/chat/messages', { params }),
   sendChatMessage: (data) => api.post('/channels/chat/messages', data),
   getServiceHealth: () => api.get('/channels/service-health'),
+  getWaContacts: (connId) => api.get(`/channels/connections/${connId}/wa-contacts`),
+  importWaContacts: (connId, data) => api.post(`/channels/connections/${connId}/import-contacts`, data),
 };
 
 // Reports API
