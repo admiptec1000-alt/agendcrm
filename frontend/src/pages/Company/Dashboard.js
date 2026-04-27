@@ -2855,6 +2855,7 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [serviceHealth, setServiceHealth] = useState(null);
+  const [versionCheck, setVersionCheck] = useState(null);
 
   useEffect(() => { loadData(); }, []);
   useEffect(() => {
@@ -2867,8 +2868,15 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
         if (!cancelled) setServiceHealth({ online: false });
       }
     };
+    const checkVersion = async () => {
+      try {
+        const r = await channelsAPI.serviceVersionCheck();
+        if (!cancelled) setVersionCheck(r.data);
+      } catch (e) {}
+    };
     checkHealth();
-    const interval = setInterval(checkHealth, 30000); // poll every 30s
+    checkVersion();
+    const interval = setInterval(() => { checkHealth(); checkVersion(); }, 60000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
   const loadData = async () => {
@@ -2918,6 +2926,41 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
 
   return (
     <div className="animate-fade-in" data-testid="conexoes-page">
+      {versionCheck && !versionCheck.redeploy_done && versionCheck.online && (
+        <div className="mb-4 rounded-xl border-2 border-red-300 bg-red-50 p-4 flex items-start gap-3" data-testid="redeploy-warning-banner">
+          <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0">
+            <span className="text-red-600 text-2xl">⚠</span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-red-900">Microserviço WhatsApp está com versão antiga!</p>
+            <p className="text-xs text-red-800 mt-1">
+              Os fixes para <strong>envio em branco</strong>, <strong>recebimento de mensagens</strong>, <strong>indicador digitando</strong> e <strong>leitura (duplo check azul)</strong> não estão ativos.
+              Você precisa redeployar o microserviço no Render.
+            </p>
+            <div className="mt-2 space-y-0.5 text-[11px] text-red-700 font-mono">
+              {(versionCheck.details || []).map((d, i) => <div key={i}>{d}</div>)}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <a href="https://dashboard.render.com" target="_blank" rel="noopener noreferrer" className="bg-red-600 text-white px-3 py-1.5 rounded-md font-semibold hover:bg-red-700">
+                Abrir Render Dashboard →
+              </a>
+              <button
+                onClick={async () => {
+                  try {
+                    const r = await channelsAPI.serviceVersionCheck();
+                    setVersionCheck(r.data);
+                    if (r.data.redeploy_done) toast.success('✓ Redeploy detectado!');
+                    else toast.info('Ainda na versão antiga. Redeploy pendente.');
+                  } catch (e) { toast.error('Erro'); }
+                }}
+                className="bg-white border border-red-300 text-red-700 px-3 py-1.5 rounded-md font-semibold hover:bg-red-100"
+              >
+                Re-verificar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
         <p className="text-sm text-slate-600">Gerencie canais de comunicacao e mensagens automaticas</p>
         {serviceHealth && (

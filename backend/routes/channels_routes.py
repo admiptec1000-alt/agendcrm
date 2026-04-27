@@ -51,7 +51,8 @@ async def service_version_check(user: dict = Depends(get_current_user)):
     """
     checks = {
         "online": False,
-        "has_contacts_endpoint": False,
+        "version": None,
+        "features": {},
         "url": WA_SERVICE_URL,
         "details": [],
     }
@@ -63,16 +64,26 @@ async def service_version_check(user: dict = Depends(get_current_user)):
                 checks["details"].append("✓ Microservico online")
             else:
                 checks["details"].append(f"✗ Health retornou HTTP {r.status_code}")
-            # Probe contacts endpoint (only exists in the redeployed version)
-            r2 = await client.get(f"{WA_SERVICE_URL}/instances/__probe__/contacts")
-            if r2.status_code != 404:
-                checks["has_contacts_endpoint"] = True
-                checks["details"].append("✓ Endpoint /contacts presente (redeploy OK)")
+
+            # Query new /version endpoint — only exists in v2.1.0+
+            v = await client.get(f"{WA_SERVICE_URL}/version")
+            if v.status_code == 200:
+                data = v.json()
+                checks["version"] = data.get("version")
+                checks["features"] = data.get("features") or {}
+                checks["fastapi_url_on_render"] = data.get("fastapi_url")
+                checks["details"].append(f"✓ Versao: {data.get('version')} (build {data.get('built_at')})")
+                # Check if FASTAPI_URL points to a public host (not localhost)
+                fu = data.get("fastapi_url") or ""
+                if "localhost" in fu or "127.0.0.1" in fu:
+                    checks["details"].append("⚠ FASTAPI_URL aponta para localhost — mensagens recebidas NAO chegam ao backend!")
+                else:
+                    checks["details"].append(f"✓ FASTAPI_URL: {fu}")
             else:
-                checks["details"].append("✗ Endpoint /contacts ausente — REDEPLOY PENDENTE")
+                checks["details"].append("✗ Endpoint /version ausente — REDEPLOY PENDENTE (versao antiga)")
     except Exception as e:
         checks["details"].append(f"✗ Erro: {str(e)[:120]}")
-    checks["redeploy_done"] = checks["online"] and checks["has_contacts_endpoint"]
+    checks["redeploy_done"] = bool(checks["online"] and checks.get("version"))
     return checks
 
 

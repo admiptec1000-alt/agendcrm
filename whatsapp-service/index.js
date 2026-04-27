@@ -27,22 +27,26 @@ const connections = {};
 
 // In-memory store of recently sent messages so Baileys can satisfy
 // retry/decryption requests with the original payload (otherwise the WA
-// server resends an EMPTY message to the recipient — a known Baileys
-// pitfall when getMessage returns {conversation:''}).
-// Keyed by `${jid}:${msgId}`.
+// server resends an EMPTY message to the recipient — classic Baileys pitfall
+// when getMessage returns {conversation:''}).
+// We store by msgId alone AND by jid:msgId so retries succeed regardless of
+// which JID format Baileys passes back (@s.whatsapp.net vs @lid).
 const sentMessageStore = {};
-const SENT_STORE_MAX = 500;
+const SENT_STORE_MAX = 1000;
 function rememberSent(jid, msgId, message) {
-  if (!jid || !msgId || !message) return;
-  const key = `${jid}:${msgId}`;
-  sentMessageStore[key] = message;
-  const keys = Object.keys(sentMessageStore);
-  if (keys.length > SENT_STORE_MAX) {
-    delete sentMessageStore[keys[0]];
+  if (!msgId || !message) return;
+  const keys = [msgId];
+  if (jid) keys.push(`${jid}:${msgId}`);
+  for (const k of keys) sentMessageStore[k] = message;
+  const all = Object.keys(sentMessageStore);
+  if (all.length > SENT_STORE_MAX) {
+    // Evict oldest 100 entries to keep memory bounded
+    for (let i = 0; i < 100 && i < all.length; i++) delete sentMessageStore[all[i]];
   }
 }
 function recallSent(jid, msgId) {
-  return sentMessageStore[`${jid}:${msgId}`];
+  if (!msgId) return null;
+  return sentMessageStore[`${jid}:${msgId}`] || sentMessageStore[msgId] || null;
 }
 
 // Ensure auth directory
@@ -171,9 +175,9 @@ async function createConnection(instanceId) {
     if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
       if (msg.key.fromMe) continue;
-      // Skip status broadcasts and groups (focus on 1-on-1 for CRM)
       const remoteJid = msg.key.remoteJid || '';
-      if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') continue;
+      // Skip groups and status broadcasts (focus on 1-on-1 DMs for CRM)
+      if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
 
       const m = msg.message || {};
       // Support a variety of message types
@@ -200,7 +204,7 @@ async function createConnection(instanceId) {
       }
       if (!text) continue;
 
-      const phone = remoteJid.replace('@s.whatsapp.net', '');
+      const phone = remoteJid.replace(/@(s\.whatsapp\.net|lid|c\.us)$/, '');
       const pushName = msg.pushName || '';
       // Coerce Baileys Long timestamp into a plain int for JSON serialization
       let ts = msg.messageTimestamp;
@@ -208,7 +212,7 @@ async function createConnection(instanceId) {
       else if (typeof ts !== 'number') ts = Number(ts) || 0;
 
       try {
-        await axios.post(`${FASTAPI_URL}/api/channels/webhook/message`, {
+        const resp = await axios.post(`${FASTAPI_URL}/api/channels/webhook/message`, {
           instance_id: instanceId,
           phone,
           name: pushName,
@@ -216,8 +220,9 @@ async function createConnection(instanceId) {
           message_id: msg.key.id,
           timestamp: ts,
         }, { timeout: 10000 });
+        console.log(`[${instanceId}] ✓ webhook sent phone=${phone} text="${text.slice(0, 40)}" -> ${resp.status}`);
       } catch (e) {
-        console.error(`[${instanceId}] Webhook POST failed (${FASTAPI_URL}):`, e.message);
+        console.error(`[${instanceId}] ✗ webhook FAILED (${FASTAPI_URL}): ${e.message} — check FASTAPI_URL env var on Render!`);
       }
     }
   });
@@ -352,16 +357,22 @@ app.post('/instances/:id/send', async (req, res) => {
       targetJid = phone;
     }
 
-    const payload = { text: message };
+    // Pre-send: ensure we're presence-subscribed (idempotent in Baileys)
+    try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
+    try { await instance.sock.sendPresenceUpdate('composing', targetJid); } catch (_) {}
+
+    // disabling link preview avoids some WA edge cases where the server
+    // rejects text-only messages for certain contacts ("aguardando...")
+    const payload = { text: message, linkPreview: false };
     const sent = await instance.sock.sendMessage(targetJid, payload);
     if (sent?.key?.id) {
       rememberSent(targetJid, sent.key.id, sent.message || { conversation: message });
     }
-    // Subscribe to this contact's presence so future typing events come through
-    try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
+    // Reset to paused so the recipient does not see "typing" forever
+    try { await instance.sock.sendPresenceUpdate('paused', targetJid); } catch (_) {}
     res.json({ success: true, jid: targetJid, message_id: sent?.key?.id });
   } catch (e) {
-    console.error(`[${req.params.id}] send error:`, e.message);
+    console.error(`[${req.params.id}] send error:`, e.message, e.stack?.split('\n')[1]);
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -390,7 +401,30 @@ app.get('/instances', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', instances: Object.keys(connections).length });
+  res.json({
+    status: 'ok',
+    instances: Object.keys(connections).length,
+    version: 'v2.1.0',
+  });
+});
+
+// Explicit version endpoint so backend can verify which patches are live
+app.get('/version', (req, res) => {
+  res.json({
+    version: 'v2.1.0',
+    built_at: '2026-04-27',
+    features: {
+      sent_message_store: true,       // anti blank message fix
+      multi_message_types: true,      // captions, buttons, lists
+      presence_forwarder: true,       // typing indicator
+      ack_forwarder: true,            // read receipts (double check blue)
+      contacts_endpoint: true,        // import contacts
+      notify_and_append: true,        // both upsert types
+      long_ts_coercion: true,         // Long -> Number
+      jid_normalization: true,        // @s.whatsapp.net vs @lid
+    },
+    fastapi_url: FASTAPI_URL,
+  });
 });
 
 app.listen(PORT, () => {
