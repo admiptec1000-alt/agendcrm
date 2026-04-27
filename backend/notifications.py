@@ -49,6 +49,19 @@ VAR_ALIASES = {
 }
 
 
+def _greeting_now() -> str:
+    """Return the appropriate Portuguese greeting based on local hour (BRT)."""
+    from datetime import datetime, timezone, timedelta
+    # Brazil is UTC-3 (most zones); use a fixed offset to avoid pytz dep
+    now_br = datetime.now(timezone.utc) - timedelta(hours=3)
+    h = now_br.hour
+    if 5 <= h < 12:
+        return "Bom dia"
+    if 12 <= h < 18:
+        return "Boa tarde"
+    return "Boa noite"
+
+
 def render_template(template: str, variables: dict) -> str:
     """Replace {var} and {{var}} placeholders with actual values.
     Accepts both single and double braces (users often save templates with single
@@ -61,6 +74,9 @@ def render_template(template: str, variables: dict) -> str:
     for alias, real in VAR_ALIASES.items():
         if alias not in vars_map and real in vars_map:
             vars_map[alias] = vars_map[real]
+    # Dynamic greeting variable
+    if "saudacao" not in vars_map:
+        vars_map["saudacao"] = _greeting_now()
 
     def _replace(match):
         key = match.group(1).strip()

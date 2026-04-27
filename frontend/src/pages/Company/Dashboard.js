@@ -36,13 +36,12 @@ const FEATURE_META = {
   kanban:             { icon: 'Columns3',         label: 'Kanban', group: 'CRM' },
   contatos:           { icon: 'Users',            label: 'Clientes / Leads', group: 'CRM' },
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
-  chat_interno:       { icon: 'MessageSquare',    label: 'Chat Interno', group: 'CRM' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
   informativos:       { icon: 'Info',             label: 'Informativos', group: 'CRM' },
   api:                { icon: 'Code',             label: 'API', group: 'Administracao' },
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
-  filas_chatbot:      { icon: 'Bot',              label: 'Filas & Chatbot', group: 'CRM' },
+  filas_chatbot:      { icon: 'Bot',              label: 'Filas', group: 'CRM' },
   conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'Config Empresa' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
@@ -597,7 +596,6 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'flowbuilder': return <FlowBuilderPage />;
     case 'agente_ia': return <AIPage />;
     case 'conexoes': return <ConexoesPage />;
-    case 'chat_interno': return <ChatInternoPage />;
     case 'filas_chatbot': return <QueuesPage />;
     case 'calendario': return <CalendarPageFull />;
     case 'agenda': return <AgendaPage />;

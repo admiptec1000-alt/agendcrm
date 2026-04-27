@@ -767,49 +767,143 @@ const FilterSelect = ({ label, icon, value, onChange, options, testId }) => (
 );
 
 const NewTicketModal = ({ onClose, onSave }) => {
+  const [mode, setMode] = useState('existing'); // existing | new
   const [form, setForm] = useState({
     customer_name: '', customer_phone: '', customer_email: '',
     description: '', priority: 'medium', channel: 'whatsapp', status: 'aberto',
     value: 0,
   });
+  const [search, setSearch] = useState('');
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [selected, setSelected] = useState(null);
+
+  // Debounced search
+  useEffect(() => {
+    if (mode !== 'existing' || !search.trim()) { setResults([]); return; }
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await schedulingAPI.getClients({ search });
+        setResults((r.data || []).slice(0, 20));
+      } catch (e) { setResults([]); } finally { setSearching(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search, mode]);
+
+  const pickClient = (c) => {
+    setSelected(c);
+    setForm({
+      ...form,
+      customer_name: c.name || '',
+      customer_phone: c.phone || '',
+      customer_email: c.email || '',
+    });
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold font-heading text-slate-900">Novo Atendimento</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
-        <div className="space-y-3">
-          <input value={form.customer_name} onChange={e => setForm({...form, customer_name: e.target.value})} placeholder="Nome do cliente" className="input-field w-full" data-testid="new-ticket-name" />
-          <input value={form.customer_phone} onChange={e => setForm({...form, customer_phone: e.target.value})} placeholder="Telefone (WhatsApp)" className="input-field w-full" data-testid="new-ticket-phone" />
-          <input value={form.customer_email} onChange={e => setForm({...form, customer_email: e.target.value})} placeholder="Email (opcional)" className="input-field w-full" type="email" />
-          <div className="relative">
-            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              value={form.value}
-              onChange={e => setForm({...form, value: e.target.value})}
-              placeholder="Valor do negocio (R$)"
-              className="input-field w-full pl-9"
-              type="number" step="0.01" min="0"
-              data-testid="new-ticket-value"
-            />
-          </div>
-          <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Descricao ou primeira mensagem" className="input-field w-full" rows={2} />
-          <div className="grid grid-cols-2 gap-3">
-            <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field text-sm w-full">
-              <option value="whatsapp">WhatsApp</option>
-              <option value="instagram">Instagram</option>
-              <option value="web">Web</option>
-              <option value="email">Email</option>
-            </select>
-            <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})} className="input-field text-sm w-full">
-              <option value="low">Baixa</option>
-              <option value="medium">Media</option>
-              <option value="high">Alta</option>
-            </select>
-          </div>
+
+        <div className="flex gap-1 bg-slate-100 rounded-lg p-1 mb-4">
+          <button
+            onClick={() => { setMode('existing'); setSelected(null); setForm({...form, customer_name:'', customer_phone:'', customer_email:''}); }}
+            className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${mode === 'existing' ? 'bg-white text-primary shadow-sm' : 'text-slate-500'}`}
+            data-testid="mode-existing"
+          >Selecionar Cliente</button>
+          <button
+            onClick={() => { setMode('new'); setSelected(null); setForm({...form, customer_name:'', customer_phone:'', customer_email:''}); }}
+            className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${mode === 'new' ? 'bg-white text-primary shadow-sm' : 'text-slate-500'}`}
+            data-testid="mode-new"
+          >Novo Cliente</button>
         </div>
+
+        {mode === 'existing' && !selected && (
+          <div className="space-y-2 mb-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Buscar por nome ou telefone..."
+                className="input-field w-full pl-9"
+                autoFocus
+                data-testid="customer-search"
+              />
+            </div>
+            {searching && <p className="text-xs text-slate-400 text-center py-2">Buscando...</p>}
+            {!searching && search && results.length === 0 && (
+              <p className="text-xs text-slate-400 text-center py-3">Nenhum cliente encontrado.<br/><button onClick={() => setMode('new')} className="text-primary font-semibold hover:underline mt-1">Criar novo</button></p>
+            )}
+            <div className="max-h-60 overflow-y-auto space-y-1">
+              {results.map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => pickClient(c)}
+                  className="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-left transition-colors"
+                  data-testid={`pick-client-${c.id}`}
+                >
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white flex items-center justify-center text-[11px] font-bold flex-shrink-0">
+                    {(c.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold truncate">{c.name}</p>
+                    <p className="text-[10px] text-slate-500 truncate">{c.phone}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(mode === 'new' || selected) && (
+          <div className="space-y-3">
+            {selected && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[11px] font-bold flex-shrink-0">
+                  {(selected.name || '?').charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-emerald-900 truncate">{selected.name}</p>
+                  <p className="text-[10px] text-emerald-700 truncate">{selected.phone}</p>
+                </div>
+                <button onClick={() => { setSelected(null); setForm({...form, customer_name:'', customer_phone:'', customer_email:''}); }} className="text-emerald-700 hover:text-emerald-900 text-xs font-semibold">Trocar</button>
+              </div>
+            )}
+            <input value={form.customer_name} onChange={e => setForm({...form, customer_name: e.target.value})} placeholder="Nome do cliente" className="input-field w-full" data-testid="new-ticket-name" disabled={!!selected} />
+            <input value={form.customer_phone} onChange={e => setForm({...form, customer_phone: e.target.value})} placeholder="Telefone (WhatsApp)" className="input-field w-full" data-testid="new-ticket-phone" disabled={!!selected} />
+            <input value={form.customer_email} onChange={e => setForm({...form, customer_email: e.target.value})} placeholder="Email (opcional)" className="input-field w-full" type="email" disabled={!!selected} />
+            <div className="relative">
+              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                value={form.value}
+                onChange={e => setForm({...form, value: e.target.value})}
+                placeholder="Valor do negocio (R$)"
+                className="input-field w-full pl-9"
+                type="number" step="0.01" min="0"
+                data-testid="new-ticket-value"
+              />
+            </div>
+            <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Descricao ou primeira mensagem" className="input-field w-full" rows={2} />
+            <div className="grid grid-cols-2 gap-3">
+              <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field text-sm w-full">
+                <option value="whatsapp">WhatsApp</option>
+                <option value="instagram">Instagram</option>
+                <option value="web">Web</option>
+                <option value="email">Email</option>
+              </select>
+              <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})} className="input-field text-sm w-full">
+                <option value="low">Baixa</option>
+                <option value="medium">Media</option>
+                <option value="high">Alta</option>
+              </select>
+            </div>
+          </div>
+        )}
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
           <button
@@ -824,6 +918,7 @@ const NewTicketModal = ({ onClose, onSave }) => {
             }}
             className="btn-primary text-sm"
             data-testid="save-new-ticket"
+            disabled={mode === 'existing' && !selected}
           >
             Criar Atendimento
           </button>

@@ -630,6 +630,9 @@ async def run_campaign_now(
         settings = await db.campaign_settings.find_one({"company_id": user["company_id"]}, {"_id": 0})
         ab = (settings or {}).get("anti_block") or {}
     ab_enabled = ab.get("enabled", True)
+
+    # Helper to render templates with variables (incl. dynamic saudacao)
+    from notifications import render_template as _render
     interval_min = max(0, int(ab.get("interval_min_seconds", 30) or 0))
     interval_max = max(interval_min, int(ab.get("interval_max_seconds", 90) or 0))
     burst_size = max(1, int(ab.get("burst_size", 50) or 1))
@@ -659,7 +662,7 @@ async def run_campaign_now(
                 async with _httpx.AsyncClient(timeout=30.0) as client:
                     for person in audience:
                         for tpl in msgs:
-                            mtxt = (tpl or "").replace("{nome}", person.get("name") or "").replace("{numero}", person.get("phone") or "")
+                            mtxt = _render(tpl or "", {"nome": person.get("name") or "", "numero": person.get("phone") or "", "telefone": person.get("phone") or ""})
                             try:
                                 rr = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": mtxt})
                                 rs = rr.json() if rr.status_code == 200 else {}
@@ -694,7 +697,7 @@ async def run_campaign_now(
     async with _httpx.AsyncClient(timeout=30.0) as client:
         for person in audience:
             for tpl in msgs:
-                msg = (tpl or "").replace("{nome}", person.get("name") or "").replace("{numero}", person.get("phone") or "")
+                msg = _render(tpl or "", {"nome": person.get("name") or "", "numero": person.get("phone") or "", "telefone": person.get("phone") or ""})
                 try:
                     r = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": msg})
                     res = r.json() if r.status_code == 200 else {}

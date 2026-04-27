@@ -95,9 +95,13 @@ const FlowBuilderPage = () => {
   const [aiAgents, setAiAgents] = useState([]);
 
   const reload = () => crmAPI.listFlows().then(r => setFlows(r.data)).catch(() => {});
+  const [tagsList, setTagsList] = useState([]);
+  const [queuesList, setQueuesList] = useState([]);
   useEffect(() => {
     reload();
     aiAPI.listAgents().then(r => setAiAgents(r.data)).catch(() => {});
+    crmAPI.listTags().then(r => setTagsList(r.data)).catch(() => {});
+    crmAPI.listQueues().then(r => setQueuesList(r.data)).catch(() => {});
   }, []);
 
   const deleteNode = useCallback((nodeId) => {
@@ -272,6 +276,8 @@ const FlowBuilderPage = () => {
         <NodeEditor
           node={selectedNode}
           aiAgents={aiAgents}
+          tagsList={tagsList}
+          queuesList={queuesList}
           onClose={() => setSelectedNode(null)}
           onSave={(config) => { updateNodeConfig(selectedNode.id, config); setSelectedNode(null); }}
           onDelete={() => deleteNode(selectedNode.id)}
@@ -297,10 +303,15 @@ function buildSummary(nodeType, config) {
   }
 }
 
-const NodeEditor = ({ node, aiAgents, onClose, onSave, onDelete }) => {
+const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, onSave, onDelete }) => {
   const [config, setConfig] = useState(node.data?.config || {});
   const cfg = NODE_TYPE_BY_KEY[node.data?.nodeType];
   const Icon = cfg?.icon || MessageSquare;
+
+  const insertVariable = (varName) => {
+    const text = (config.text || '') + (config.text ? ' ' : '') + `{${varName}}`;
+    setConfig({ ...config, text });
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={onClose}>
@@ -320,7 +331,22 @@ const NodeEditor = ({ node, aiAgents, onClose, onSave, onDelete }) => {
             <div>
               <label className="text-[10px] font-bold uppercase text-slate-400">Mensagem</label>
               <textarea value={config.text || ''} onChange={e => setConfig({...config, text: e.target.value})} rows={5} className="input-field text-sm" placeholder="Ola {nome}! ..." data-testid="msg-text" />
-              <p className="text-[10px] text-slate-400 mt-1">Variaveis: {`{nome} {telefone} {protocolo}`}</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <p className="text-[10px] font-bold uppercase text-slate-400 w-full">Inserir variavel:</p>
+                <button onClick={() => insertVariable('saudacao')} className="text-[10px] px-2 py-1 rounded-full bg-amber-100 text-amber-800 font-semibold hover:bg-amber-200" data-testid="var-saudacao">
+                  ☀ Saudacao
+                </button>
+                <button onClick={() => insertVariable('nome')} className="text-[10px] px-2 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">
+                  Nome
+                </button>
+                <button onClick={() => insertVariable('telefone')} className="text-[10px] px-2 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">
+                  Telefone
+                </button>
+                <button onClick={() => insertVariable('protocolo')} className="text-[10px] px-2 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">
+                  Protocolo
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">{`{saudacao}`} retorna "Bom dia/Boa tarde/Boa noite" conforme a hora do envio.</p>
             </div>
           )}
           {node.data?.nodeType === 'menu' && (
@@ -343,8 +369,21 @@ const NodeEditor = ({ node, aiAgents, onClose, onSave, onDelete }) => {
           )}
           {node.data?.nodeType === 'ticket' && (
             <div className="space-y-2">
-              <div><label className="text-[10px] font-bold uppercase text-slate-400">Nome da Fila</label>
-                <input value={config.queue_name || ''} onChange={e => setConfig({...config, queue_name: e.target.value})} className="input-field text-sm" placeholder="Ex: Vendas, Suporte" /></div>
+              <div><label className="text-[10px] font-bold uppercase text-slate-400">Fila</label>
+                <select
+                  value={config.queue_id || ''}
+                  onChange={e => {
+                    const q = queuesList.find(x => x.id === e.target.value);
+                    setConfig({...config, queue_id: e.target.value, queue_name: q?.name || ''});
+                  }}
+                  className="input-field text-sm"
+                  data-testid="ticket-queue-select"
+                >
+                  <option value="">Selecione uma fila</option>
+                  {queuesList.map(q => <option key={q.id} value={q.id}>{q.name}</option>)}
+                </select>
+                {queuesList.length === 0 && <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-1">Nenhuma fila cadastrada. Va em "Filas" para criar.</p>}
+              </div>
               <div><label className="text-[10px] font-bold uppercase text-slate-400">Status</label>
                 <select value={config.status || 'aguardando'} onChange={e => setConfig({...config, status: e.target.value})} className="input-field text-sm">
                   <option value="aguardando">Aguardando</option>
@@ -359,8 +398,21 @@ const NodeEditor = ({ node, aiAgents, onClose, onSave, onDelete }) => {
                 <button onClick={() => setConfig({...config, action: 'add'})} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold ${(config.action || 'add') === 'add' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Adicionar</button>
                 <button onClick={() => setConfig({...config, action: 'remove'})} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold ${config.action === 'remove' ? 'bg-rose-500 text-white' : 'text-slate-500'}`}>Remover</button>
               </div>
-              <div><label className="text-[10px] font-bold uppercase text-slate-400">Nome da tag</label>
-                <input value={config.tag_name || ''} onChange={e => setConfig({...config, tag_name: e.target.value})} className="input-field text-sm" placeholder="Ex: Lead Qualificado" /></div>
+              <div><label className="text-[10px] font-bold uppercase text-slate-400">Tag</label>
+                <select
+                  value={config.tag_id || ''}
+                  onChange={e => {
+                    const t = tagsList.find(x => x.id === e.target.value);
+                    setConfig({...config, tag_id: e.target.value, tag_name: t?.name || ''});
+                  }}
+                  className="input-field text-sm"
+                  data-testid="tag-select"
+                >
+                  <option value="">Selecione uma tag</option>
+                  {tagsList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                {tagsList.length === 0 && <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-1">Nenhuma tag cadastrada. Va em "Tags" para criar.</p>}
+              </div>
             </div>
           )}
           {node.data?.nodeType === 'ai_agent' && (
