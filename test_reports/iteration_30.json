@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 30 — BusinessType.mobile_bottom_nav (max 4) + propagation. Backend pytest: 10/11 PASS (90.9%). 1 FAIL: POST /api/super-admin/companies/{id}/resync-features does NOT propagate mobile_bottom_nav (only features). Confirmed via DB-level desync: company.mobile_bottom_nav stays stale after resync even though BT.mobile_bottom_nav has the correct value. All other paths correctly propagate (PUT BT -> companies, POST company w/ business_type_id, PUT company with business_type_id). Truncation to 4 ✓, defaults [] ✓, GET /api/auth/me exposes both company.mobile_bottom_nav and business_type.mobile_bottom_nav ✓. Iter29 regression (ticket_number sequencial + webhook idempotency) green. Frontend: Nova Campanha modal unified — no Configuração/Mensagens tab buttons, all fields visible (NOME, CONFIRMACAO, AUDIENCIA, CONEXAO WHATSAPP, AGENDAMENTO, ABRIR TICKET, TRANSFERIR PARA FILA, STATUS DO TICKET, MSG.1..5, textarea, Adicionar) ✓. Super Admin BT modal renders 'Menu Mobile (barra inferior)' section with 'até 4 itens' copy ✓.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/super-admin/companies/{id}/resync-features",
+        "issue": "Does NOT propagate business_type.mobile_bottom_nav to company. Only features are written to companies. Spec required 'também sincroniza mobile_bottom_nav junto com features'. Reproduced via DB-level desync: company.mobile_bottom_nav remains ['STALE_VALUE'] after calling /resync-features when BT has ['contatos','campanhas','conexoes'].",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_30.py",
+    "/app/test_reports/pytest/iteration_30.xml"
+  ],
+  "action_items": [
+    "Fix /app/backend/routes/super_admin_routes.py resync_company_features (lines ~335-370): include 'mobile_bottom_nav' in the $set update — e.g. {'$set': {'features': bt_features, 'mobile_bottom_nav': bt.get('mobile_bottom_nav', [])}}. Then re-run test_resync_features_also_syncs_mobile_bottom_nav."
+  ],
+  "critical_code_review_comments": [
+    "super_admin_routes.py resync_company_features only $set features — must also $set mobile_bottom_nav (and arguably business_type_name) for full sync. This is the failing test case (BUG).",
+    "super_admin_routes.py update_business_type lines 137-159: truncation to 4 + propagation to companies works as designed. Note: propagation runs ONLY when 'mobile_bottom_nav' is present in update_data (correct: a PUT not touching the field shouldn't reset companies).",
+    "super_admin_routes.py update_company line 295-299: when business_type_id is provided, both features and mobile_bottom_nav are copied — correct. But on a PUT without business_type_id you cannot adjust mobile_bottom_nav directly through the company endpoint; it's only mutable via BT or via /resync-features. Acceptable as a design choice but worth documenting.",
+    "auth_routes.py /me builds business_type from full BT doc and includes mobile_bottom_nav — good.",
+    "models.py BusinessTypeUpdate.mobile_bottom_nav is Optional[List[str]] (None default), while BusinessTypeCreate uses List[str] = []. Consistent with PATCH semantics — empty list != None — good.",
+    "Company.mobile_bottom_nav defaults to [] when no BT assigned — verified via test_create_company_without_bt_default_empty.",
+    "Frontend CampaignsPage.js confirmed in source: activeTab/Tabs for Configuração/Mensagens removed; UI now stacks all fields and uses MSG. 1..5 sub-tabs only inside the Mensagens block (label, not page tab). Verified in browser.",
+    "Frontend Super Admin Dashboard.js BusinessTypeModal: enforces max 4 with toast 'Maximo de 4 itens na barra inferior' — verified in source. Text uses 'Maximo' (no accent) which is fine but inconsistent with other Portuguese accents in the codebase.",
+    "Backfill in server.py and counters.py — unchanged from iter29; iter29 regression tests still pass (ticket_number sequencial >=1001 + webhook creates ticket)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_30.py (new)",
+    "/app/test_reports/pytest/iteration_30.xml (new)",
+    "/app/test_reports/iteration_30.json (new)"
+  ],
+  "success_rate": {"backend": "90.9% (10/11)", "frontend": "Verified (campaign modal unified + BT modal Menu Mobile section rendered)"},
+  "test_credentials": "crm@test.com / crm123 at /crmtest/login (post-login lands at /crmtest/painel; sidebar 'Campanhas' opens campaign list). admin@agentcrm.com / admin123 at /admin-login (super admin, lands at /super-admin).",
+  "seed_data_creation": "All BTs and companies prefixed TEST_30_ and cleaned up via DELETE inside each test (DELETE /super-admin/business-types/{id} and DELETE /super-admin/companies/{id}). No leaked seed data.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "(a) test_iteration_30.py company creation requires fields: name, subdomain, email, plan_type ('crm'|'scheduling'|'both'), admin_name, admin_email, admin_password (NOT owner_*). (b) GET /api/super-admin/companies/{id} returns 405 — only the list endpoint /api/super-admin/companies works; filter client-side. (c) The CRM company is reachable at /crmtest/login -> /crmtest/painel; sidebar route 'Campanhas' opens the campaigns page (no direct URL like /campanhas). Super Admin at /admin-login -> /super-admin. (d) The resync bug only surfaces if you DESYNC the company doc directly in MongoDB before calling /resync-features; otherwise the value matches because PUT BT already propagated. Test uses motor AsyncIOMotorClient to write {'mobile_bottom_nav': ['STALE_VALUE']} into companies before calling /resync-features. (e) Mobile bottom nav rendering for the actual mobile viewport (<1024px) was NOT exercised end-to-end here; recommend a follow-up Playwright test that logs in as a CRM user with viewport 390x844 and checks the bottom nav shows the 4 chosen feature_keys.",
+  "rca of the issue": "BUG: resync_company_features in /app/backend/routes/super_admin_routes.py only updates 'features' from the BT but skips 'mobile_bottom_nav'. Reproduction: 1) create BT with mobile=['atendimentos','kanban']; 2) create company with that business_type_id (company.mobile_bottom_nav becomes ['atendimentos','kanban'] via copy); 3) PUT BT with mobile_bottom_nav=['contatos','campanhas','conexoes'] (propagates to company); 4) directly write company.mobile_bottom_nav=['STALE_VALUE'] in MongoDB to simulate drift; 5) POST /api/super-admin/companies/{id}/resync-features; 6) GET company shows mobile_bottom_nav=['STALE_VALUE'] (BUG — should be ['contatos','campanhas','conexoes']). Mitigation: in resync_company_features extend the $set payload — { 'features': bt_features, 'mobile_bottom_nav': bt.get('mobile_bottom_nav', []) }. Optional: also include business_type_name for full hydration."
+}

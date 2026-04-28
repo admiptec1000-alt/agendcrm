@@ -51,6 +51,7 @@ class BusinessTypeCreate(BaseModel):
     icon: Optional[str] = None
     base_type: PlanType  # crm, scheduling, both
     features: List[Dict[str, Any]] = []  # Lista de features habilitadas
+    mobile_bottom_nav: List[str] = []    # Até 4 feature_keys para barra inferior mobile
 
 class BusinessTypeUpdate(BaseModel):
     name: Optional[str] = None
@@ -58,6 +59,7 @@ class BusinessTypeUpdate(BaseModel):
     icon: Optional[str] = None
     base_type: Optional[PlanType] = None
     features: Optional[List[Dict[str, Any]]] = None
+    mobile_bottom_nav: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 # Auth Models

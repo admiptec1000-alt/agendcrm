@@ -934,7 +934,19 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
     base_type: businessType?.base_type || 'both',
   });
   const [features, setFeatures] = useState(businessType?.features || []);
+  const [mobileBottomNav, setMobileBottomNav] = useState(businessType?.mobile_bottom_nav || []);
   const [saving, setSaving] = useState(false);
+
+  const toggleBottomNav = (featureKey) => {
+    setMobileBottomNav((curr) => {
+      if (curr.includes(featureKey)) return curr.filter(k => k !== featureKey);
+      if (curr.length >= 4) {
+        toast.error('Maximo de 4 itens na barra inferior');
+        return curr;
+      }
+      return [...curr, featureKey];
+    });
+  };
 
   const toggleFeature = (featureKey) => {
     const existing = features.find(f => f.feature_key === featureKey);
@@ -964,7 +976,7 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const data = { ...form, features };
+      const data = { ...form, features, mobile_bottom_nav: mobileBottomNav };
       if (isEditing) {
         await superAdminAPI.updateBusinessType(businessType.id, data);
         toast.success('Tipo atualizado!');
@@ -1042,6 +1054,59 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
               {sharedFeatures.map(f => (
                 <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
               ))}
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 pt-4">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-1">Menu Mobile (barra inferior)</h3>
+            <p className="text-xs text-slate-500 mb-3">Selecione ate <strong>4 itens</strong> para aparecer na barra inferior do celular. O 5o slot e reservado para o botao Menu.</p>
+
+            {mobileBottomNav.length > 0 && (
+              <div className="flex gap-2 flex-wrap mb-3" data-testid="bottom-nav-preview">
+                {mobileBottomNav.map((k, idx) => {
+                  const feat = allFeatures.find(af => af.feature_key === k);
+                  return (
+                    <span key={k} className="inline-flex items-center gap-1.5 text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">
+                      <span className="text-[9px] opacity-60">#{idx+1}</span>
+                      {feat?.label || k}
+                      <button onClick={() => toggleBottomNav(k)} className="ml-0.5 hover:text-primary/70" data-testid={`bottom-nav-remove-${k}`}>
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5 max-h-56 overflow-y-auto p-2 border border-slate-200 rounded-lg bg-slate-50">
+              {allFeatures
+                .filter(f => isFeatureEnabled(f.feature_key))
+                .map(f => {
+                  const selected = mobileBottomNav.includes(f.feature_key);
+                  const disabled = !selected && mobileBottomNav.length >= 4;
+                  return (
+                    <button
+                      key={f.feature_key}
+                      type="button"
+                      onClick={() => toggleBottomNav(f.feature_key)}
+                      disabled={disabled}
+                      data-testid={`bottom-nav-pick-${f.feature_key}`}
+                      className={`text-left text-xs px-2.5 py-2 rounded-md border transition-all ${
+                        selected
+                          ? 'bg-primary text-white border-primary shadow-sm'
+                          : disabled
+                            ? 'bg-white text-slate-300 border-slate-200 cursor-not-allowed'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-primary/40'
+                      }`}
+                    >
+                      {selected && <span className="mr-1">✓</span>}
+                      {f.label}
+                    </button>
+                  );
+                })}
+              {allFeatures.filter(f => isFeatureEnabled(f.feature_key)).length === 0 && (
+                <p className="col-span-full text-xs text-slate-400 text-center py-4">Habilite funcionalidades acima para poder escolher.</p>
+              )}
             </div>
           </div>
         </div>

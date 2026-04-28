@@ -190,7 +190,6 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
     attachment_url: campaign?.attachment_url || '',
   });
   const [activeMsg, setActiveMsg] = useState(0);
-  const [activeTab, setActiveTab] = useState('config'); // config | messages
   const [tags, setTags] = useState([]);
   const [conns, setConns] = useState([]);
   const [lists, setLists] = useState([]);
@@ -250,13 +249,8 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
 
-        <div className="px-5 pt-3 border-b border-slate-200 flex gap-1">
-          <ModalTab active={activeTab === 'config'} onClick={() => setActiveTab('config')} label="Configuracao" testId="tab-config" />
-          <ModalTab active={activeTab === 'messages'} onClick={() => setActiveTab('messages')} label="Mensagens" testId="tab-messages" />
-        </div>
-
         <div className="p-5 space-y-4">
-          {activeTab === 'config' && (<>
+          <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="md:col-span-1">
               <label className="text-[10px] font-bold uppercase text-slate-400">Nome</label>
@@ -355,12 +349,11 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
             </div>
           </div>
 
-          </>)}
+          </>
 
-          {activeTab === 'messages' && (
-          <div>
+          <div className="border-t border-slate-200 pt-4">
             <p className="text-[11px] font-semibold text-slate-700 mb-2 flex items-center gap-1"><MessageSquare className="w-3.5 h-3.5" /> Mensagens (envio sequencial)</p>
-            <div className="flex gap-1 mb-2 border-b border-slate-200">
+            <div className="flex gap-1 mb-2 border-b border-slate-200 flex-wrap">
               {[0,1,2,3,4].map(i => (
                 <button
                   key={i}
@@ -379,12 +372,11 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
               onChange={e => setMsg(activeMsg, e.target.value)}
               placeholder={`Mensagem ${activeMsg + 1}`}
               className="input-field w-full text-sm"
-              rows={8}
+              rows={6}
               data-testid={`msg-textarea-${activeMsg+1}`}
             />
             <p className="text-[10px] text-slate-400 mt-1">Utilize variaveis como {'{nome}'}, {'{numero}'}.</p>
           </div>
-          )}
         </div>
 
         <div className="flex justify-between items-center gap-2 p-4 border-t border-slate-200">

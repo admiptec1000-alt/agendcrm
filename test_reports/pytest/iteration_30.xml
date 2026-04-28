@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="11" time="56.417" timestamp="2026-04-28T02:20:20.269264+00:00" hostname="agent-env-394393c8-93cc-434a-a428-9a3c0b31a3fb"><testcase classname="backend.tests.test_iteration_30" name="test_create_business_type_with_mobile_bottom_nav" time="0.717" /><testcase classname="backend.tests.test_iteration_30" name="test_create_business_type_without_mobile_defaults_empty" time="0.269" /><testcase classname="backend.tests.test_iteration_30" name="test_update_business_type_truncates_to_four" time="0.382" /><testcase classname="backend.tests.test_iteration_30" name="test_put_bt_propagates_mobile_to_companies" time="0.928" /><testcase classname="backend.tests.test_iteration_30" name="test_create_company_without_bt_default_empty" time="0.517" /><testcase classname="backend.tests.test_iteration_30" name="test_update_company_business_type_copies_mobile" time="0.806" /><testcase classname="backend.tests.test_iteration_30" name="test_resync_features_also_syncs_mobile_bottom_nav" time="0.997"><failure message="AssertionError: resync did not sync mobile_bottom_nav: expected ['contatos', 'campanhas', 'conexoes'], got ['STALE_VALUE']&#10;assert ['STALE_VALUE'] == ['contatos', ...', 'conexoes']&#10;  &#10;  At index 0 diff: 'STALE_VALUE' != 'contatos'&#10;  Right contains 2 more items, first extra item: 'campanhas'&#10;  &#10;  Full diff:&#10;    [&#10;  +     'STALE_VALUE',...&#10;  &#10;  ...Full output truncated (4 lines hidden), use '-vv' to show">backend/tests/test_iteration_30.py:253: in test_resync_features_also_syncs_mobile_bottom_nav
+    assert comp.get("mobile_bottom_nav") == new_nav, (
+E   AssertionError: resync did not sync mobile_bottom_nav: expected ['contatos', 'campanhas', 'conexoes'], got ['STALE_VALUE']
+E   assert ['STALE_VALUE'] == ['contatos', ...', 'conexoes']
+E     
+E     At index 0 diff: 'STALE_VALUE' != 'contatos'
+E     Right contains 2 more items, first extra item: 'campanhas'
+E     
+E     Full diff:
+E       [
+E     +     'STALE_VALUE',...
+E     
+E     ...Full output truncated (4 lines hidden), use '-vv' to show</failure></testcase><testcase classname="backend.tests.test_iteration_30" name="test_auth_me_exposes_mobile_bottom_nav" time="50.675" /><testcase classname="backend.tests.test_iteration_30" name="test_regression_bt_and_company_crud" time="0.256" /><testcase classname="backend.tests.test_iteration_30" name="test_regression_iter29_ticket_number" time="0.266" /><testcase classname="backend.tests.test_iteration_30" name="test_regression_iter29_webhook_creates_ticket" time="0.479" /></testsuite></testsuites>

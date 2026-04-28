@@ -266,6 +266,7 @@ const CompanyDashboard = () => {
         setActivePage={setActivePage}
         onOpenMenu={() => setShowMenuSheet(true)}
         hasFeature={hasFeature}
+        bottomNavKeys={user?.company?.mobile_bottom_nav || user?.business_type?.mobile_bottom_nav || []}
       />
 
       {/* Mobile menu sheet (all options) */}
@@ -466,13 +467,27 @@ const ProfessionalStories = ({ professionals, activeId, onPick }) => {
 };
 
 /* ========== MOBILE BOTTOM NAV ========== */
-const MobileBottomNav = ({ activePage, setActivePage, onOpenMenu, hasFeature }) => {
+const MobileBottomNav = ({ activePage, setActivePage, onOpenMenu, hasFeature, bottomNavKeys }) => {
+  // Default fallback (when business type has no bottom nav configured)
+  const DEFAULT_KEYS = ['agenda', 'clientes', 'conexoes', 'financeiro'];
+  const keys = (bottomNavKeys && bottomNavKeys.length > 0 ? bottomNavKeys : DEFAULT_KEYS).slice(0, 4);
+
+  // Resolve each key into an item using FEATURE_META + ICON_MAP (keep only
+  // the ones the user actually has access to, in the chosen order).
+  const picked = keys
+    .filter(k => hasFeature(k) && FEATURE_META[k])
+    .map(k => ({ key: k, label: FEATURE_META[k].label, icon: ICON_MAP[FEATURE_META[k].icon] || LayoutDashboard }));
+
+  // Position items around the central Menu button (slot 0,1 left / 2,3 right)
+  const leftItems = picked.slice(0, 2);
+  const rightItems = picked.slice(2, 4);
+  while (leftItems.length < 2) leftItems.push(null);
+  while (rightItems.length < 2) rightItems.push(null);
+
   const items = [
-    { key: 'agenda', label: 'Agenda', icon: CalendarCheck, feat: 'agenda' },
-    { key: 'clientes', label: 'Clientes', icon: Users, feat: 'clientes' },
+    ...leftItems,
     { key: '__menu', label: 'Menu', icon: Menu, action: onOpenMenu, always: true },
-    { key: 'conexoes', label: 'Notificacoes', icon: Bell, feat: 'conexoes' },
-    { key: 'financeiro', label: 'Financeiro', icon: DollarSign, feat: 'financeiro' },
+    ...rightItems,
   ];
 
   return (
@@ -480,11 +495,8 @@ const MobileBottomNav = ({ activePage, setActivePage, onOpenMenu, hasFeature }) 
       className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40 flex items-stretch justify-around px-1 pt-1 pb-[env(safe-area-inset-bottom,0)]"
       data-testid="mobile-bottom-nav"
     >
-      {items.map(item => {
-        // Hide items the user doesn't have access to (but always show Menu)
-        if (!item.always && item.feat && !hasFeature(item.feat)) {
-          return <div key={item.key} className="flex-1" />;
-        }
+      {items.map((item, idx) => {
+        if (!item) return <div key={`ph-${idx}`} className="flex-1" />;
         const Icon = item.icon;
         const isActive = !item.action && activePage === item.key;
         const isMenu = item.key === '__menu';
@@ -504,7 +516,7 @@ const MobileBottomNav = ({ activePage, setActivePage, onOpenMenu, hasFeature }) 
             ) : (
               <Icon className="w-5 h-5" />
             )}
-            <span className="text-[10px] font-medium">{item.label}</span>
+            <span className="text-[10px] font-medium truncate max-w-full px-0.5">{item.label}</span>
           </button>
         );
       })}

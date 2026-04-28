@@ -114,6 +114,7 @@ async def create_business_type(
         "icon": data.icon or "Building",
         "base_type": data.base_type,
         "features": data.features,
+        "mobile_bottom_nav": (data.mobile_bottom_nav or [])[:4],
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -132,6 +133,9 @@ async def update_business_type(
         raise HTTPException(status_code=404, detail="Tipo de negocio nao encontrado")
 
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    # Cap bottom nav at 4 slots (Menu button takes the 5th position)
+    if "mobile_bottom_nav" in update_data:
+        update_data["mobile_bottom_nav"] = (update_data["mobile_bottom_nav"] or [])[:4]
     if update_data:
         await db.business_types.update_one({"id": type_id}, {"$set": update_data})
 
@@ -145,6 +149,13 @@ async def update_business_type(
         await db.companies.update_many(
             {"business_type_id": type_id},
             {"$set": {"features": list(bt_features)}}
+        )
+    # Propagate mobile_bottom_nav to companies of this BT so the UI picks it up
+    # on next load. Companies can still override via their own setting later.
+    if "mobile_bottom_nav" in update_data:
+        await db.companies.update_many(
+            {"business_type_id": type_id},
+            {"$set": {"mobile_bottom_nav": list(update_data["mobile_bottom_nav"])}}
         )
 
     updated = await db.business_types.find_one({"id": type_id}, {"_id": 0})
@@ -205,10 +216,12 @@ async def create_company(
 
     # Get business type features if provided
     features = []
+    mobile_bottom_nav = []
     if data.business_type_id:
         bt = await db.business_types.find_one({"id": data.business_type_id})
         if bt:
             features = bt.get("features", [])
+            mobile_bottom_nav = bt.get("mobile_bottom_nav", [])
 
     company_id = str(uuid.uuid4())
     company = {
@@ -221,6 +234,7 @@ async def create_company(
         "plan_type": data.plan_type,
         "business_type_id": data.business_type_id,
         "features": features,
+        "mobile_bottom_nav": mobile_bottom_nav,
         "subdomain": data.subdomain,
         "theme_colors": (data.theme_colors or ThemeColors()).model_dump(),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -277,11 +291,12 @@ async def update_company(
             else:
                 update_data[k] = v
 
-    # If business_type_id changed, update features
+    # If business_type_id changed, update features and mobile bottom nav
     if data.business_type_id:
         bt = await db.business_types.find_one({"id": data.business_type_id})
         if bt:
             update_data["features"] = bt.get("features", [])
+            update_data["mobile_bottom_nav"] = bt.get("mobile_bottom_nav", [])
 
     if update_data:
         await db.companies.update_one({"id": company_id}, {"$set": update_data})
