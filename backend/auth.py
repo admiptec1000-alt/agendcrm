@@ -76,10 +76,20 @@ async def get_current_user(
     return user
 
 async def require_super_admin(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    if user.get("role") != "super_admin":
+    # Accept multiple legacy/variant role identifiers for super admin because
+    # older seeds and migrations sometimes stored 'admin', 'superadmin', or
+    # set an explicit boolean flag. This keeps the panel working without
+    # requiring a DB migration.
+    role = (user.get("role") or "").lower().replace(" ", "_").replace("-", "_")
+    is_super = (
+        role in ("super_admin", "superadmin", "root")
+        or user.get("is_super_admin") is True
+        or user.get("is_superadmin") is True
+    )
+    if not is_super:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Super admin access required"
+            detail=f"Super admin access required (got role='{user.get('role')}')"
         )
     return user
 
