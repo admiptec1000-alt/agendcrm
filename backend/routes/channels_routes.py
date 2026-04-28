@@ -9,6 +9,7 @@ import httpx
 import os
 import logging
 from datetime import datetime, timezone, timedelta
+from counters import next_ticket_number
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 logger = logging.getLogger(__name__)
@@ -565,8 +566,10 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
 
     if not ticket:
         ticket_id = str(uuid.uuid4())
+        ticket_number = await next_ticket_number(db, company_id)
         ticket = {
             "id": ticket_id,
+            "ticket_number": ticket_number,
             "company_id": company_id,
             "customer_name": name,
             "customer_phone": phone,

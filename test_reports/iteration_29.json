@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 29 — Sequential per-company ticket_number + webhook idempotency. Backend pytest: 7/7 PASS new + 16/16 PASS regression iter28 = 23/23 (100%). Validated: (1) POST /api/crm/tickets returns ticket_number (int, >=1001, contiguous +1); GET /api/crm/tickets/{id} exposes it. (2) backfill ran on startup — every ticket in GET /api/crm/tickets has ticket_number (int, >=1001). (3) Webhook POST /api/channels/webhook/message creates ticket with sequential ticket_number when phone is new; (4) when an OPEN ticket already exists for that phone, no new ticket is created — message is appended; identical wa_message_id replays are also deduped. (5) 8 concurrent POST /api/crm/tickets produce 8 unique ticket_numbers (counters.next_sequence is atomic via find_one_and_update + $inc). (6) Per-company isolation indirectly verified: CRM company sequence stays contiguous +1 across calls (counter doc keyed by `${company_id}:tickets`). (7) Regression CRUD + add-message preserves ticket_number on update. Iteration 28 regression remains 100% green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_29.py",
+    "/app/test_reports/pytest/iteration_29.xml",
+    "/app/backend/tests/test_iteration_28.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "counters.py next_sequence: returns start+seq where seq is the AFTER-inc value. With start=1000 and a freshly-created counter (seq=1) the first ticket is #1001 — correct. But if the counter doc already exists from a prior `next_sequence(name='tickets', start=0)` call (e.g. if someone reused this helper), the offset would double-add. Today only next_ticket_number reaches it with start=1000, so safe — but worth a code comment that `start` must be stable per-counter-name.",
+    "server.py backfill_ticket_numbers: scans tickets sorted by created_at then assigns numbers via next_ticket_number. Race-safe under restarts but if the backend is restarted while another instance is running, both will increment — could produce gaps but never collisions. Acceptable.",
+    "channels_routes.py webhook_message line 551: ticket lookup uses {status: {$nin:['fechado']}} — matches the spec ('NÃO criar novo ticket quando status != fechado'). Confirmed.",
+    "channels_routes.py webhook_message: when ticket is closed and same phone messages again, a NEW ticket is created with a NEW ticket_number. This is correct per spec but worth highlighting in product docs (each customer can have multiple historical tickets).",
+    "crm_routes.py POST /tickets: `ticket_number` is allocated BEFORE insert_one. If insert_one fails (e.g. duplicate id), the counter has already incremented, leaving a permanent gap. Low risk in practice; consider compensating decrement on failure if gaps become an issue.",
+    "crm_routes.py run_campaign sync path (line ~722) also calls next_ticket_number for each new ticket — correct; campaign-driven tickets are numbered in the same per-company sequence (intended)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_29.py (new)",
+    "/app/test_reports/pytest/iteration_29.xml (new)",
+    "/app/test_reports/iteration_29.json (new)"
+  ],
+  "success_rate": {"backend": "100% (23/23: 7 new + 16 regression iter28)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "crm@test.com / crm123 (CRM company); admin@agentcrm.com / admin123 (super admin, login at POST /api/auth/super-admin/login)",
+  "seed_data_creation": "All test docs prefixed TEST_29_ and cleaned up via DELETE inside each test. Webhook tests delete the auto-created ticket. Concurrency test cleans 8 tickets.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 29 fully green. Notes: (a) Per-company isolation test originally tried POST /api/auth/login for super-admin and GET /api/admin/companies — both wrong. Correct paths: POST /api/auth/super-admin/login + GET /api/super-admin/companies. (b) Backfill on startup is idempotent — runs every cold boot but only touches tickets WITHOUT ticket_number. Safe to restart backend repeatedly. (c) The @lid duplicate-ticket bug in /app/whatsapp-service/index.js was NOT tested (microservice deployed externally, out of scope per request). The Python webhook idempotency tests confirm that if the microservice DOES forward a clean phone (already resolved from senderPn), the backend correctly reuses the existing ticket. (d) Counter collection name: 'counters', doc _id format: '${company_id}:tickets'. (e) Iteration 26 known issue (POST /api/crm/tickets rejects customer_email='') still applies — frontend should send null/omit field.",
+  "rca of the issue": "No issues found. Both reported bugs are fully addressed at the backend layer: (1) sequential ticket_number via atomic find_one_and_update on counters collection (race-safe, per-tenant); (2) webhook ticket idempotency via {customer_phone, status!=fechado} lookup before insert. The @lid microservice fix was applied in Node.js (out-of-scope locally) and could not be exercised end-to-end here, but the Python receiver correctly dedupes whatever phone the microservice forwards."
+}

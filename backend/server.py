@@ -135,6 +135,30 @@ async def seed_business_types(db):
     logger.info(f"Created {len(default_types)} default business types")
 
 
+async def backfill_ticket_numbers(db):
+    """Assign sequential ticket_number to tickets missing it, per company.
+
+    Tickets existed before the sequential-number feature. Without a backfill
+    the UI would show blanks for old tickets. We iterate per company ordered
+    by created_at so the oldest ticket gets the smallest number.
+    """
+    missing = await db.tickets.count_documents({"ticket_number": {"$exists": False}})
+    if missing == 0:
+        return
+    logger.info(f"Backfilling ticket_number for {missing} legacy tickets...")
+    from counters import next_ticket_number
+    company_ids = await db.tickets.distinct("company_id", {"ticket_number": {"$exists": False}})
+    for cid in company_ids:
+        cursor = db.tickets.find(
+            {"company_id": cid, "ticket_number": {"$exists": False}},
+            {"id": 1, "_id": 0}
+        ).sort("created_at", 1)
+        async for t in cursor:
+            num = await next_ticket_number(db, cid)
+            await db.tickets.update_one({"id": t["id"]}, {"$set": {"ticket_number": num}})
+    logger.info("Ticket number backfill complete.")
+
+
 def init_object_storage():
     """Initialize object storage connection."""
     try:
@@ -152,6 +176,7 @@ async def startup_event():
     db = await get_database()
     await seed_super_admin(db)
     await seed_business_types(db)
+    await backfill_ticket_numbers(db)
     init_object_storage()
     # Start WhatsApp keep-alive background loop (Render free tier wake-up)
     try:

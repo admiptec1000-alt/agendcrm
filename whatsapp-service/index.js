@@ -207,6 +207,41 @@ async function createConnection(instanceId) {
       // Skip groups and status broadcasts (focus on 1-on-1 DMs for CRM)
       if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
 
+      // CRITICAL: Modern WhatsApp uses Linked Device IDs (@lid) for contact
+      // identification that DO NOT match the phone number. If we just strip
+      // "@lid" we end up with a random internal ID (e.g. 242158913192070)
+      // that creates duplicate tickets. Try to resolve the real phone in
+      // order of reliability:
+      //   1) msg.key.senderPn          (Baileys 6.7+ provides it for @lid chats)
+      //   2) msg.key.participantPn     (group-like fallback)
+      //   3) msg.key.remoteJidAlt      (legacy alt jid)
+      //   4) signalRepository LID->PN mapping (if available)
+      //   5) strip @lid as last resort (will still create duplicate)
+      let realJid = remoteJid;
+      if (remoteJid.endsWith('@lid')) {
+        realJid = msg.key.senderPn
+               || msg.key.participantPn
+               || msg.key.remoteJidAlt
+               || null;
+        if (!realJid) {
+          try {
+            const map = instance.sock?.signalRepository?.lidMapping;
+            if (map?.getPNForLID) {
+              realJid = await map.getPNForLID(remoteJid);
+            }
+          } catch (_) {}
+        }
+        if (!realJid) {
+          // Last resort: keep the @lid id so we do not lose the message,
+          // but log so operator can investigate
+          console.warn(`[${instanceId}] unresolved @lid: ${remoteJid} (no senderPn / participantPn)`);
+          realJid = remoteJid;
+        }
+      }
+
+      const phone = realJid.replace(/@(s\.whatsapp\.net|lid|c\.us)$/, '');
+      const pushName = msg.pushName || '';
+
       const m = msg.message || {};
       // Support a variety of message types
       let text = m.conversation
@@ -232,8 +267,6 @@ async function createConnection(instanceId) {
       }
       if (!text) continue;
 
-      const phone = remoteJid.replace(/@(s\.whatsapp\.net|lid|c\.us)$/, '');
-      const pushName = msg.pushName || '';
       // Coerce Baileys Long timestamp into a plain int for JSON serialization
       let ts = msg.messageTimestamp;
       if (ts && typeof ts === 'object' && typeof ts.toNumber === 'function') ts = ts.toNumber();

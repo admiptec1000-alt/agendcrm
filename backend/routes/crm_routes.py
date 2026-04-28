@@ -13,6 +13,7 @@ from typing import List, Optional, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import os
 from pydantic import BaseModel
+from counters import next_ticket_number
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -79,8 +80,10 @@ async def create_ticket(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     ticket_id = str(uuid.uuid4())
+    ticket_number = await next_ticket_number(db, user["company_id"])
     ticket = {
         "id": ticket_id,
+        "ticket_number": ticket_number,
         "company_id": user["company_id"],
         "customer_name": data.customer_name,
         "customer_phone": data.customer_phone,
@@ -718,6 +721,7 @@ async def run_campaign_now(
                 if not existing:
                     await db.tickets.insert_one({
                         "id": str(uuid.uuid4()),
+                        "ticket_number": await next_ticket_number(db, user["company_id"]),
                         "company_id": user["company_id"],
                         "customer_name": person.get("name") or person["phone"],
                         "customer_phone": person["phone"],

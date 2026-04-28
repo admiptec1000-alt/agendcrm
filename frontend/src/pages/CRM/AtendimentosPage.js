@@ -405,7 +405,15 @@ const AtendimentosPage = () => {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-0.5">
-                    <p className="font-medium text-sm text-slate-900 truncate">{ticket.customer_name}</p>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {ticket.ticket_number && (
+                        <span
+                          data-testid={`ticket-number-${ticket.id}`}
+                          className="text-[10px] font-bold text-slate-400 flex-shrink-0"
+                        >#{ticket.ticket_number}</span>
+                      )}
+                      <p className="font-medium text-sm text-slate-900 truncate">{ticket.customer_name}</p>
+                    </div>
                     <span className="text-[10px] text-slate-400 flex-shrink-0 ml-2">{formatTime(ticket.updated_at)}</span>
                   </div>
                   <p className="text-xs text-slate-500 truncate mb-1.5">
@@ -455,7 +463,7 @@ const AtendimentosPage = () => {
               </div>
               <div className="min-w-0">
                 <p className="font-semibold text-sm text-slate-900 truncate">
-                  {selectedTicket.customer_name} <span className="text-slate-400 font-normal">#{selectedTicket.id.substring(0, 4)}</span>
+                  {selectedTicket.customer_name} <span className="text-slate-400 font-normal">#{selectedTicket.ticket_number || selectedTicket.id.substring(0, 4)}</span>
                 </p>
                 {(() => {
                   const pres = presenceMap[selectedTicket.customer_phone]?.presence;
