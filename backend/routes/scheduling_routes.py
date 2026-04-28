@@ -1038,6 +1038,17 @@ async def list_professionals(
     query = {"company_id": user["company_id"]}
     if search:
         query["name"] = {"$regex": search, "$options": "i"}
+
+    # Restrict to own professional record for users with 'own_appointments_only'
+    is_admin = user.get("role") in ("company_admin", "super_admin")
+    if not is_admin:
+        perms = await _load_user_perms(db, user)
+        if "own_appointments_only" in perms:
+            my_prof_id = await _resolve_own_professional_id(db, user)
+            if not my_prof_id:
+                return []
+            query["id"] = my_prof_id
+
     professionals = await db.professionals.find(query, {"_id": 0}).to_list(1000)
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import uuid
 from datetime import datetime, timezone
+from routes.scheduling_routes import _load_user_perms, _resolve_own_professional_id
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -23,8 +24,33 @@ async def get_commissions_report(
     e item específico. Calcula a comissão usando, em ordem de prioridade:
       1) `service.commission_percent` (cadastrado no produto/serviço)
       2) `professional.commission_percent` (fallback global)
+
+    Restrição: usuários não-admin com a permissão `own_appointments_only` só
+    enxergam os dados do profissional vinculado ao seu cadastro (por email).
+    Qualquer filtro `professional_id` que aponte para outro profissional é
+    sobrescrito (fail-closed: profissional não vinculado vê 0).
     """
     company_id = user["company_id"]
+
+    # Enforce per-professional visibility for non-admin users with the
+    # 'own_appointments_only' permission. We resolve the linked professional
+    # from the user's email (same convention used by the appointments routes).
+    is_admin = user.get("role") in ("company_admin", "super_admin")
+    if not is_admin:
+        perms = await _load_user_perms(db, user)
+        if "own_appointments_only" in perms:
+            my_prof_id = await _resolve_own_professional_id(db, user)
+            if not my_prof_id:
+                # No linked professional => report nothing (fail-closed).
+                return {
+                    "report": [], "breakdown": [],
+                    "summary": {
+                        "total_revenue": 0.0, "total_cost": 0.0, "total_profit": 0.0,
+                        "total_commission": 0.0, "total_appointments": 0,
+                        "avg_ticket": 0, "professionals_count": 0,
+                    },
+                }
+            professional_id = my_prof_id  # force-override any client-supplied filter
 
     # Get all professionals
     professionals = await db.professionals.find(

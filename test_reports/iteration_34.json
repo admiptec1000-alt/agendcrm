@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 34 — own_appointments_only restriction across /scheduling/professionals, /scheduling/appointments and /reports/commissions. 18/18 backend pytest pass. Catalog exposure, fail-closed behaviour, force-override of client-supplied professional_id, admin bypass and non-restricted user full-access regression all verified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_34.py",
+    "/app/test_reports/pytest/iteration_34.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "scheduling_routes._load_user_perms correctly returns ['*'] for company_admin/super_admin, otherwise reads permissions from db.permission_profiles by company_id (tenant scoped) and expands legacy aliases (ver_proprios_atendimentos -> dashboard+agenda+own_appointments_only).",
+    "scheduling_routes._resolve_own_professional_id matches Professional by (company_id + email) — relies on email match. Confirmed working when the company_user email exactly matches a Professional.email in same company. Edge case: if a Professional.email is later changed in admin UI, the link silently breaks for the company_user — consider also checking db.professionals.id == user.professional_id (already stored on company_user) as a more deterministic primary key. Currently the company_user.professional_id field is created/updated but NOT consulted by _resolve_own_professional_id.",
+    "reports_routes.get_commissions_report applies the gate BEFORE the professional_id filter is honoured: any client-supplied professional_id is force-overridden to my_prof_id (verified via test_commissions_force_override_other_professional_id).",
+    "Fail-closed branch returns the canonical empty payload with summary zeros and the iter33 keys total_cost/total_profit preserved — verified.",
+    "scheduling_routes.list_professionals correctly returns [] when restricted user has no linked Professional (avoids leaking the company list).",
+    "scheduling_routes.list_appointments correctly overrides query['professional_id'] with my_prof_id, ignoring any client filter that targets another professional.",
+    "/api/scheduling/all-features exposes own_appointments_only under category 'Permissoes' regardless of company.features toggles (whitelisted via permission_only_keys).",
+    "Login response (/api/auth/login) correctly attaches the resolved permissions list to user payload for non-admin users, including own_appointments_only — frontend can rely on this to hide UI affordances."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_34.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "skipped (backend-only request)"},
+  "test_credentials": "boss admin: admin@boss.com.br / boss123. Test users created and cleaned up in fixture (TEST_profA_*, TEST_profU_*, TEST_profF_* @example.com, password TestPwd123).",
+  "seed_data_creation": "TestOwnAppointmentsOnly class fixture creates within boss company: 2 professionals (A linked by email, B not), 2 permission profiles (with/without own_appointments_only), 3 company_users (linked-restricted, unlinked-restricted, full), 1 service, 5 completed appointments at 2026-08-15 (2 for A, 3 for B). All cleaned up after class.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Company-user role created via /scheduling/company-users is 'user' (not 'company_user') — _load_user_perms only short-circuits for company_admin/super_admin so 'user' correctly goes through the profile lookup. _resolve_own_professional_id uses email match; the company_user.professional_id field is stored at creation but is NOT used by the resolver — consider this if future tests change emails. To isolate boss-company commission totals from other tests' data, filter by service_id (boss has lots of pre-existing appointments).",
+  "rca of the issue": "No bugs found. All 9 review-request behaviours verified (catalog, restricted-pro list, restricted appointments, restricted commissions, override-bypass attempt, fail-closed without link, admin bypass, non-restricted user full access, iter33 summary regression)."
+}
