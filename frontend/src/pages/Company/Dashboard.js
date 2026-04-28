@@ -4527,12 +4527,17 @@ const ComissoesPage = () => {
       )}
 
       {/* Mobile-first compact summary cards (4 cols on mobile, larger spacing on desktop) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 mb-3">
         <CompactStat label="Faturamento" value={fBRL(data?.summary?.total_revenue)} icon={<DollarSign className="w-4 h-4" />} color="bg-emerald-500" testId="stat-revenue" />
+        <CompactStat label="Lucro" value={fBRL(data?.summary?.total_profit)} icon={<BarChart3 className="w-4 h-4" />} color="bg-teal-500" testId="stat-profit" />
         <CompactStat label="Comissoes" value={fBRL(data?.summary?.total_commission)} icon={<PieChart className="w-4 h-4" />} color="bg-violet-500" testId="stat-commission" />
         <CompactStat label="Atendimentos" value={data?.summary?.total_appointments || 0} icon={<CalendarCheck className="w-4 h-4" />} color="bg-blue-500" testId="stat-appointments" />
-        <CompactStat label="Ticket Medio" value={fBRL(data?.summary?.avg_ticket)} icon={<BarChart3 className="w-4 h-4" />} color="bg-amber-500" testId="stat-avg-ticket" />
       </div>
+      {data?.summary?.total_cost > 0 && (
+        <p className="text-[11px] text-slate-500 mb-4 sm:mb-6 italic" data-testid="commission-base-hint">
+          Comissao calculada sobre o lucro (preco - custo). Custo total no periodo: {fBRL(data.summary.total_cost)}.
+        </p>
+      )}
 
       {/* View toggle */}
       <div className="flex gap-1 mb-3 bg-slate-100 p-1 rounded-lg w-full sm:w-fit">
@@ -4581,9 +4586,10 @@ const ProfessionalsCommissionView = ({ data, fBRL }) => {
               <p className="font-semibold text-sm text-slate-900 truncate flex-1 mr-2">{r.professional_name}</p>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-bold flex-shrink-0">{r.commission_percent}%</span>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="grid grid-cols-4 gap-2 text-xs">
               <div><p className="text-slate-400 text-[10px] uppercase">Atend.</p><p className="font-bold text-slate-900">{r.appointments_count}</p></div>
               <div><p className="text-slate-400 text-[10px] uppercase">Faturado</p><p className="font-bold text-slate-700">{fBRL(r.revenue)}</p></div>
+              <div><p className="text-slate-400 text-[10px] uppercase">Lucro</p><p className="font-bold text-teal-600">{fBRL(r.profit)}</p></div>
               <div><p className="text-slate-400 text-[10px] uppercase">Comissao</p><p className="font-bold text-emerald-600">{fBRL(r.commission_value)}</p></div>
             </div>
           </div>
@@ -4595,8 +4601,10 @@ const ProfessionalsCommissionView = ({ data, fBRL }) => {
         <table className="w-full" data-testid="commissions-table">
           <thead><tr className="border-b border-slate-200">
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Profissional</th>
-            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Atendimentos</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Atend.</th>
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Faturamento</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Custo</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Lucro</th>
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">% Comissao</th>
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor Comissao</th>
           </tr></thead>
@@ -4606,6 +4614,8 @@ const ProfessionalsCommissionView = ({ data, fBRL }) => {
                 <td className="py-3 px-4 font-medium text-slate-900">{r.professional_name}</td>
                 <td className="py-3 px-4 text-slate-600">{r.appointments_count}</td>
                 <td className="py-3 px-4 text-slate-600">{fBRL(r.revenue)}</td>
+                <td className="py-3 px-4 text-slate-500">{fBRL(r.cost)}</td>
+                <td className="py-3 px-4 font-semibold text-teal-600">{fBRL(r.profit)}</td>
                 <td className="py-3 px-4"><span className="text-xs px-2 py-1 rounded-full bg-violet-100 text-violet-700 font-medium">{r.commission_percent}%</span></td>
                 <td className="py-3 px-4 font-bold text-emerald-600">{fBRL(r.commission_value)}</td>
               </tr>
@@ -4640,10 +4650,11 @@ const ItemsCommissionView = ({ data, fBRL }) => {
               <p className="font-semibold text-sm text-slate-900 truncate flex-1">{r.service_name}</p>
               {typeBadge(r.service_type)}
             </div>
-            <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="grid grid-cols-4 gap-2 text-xs">
               <div><p className="text-slate-400 text-[10px] uppercase">Qtd</p><p className="font-bold text-slate-900">{r.quantity}</p></div>
               <div><p className="text-slate-400 text-[10px] uppercase">Faturado</p><p className="font-bold text-slate-700">{fBRL(r.revenue)}</p></div>
-              <div><p className="text-slate-400 text-[10px] uppercase">Comissao{r.commission_percent != null ? ` (${r.commission_percent}%)` : ''}</p><p className="font-bold text-emerald-600">{fBRL(r.commission)}</p></div>
+              <div><p className="text-slate-400 text-[10px] uppercase">Lucro</p><p className="font-bold text-teal-600">{fBRL(r.profit)}</p></div>
+              <div><p className="text-slate-400 text-[10px] uppercase">Comissao{r.commission_percent != null ? ` ${r.commission_percent}%` : ''}</p><p className="font-bold text-emerald-600">{fBRL(r.commission)}</p></div>
             </div>
           </div>
         ))}
@@ -4654,8 +4665,10 @@ const ItemsCommissionView = ({ data, fBRL }) => {
           <thead><tr className="border-b border-slate-200">
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Item</th>
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Tipo</th>
-            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Quantidade</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Qtd</th>
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Faturamento</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Custo</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Lucro</th>
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">% Comissao</th>
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor Comissao</th>
           </tr></thead>
@@ -4666,6 +4679,8 @@ const ItemsCommissionView = ({ data, fBRL }) => {
                 <td className="py-3 px-4">{typeBadge(r.service_type)}</td>
                 <td className="py-3 px-4 text-slate-600">{r.quantity}</td>
                 <td className="py-3 px-4 text-slate-600">{fBRL(r.revenue)}</td>
+                <td className="py-3 px-4 text-slate-500">{fBRL(r.cost)}</td>
+                <td className="py-3 px-4 font-semibold text-teal-600">{fBRL(r.profit)}</td>
                 <td className="py-3 px-4 text-slate-500">{r.commission_percent != null ? `${r.commission_percent}%` : <span className="text-slate-400 italic text-xs">prof.</span>}</td>
                 <td className="py-3 px-4 font-bold text-emerald-600">{fBRL(r.commission)}</td>
               </tr>

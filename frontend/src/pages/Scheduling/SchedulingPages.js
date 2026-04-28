@@ -718,6 +718,7 @@ const ServiceModal = ({ service, categories, allServices, onClose, onSave }) => 
     type: service?.type || 'service', category_id: service?.category_id || '',
     image_url: service?.image_url || '', is_active: service?.is_active ?? true,
     commission_percent: service?.commission_percent != null ? String(service.commission_percent) : '',
+    cost: service?.cost != null ? String(service.cost) : '',
   });
   const [subForm, setSubForm] = useState({ plan_name: '', plan_price: '', visits_per_month: '', included_service_ids: [] });
   const [uploading, setUploading] = useState(false);
@@ -737,7 +738,9 @@ const ServiceModal = ({ service, categories, allServices, onClose, onSave }) => 
   const handleSave = async () => {
     try {
       const svcData = { name: form.name, description: form.description, price: parseFloat(form.price), duration: parseInt(form.duration),
-        type: form.type, category_id: form.category_id || undefined, image_url: form.image_url || undefined };
+        type: form.type, category_id: form.category_id || undefined, image_url: form.image_url || undefined,
+        commission_percent: form.commission_percent === '' ? null : parseFloat(form.commission_percent),
+        cost: form.cost === '' ? null : parseFloat(form.cost) };
       if (isEditing) {
         await schedulingAPI.updateService(service.id, { ...svcData, is_active: form.is_active });
       } else {
@@ -794,8 +797,19 @@ const ServiceModal = ({ service, categories, allServices, onClose, onSave }) => 
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-sm font-medium text-slate-700 mb-1 block">Preco (R$)</label>
               <input type="number" value={form.price} onChange={e => setForm({...form, price: e.target.value})} className="input-field" data-testid="svc-price" /></div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Custo (R$) <span className="text-xs text-slate-400 font-normal">opcional</span></label>
+              <input type="number" min={0} step={0.01} value={form.cost} onChange={e => setForm({...form, cost: e.target.value})} placeholder="0,00" className="input-field" data-testid="svc-cost" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div><label className="text-sm font-medium text-slate-700 mb-1 block">Duracao (min)</label>
               <input type="number" value={form.duration} onChange={e => setForm({...form, duration: e.target.value})} className="input-field" data-testid="svc-duration" /></div>
+            <div className="flex items-end">
+              {form.price && form.cost && parseFloat(form.cost) > 0 && parseFloat(form.cost) < parseFloat(form.price) && (
+                <p className="text-[11px] text-emerald-600 font-medium pb-1.5" data-testid="svc-profit-hint">
+                  Lucro: R$ {(parseFloat(form.price) - parseFloat(form.cost)).toFixed(2)} (base da comissao)
+                </p>
+              )}
+            </div>
           </div>
           <div>
             <label className="text-sm font-medium text-slate-700 mb-1 block">

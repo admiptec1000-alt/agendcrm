@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 33 — Service.cost field + commission calculated on profit (price - cost). 16/16 backend pytest pass. Frontend ServiceModal exposes svc-cost + svc-profit-hint; ComissoesPage shows 4 cards with stat-profit and removed stat-avg-ticket. Por Profissional and Por Item tables both expose Custo and Lucro columns.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/scheduling/services/{id}", "issue": "(carry-over from iter32) update_service strips fields with value=None — cannot clear an existing cost/commission_percent back to None via API. Use 0 as workaround. Not a regression."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_33.py",
+    "/app/test_reports/pytest/iteration_33.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "reports_routes.get_commissions_report — profit clamped to max(price-cost,0); when service.cost is None or 0 it falls back to commission on revenue (matches spec). Verified end-to-end with 5 scenarios (A-E).",
+    "service-level commission_percent override still wins (svcD scenario: prof 30% / svc 60% / price 200 / cost 50 -> profit 150 -> commission 90).",
+    "summary now exposes total_cost and total_profit; report (per professional) exposes cost/profit; breakdown (per item) exposes cost/profit/unit_cost — all asserted via pytest.",
+    "Frontend ServiceModal: svc-cost optional input next to Preco; svc-profit-hint shows 'Lucro: R$ 60.00 (base da comissao)' when price=100 cost=40 (verified visually).",
+    "Frontend ComissoesPage: 4 cards rendered (stat-revenue, stat-profit, stat-commission, stat-appointments); stat-avg-ticket fully removed (count=0).",
+    "commission-base-hint correctly conditional: rendered only when summary.total_cost > 0. With current seed data total_cost=0, hint is hidden — expected.",
+    "Per-Profissional table headers: PROFISSIONAL | ATEND. | FATURAMENTO | CUSTO | LUCRO | % COMISSAO | VALOR COMISSAO. Per-Item table headers: ITEM | TIPO | QTD | FATURAMENTO | CUSTO | LUCRO | % COMISSAO | VALOR COMISSAO."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_33.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% UI elements present and rendering correctly"},
+  "test_credentials": "boss: admin@boss.com.br/boss123 ; crm: crm@test.com/crm123",
+  "seed_data_creation": "TestCommissionOnProfit class fixture creates+cleans up: 1 prof (30%), 5 services covering scenarios A-E (cost/pct combinations), 5 completed appointments at 2026-07-15. Cleaned after class.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Test file uses _resolve_backend_url() helper that reads frontend/.env if env var is missing. Per-professional row's commission key is 'commission_value' (not 'commission'). The svc modal save button is 'Criar' in new mode and 'Salvar' in edit mode — use button:has-text('Criar'),:has-text('Salvar') alternatives. Boss internal nav uses data-testid nav-* (nav-servicos_produtos, nav-comissoes); URL path /boss/services and /boss/commissions are SPA routes that require nav click after login.",
+  "rca of the issue": "No bugs found. Implementation matches spec for all 8 backend behaviors and all 3 frontend behaviors listed in the review request."
+}

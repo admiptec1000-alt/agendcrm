@@ -64,9 +64,11 @@ async def get_commissions_report(
         appointments = [a for a in appointments if a.get("service_id") == service_id]
 
     # Build per-professional + per-item breakdown in a single pass
-    by_prof = {p["id"]: {"prof": p, "appts": [], "revenue": 0.0, "commission": 0.0} for p in professionals}
-    by_item = {}  # service_id -> { name, type, qty, revenue, commission }
+    by_prof = {p["id"]: {"prof": p, "appts": [], "revenue": 0.0, "cost": 0.0, "profit": 0.0, "commission": 0.0} for p in professionals}
+    by_item = {}  # service_id -> { name, type, qty, revenue, cost, profit, commission }
     total_revenue = 0.0
+    total_cost = 0.0
+    total_profit = 0.0
     total_commission = 0.0
 
     for a in appointments:
@@ -77,15 +79,21 @@ async def get_commissions_report(
         price = float(a.get("price") or 0)
         sid = a.get("service_id")
         svc = services_by_id.get(sid) if sid else None
+        # Cost is per-unit on the service. Default 0 when not set.
+        unit_cost = float((svc or {}).get("cost") or 0)
+        # Commission base = profit (price - cost). Never negative.
+        profit = max(price - unit_cost, 0.0)
         # service-level pct overrides professional-level pct when defined
         svc_pct = svc.get("commission_percent") if svc else None
         prof_pct = prof.get("commission_percent") or 0
         pct = svc_pct if svc_pct is not None else prof_pct
-        commission = price * (pct or 0) / 100
+        commission = profit * (pct or 0) / 100
 
         bp = by_prof[prof_id]
         bp["appts"].append(a)
         bp["revenue"] += price
+        bp["cost"] += unit_cost
+        bp["profit"] += profit
         bp["commission"] += commission
 
         item_key = sid or "_no_service_"
@@ -96,15 +104,22 @@ async def get_commissions_report(
                 "service_type": (svc or {}).get("type") or "service",
                 "quantity": 0,
                 "revenue": 0.0,
+                "cost": 0.0,
+                "profit": 0.0,
                 "commission": 0.0,
                 "commission_percent": svc_pct if svc_pct is not None else None,
+                "unit_cost": unit_cost,
             }
         bi = by_item[item_key]
         bi["quantity"] += 1
         bi["revenue"] += price
+        bi["cost"] += unit_cost
+        bi["profit"] += profit
         bi["commission"] += commission
 
         total_revenue += price
+        total_cost += unit_cost
+        total_profit += profit
         total_commission += commission
 
     report = []
@@ -115,6 +130,8 @@ async def get_commissions_report(
             "professional_name": prof["name"],
             "appointments_count": len(bp["appts"]),
             "revenue": bp["revenue"],
+            "cost": bp["cost"],
+            "profit": bp["profit"],
             "commission_percent": prof.get("commission_percent", 0),
             "commission_value": bp["commission"],
             "is_active": prof.get("is_active", True),
@@ -127,6 +144,8 @@ async def get_commissions_report(
         "breakdown": breakdown,
         "summary": {
             "total_revenue": total_revenue,
+            "total_cost": total_cost,
+            "total_profit": total_profit,
             "total_commission": total_commission,
             "total_appointments": len(appointments),
             "avg_ticket": total_revenue / len(appointments) if appointments else 0,

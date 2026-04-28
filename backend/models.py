@@ -190,6 +190,7 @@ class ServiceCreate(BaseModel):
     type: ServiceType = ServiceType.SERVICE
     duration: int  # em minutos
     price: float
+    cost: Optional[float] = None  # custo unitario; comissao incide sobre (price - cost)
     image_url: Optional[str] = None
     commission_percent: Optional[float] = None  # se None, usa o do profissional
 
@@ -199,6 +200,7 @@ class ServiceUpdate(BaseModel):
     category_id: Optional[str] = None
     duration: Optional[int] = None
     price: Optional[float] = None
+    cost: Optional[float] = None
     is_active: Optional[bool] = None
     image_url: Optional[str] = None
     commission_percent: Optional[float] = None

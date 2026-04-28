@@ -993,6 +993,7 @@ async def create_service(
         "type": data.type,
         "duration": data.duration,
         "price": data.price,
+        "cost": data.cost,
         "is_active": True,
         "image_url": data.image_url,
         "commission_percent": data.commission_percent,
