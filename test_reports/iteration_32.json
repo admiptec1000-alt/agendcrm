@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 32 — Service-level commission_percent + commissions report filters. 14/14 backend pytest cases pass; frontend Comissoes page renders fully on desktop & mobile with working filters/views. Service modal exposes 'Comissao deste servico/produto' field with svc-commission testid.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/scheduling/services/{id}", "issue": "update_service strips fields with value=None (filter `if v is not None`), so it is impossible to clear an existing commission_percent back to None via API. Use 0 as workaround or change filter to use exclude_unset only."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_32.py",
+    "/app/test_reports/pytest/iteration_32.xml"
+  ],
+  "action_items": [
+    "(minor) Allow clearing service.commission_percent via PUT — currently None is dropped because update_service filters with `if v is not None`. Consider sending explicit null/empty string sentinel or relaxing the filter."
+  ],
+  "critical_code_review_comments": [
+    "reports_routes.get_commissions_report — date filter relies on string compare against 'YYYY-MM-DD' which is correct only if appointment.date is stored as ISO string (verified in seed). OK.",
+    "reports_routes — service-level commission_percent correctly overrides professional, fallback works. Computation matches spec (svc=50% on R$100 -> R$50; fallback prof=30% on R$100 -> R$30).",
+    "Dashboard.ComissoesPage — CompactStat values use whitespace-nowrap+truncate, mobile rendering verified single-line on 390x844 (text 'R$ 180.00', height 20px, no newline).",
+    "All required data-testids are present: comissoes-page, commissions-filter-toggle, commissions-filters, filter-{start-date,end-date,professional,type,service}, apply-filters-btn, view-{professionals,items}, stat-{revenue,commission,appointments,avg-ticket}, svc-commission."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_32.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% UI rendering verified"},
+  "test_credentials": "boss: admin@boss.com.br/boss123 (scheduling) ; crm: crm@test.com/crm123 (CRM-only, sem comissoes) ; super: admin@agentcrm.com/admin123 (login via /api/auth/super-admin/login)",
+  "seed_data_creation": "TestCommissionsReport class fixture creates+cleans up: 1 prof (30%), 1 service A (50% own), 1 service B (None=>fallback), 1 product (10%), 3 completed appointments at 2026-06-15. Cleaned after class.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Test file uses _resolve_backend_url() helper that reads frontend/.env if env var is missing (pytest does not auto-load .env). Boss account is the canonical scheduling/both company; CRM-only company has no nav-comissoes (expected). Super-admin login endpoint is /api/auth/super-admin/login (NOT /api/auth/login). Tickets endpoint is /api/crm/tickets.",
+  "rca of the issue": "No bugs found. One minor API ergonomic note above re: update_service stripping None values."
+}

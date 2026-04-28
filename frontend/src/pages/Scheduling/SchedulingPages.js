@@ -717,6 +717,7 @@ const ServiceModal = ({ service, categories, allServices, onClose, onSave }) => 
     price: service?.price?.toString() || '', duration: service?.duration?.toString() || '',
     type: service?.type || 'service', category_id: service?.category_id || '',
     image_url: service?.image_url || '', is_active: service?.is_active ?? true,
+    commission_percent: service?.commission_percent != null ? String(service.commission_percent) : '',
   });
   const [subForm, setSubForm] = useState({ plan_name: '', plan_price: '', visits_per_month: '', included_service_ids: [] });
   const [uploading, setUploading] = useState(false);
@@ -795,6 +796,23 @@ const ServiceModal = ({ service, categories, allServices, onClose, onSave }) => 
               <input type="number" value={form.price} onChange={e => setForm({...form, price: e.target.value})} className="input-field" data-testid="svc-price" /></div>
             <div><label className="text-sm font-medium text-slate-700 mb-1 block">Duracao (min)</label>
               <input type="number" value={form.duration} onChange={e => setForm({...form, duration: e.target.value})} className="input-field" data-testid="svc-duration" /></div>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-slate-700 mb-1 block">
+              Comissao deste {form.type === 'product' ? 'produto' : 'servico'} (%)
+              <span className="text-xs text-slate-400 font-normal ml-1">opcional, sobrepoe a do profissional</span>
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.5}
+              value={form.commission_percent}
+              onChange={e => setForm({...form, commission_percent: e.target.value})}
+              placeholder="Em branco = usa a comissao do profissional"
+              className="input-field"
+              data-testid="svc-commission"
+            />
           </div>
           <div><label className="text-sm font-medium text-slate-700 mb-1 block">Descricao</label>
             <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} className="input-field" rows={2} /></div>

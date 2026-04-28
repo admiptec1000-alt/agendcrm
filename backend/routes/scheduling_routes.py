@@ -995,6 +995,7 @@ async def create_service(
         "price": data.price,
         "is_active": True,
         "image_url": data.image_url,
+        "commission_percent": data.commission_percent,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.services.insert_one(service)

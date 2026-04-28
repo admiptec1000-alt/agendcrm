@@ -191,6 +191,7 @@ class ServiceCreate(BaseModel):
     duration: int  # em minutos
     price: float
     image_url: Optional[str] = None
+    commission_percent: Optional[float] = None  # se None, usa o do profissional
 
 class ServiceUpdate(BaseModel):
     name: Optional[str] = None
@@ -200,6 +201,7 @@ class ServiceUpdate(BaseModel):
     price: Optional[float] = None
     is_active: Optional[bool] = None
     image_url: Optional[str] = None
+    commission_percent: Optional[float] = None
 
 # Professional Models
 class ProfessionalCreate(BaseModel):

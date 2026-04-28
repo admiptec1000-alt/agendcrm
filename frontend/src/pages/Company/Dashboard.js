@@ -4409,19 +4409,189 @@ const FinanceiroPage = () => {
 /* ========== COMISSOES (REAL) ========== */
 const ComissoesPage = () => {
   const [data, setData] = useState(null);
-  useEffect(() => { reportsAPI.getCommissions().then(r => setData(r.data)).catch(() => {}); }, []);
+  const [loading, setLoading] = useState(false);
+  const [view, setView] = useState('professionals'); // professionals | items
+  const [showFilters, setShowFilters] = useState(false);
+  const [professionals, setProfessionals] = useState([]);
+  const [services, setServices] = useState([]);
+  const [filters, setFilters] = useState({
+    start_date: '',
+    end_date: '',
+    professional_id: '',
+    service_type: '',
+    service_id: '',
+  });
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v));
+      const r = await reportsAPI.getCommissions(params);
+      setData(r.data);
+    } catch (e) {
+      // silently ignore — table renders empty state
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    Promise.all([schedulingAPI.getProfessionals(), schedulingAPI.getServices()])
+      .then(([p, s]) => { setProfessionals(p.data || []); setServices(s.data || []); })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setQuickRange = (days) => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - days);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    setFilters(f => ({ ...f, start_date: fmt(start), end_date: fmt(end) }));
+  };
+
+  const clearFilters = () => setFilters({ start_date: '', end_date: '', professional_id: '', service_type: '', service_id: '' });
+
+  const fBRL = (v) => `R$ ${(Number(v) || 0).toFixed(2)}`;
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+
   return (
     <div className="animate-fade-in" data-testid="comissoes-page">
-      <div className="flex items-center justify-between mb-6">
-        <p className="text-sm text-slate-600">Relatorio de comissoes por profissional</p>
+      <div className="flex items-center justify-between mb-3 sm:mb-4 gap-2">
+        <p className="text-xs sm:text-sm text-slate-600">Relatorio de comissoes por profissional e item</p>
+        <button
+          onClick={() => setShowFilters(s => !s)}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+            showFilters || activeFilterCount > 0
+              ? 'bg-primary text-white border-primary'
+              : 'bg-white text-slate-600 border-slate-200 hover:border-primary/40'
+          }`}
+          data-testid="commissions-filter-toggle"
+        >
+          <Filter className="w-3.5 h-3.5" /> Filtros
+          {activeFilterCount > 0 && (
+            <span className="ml-0.5 text-[10px] bg-white/30 px-1.5 py-0.5 rounded-full">{activeFilterCount}</span>
+          )}
+        </button>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Faturamento Total" value={`R$ ${(data?.summary?.total_revenue || 0).toFixed(2)}`} icon={<DollarSign className="w-5 h-5" />} color="bg-emerald-500" />
-        <StatCard label="Total Comissoes" value={`R$ ${(data?.summary?.total_commission || 0).toFixed(2)}`} icon={<PieChart className="w-5 h-5" />} color="bg-violet-500" />
-        <StatCard label="Atendimentos" value={data?.summary?.total_appointments || 0} icon={<CalendarCheck className="w-5 h-5" />} color="bg-blue-500" />
-        <StatCard label="Ticket Medio" value={`R$ ${(data?.summary?.avg_ticket || 0).toFixed(2)}`} icon={<BarChart3 className="w-5 h-5" />} color="bg-amber-500" />
+
+      {showFilters && (
+        <div className="card mb-4 p-3 sm:p-4" data-testid="commissions-filters">
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <button onClick={() => setQuickRange(7)} className="text-xs px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200">7 dias</button>
+            <button onClick={() => setQuickRange(30)} className="text-xs px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200">30 dias</button>
+            <button onClick={() => setQuickRange(90)} className="text-xs px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200">90 dias</button>
+            <button onClick={clearFilters} className="text-xs px-2 py-1 rounded-md text-slate-500 hover:text-slate-700 ml-auto">Limpar</button>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">De</label>
+              <input type="date" value={filters.start_date} onChange={e => setFilters({...filters, start_date: e.target.value})} className="input-field text-xs" data-testid="filter-start-date" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Ate</label>
+              <input type="date" value={filters.end_date} onChange={e => setFilters({...filters, end_date: e.target.value})} className="input-field text-xs" data-testid="filter-end-date" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Profissional</label>
+              <select value={filters.professional_id} onChange={e => setFilters({...filters, professional_id: e.target.value})} className="input-field text-xs" data-testid="filter-professional">
+                <option value="">Todos</option>
+                {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Tipo</label>
+              <select value={filters.service_type} onChange={e => setFilters({...filters, service_type: e.target.value, service_id: ''})} className="input-field text-xs" data-testid="filter-type">
+                <option value="">Todos</option>
+                <option value="service">Servico</option>
+                <option value="product">Produto</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Item</label>
+              <select value={filters.service_id} onChange={e => setFilters({...filters, service_id: e.target.value})} className="input-field text-xs" data-testid="filter-service">
+                <option value="">Todos</option>
+                {services
+                  .filter(s => !filters.service_type || s.type === filters.service_type)
+                  .map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex justify-end mt-3">
+            <button onClick={load} disabled={loading} className="btn-primary text-xs px-4" data-testid="apply-filters-btn">
+              {loading ? 'Carregando...' : 'Aplicar'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile-first compact summary cards (4 cols on mobile, larger spacing on desktop) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
+        <CompactStat label="Faturamento" value={fBRL(data?.summary?.total_revenue)} icon={<DollarSign className="w-4 h-4" />} color="bg-emerald-500" testId="stat-revenue" />
+        <CompactStat label="Comissoes" value={fBRL(data?.summary?.total_commission)} icon={<PieChart className="w-4 h-4" />} color="bg-violet-500" testId="stat-commission" />
+        <CompactStat label="Atendimentos" value={data?.summary?.total_appointments || 0} icon={<CalendarCheck className="w-4 h-4" />} color="bg-blue-500" testId="stat-appointments" />
+        <CompactStat label="Ticket Medio" value={fBRL(data?.summary?.avg_ticket)} icon={<BarChart3 className="w-4 h-4" />} color="bg-amber-500" testId="stat-avg-ticket" />
       </div>
-      <div className="card">
+
+      {/* View toggle */}
+      <div className="flex gap-1 mb-3 bg-slate-100 p-1 rounded-lg w-full sm:w-fit">
+        <button
+          onClick={() => setView('professionals')}
+          className={`flex-1 sm:flex-none px-3 sm:px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${view === 'professionals' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'}`}
+          data-testid="view-professionals"
+        >Por Profissional</button>
+        <button
+          onClick={() => setView('items')}
+          className={`flex-1 sm:flex-none px-3 sm:px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${view === 'items' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'}`}
+          data-testid="view-items"
+        >Por Item</button>
+      </div>
+
+      {view === 'professionals' && <ProfessionalsCommissionView data={data} fBRL={fBRL} />}
+      {view === 'items' && <ItemsCommissionView data={data} fBRL={fBRL} />}
+    </div>
+  );
+};
+
+const CompactStat = ({ label, value, icon, color, testId }) => (
+  <div className="card p-3 sm:p-4" data-testid={testId}>
+    <div className="flex items-center justify-between gap-2">
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] sm:text-xs text-slate-500 uppercase tracking-wide truncate">{label}</p>
+        <p className="text-base sm:text-xl font-bold text-slate-900 leading-tight whitespace-nowrap overflow-hidden text-ellipsis">{value}</p>
+      </div>
+      <div className={`${color} p-2 rounded-lg text-white flex-shrink-0`}>{icon}</div>
+    </div>
+  </div>
+);
+
+const ProfessionalsCommissionView = ({ data, fBRL }) => {
+  const rows = data?.report || [];
+  if (rows.length === 0) {
+    return <div className="card p-6 text-center text-sm text-slate-500" data-testid="empty-professionals">Nenhum dado de comissao no periodo selecionado.</div>;
+  }
+  return (
+    <>
+      {/* Mobile: stacked cards */}
+      <div className="space-y-2 sm:hidden" data-testid="commissions-cards-mobile">
+        {rows.map(r => (
+          <div key={r.professional_id} className="card p-3" data-testid={`prof-card-${r.professional_id}`}>
+            <div className="flex items-center justify-between mb-2">
+              <p className="font-semibold text-sm text-slate-900 truncate flex-1 mr-2">{r.professional_name}</p>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-bold flex-shrink-0">{r.commission_percent}%</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div><p className="text-slate-400 text-[10px] uppercase">Atend.</p><p className="font-bold text-slate-900">{r.appointments_count}</p></div>
+              <div><p className="text-slate-400 text-[10px] uppercase">Faturado</p><p className="font-bold text-slate-700">{fBRL(r.revenue)}</p></div>
+              <div><p className="text-slate-400 text-[10px] uppercase">Comissao</p><p className="font-bold text-emerald-600">{fBRL(r.commission_value)}</p></div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop: table */}
+      <div className="card hidden sm:block">
         <table className="w-full" data-testid="commissions-table">
           <thead><tr className="border-b border-slate-200">
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Profissional</th>
@@ -4431,20 +4601,79 @@ const ComissoesPage = () => {
             <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor Comissao</th>
           </tr></thead>
           <tbody>
-            {(data?.report || []).map(r => (
+            {rows.map(r => (
               <tr key={r.professional_id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
                 <td className="py-3 px-4 font-medium text-slate-900">{r.professional_name}</td>
                 <td className="py-3 px-4 text-slate-600">{r.appointments_count}</td>
-                <td className="py-3 px-4 text-slate-600">R$ {r.revenue.toFixed(2)}</td>
+                <td className="py-3 px-4 text-slate-600">{fBRL(r.revenue)}</td>
                 <td className="py-3 px-4"><span className="text-xs px-2 py-1 rounded-full bg-violet-100 text-violet-700 font-medium">{r.commission_percent}%</span></td>
-                <td className="py-3 px-4 font-bold text-emerald-600">R$ {r.commission_value.toFixed(2)}</td>
+                <td className="py-3 px-4 font-bold text-emerald-600">{fBRL(r.commission_value)}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        {(data?.report || []).length === 0 && <p className="text-center py-8 text-sm text-slate-500">Nenhum dado de comissao disponivel. Complete atendimentos para gerar relatorio.</p>}
       </div>
-    </div>
+    </>
+  );
+};
+
+const ItemsCommissionView = ({ data, fBRL }) => {
+  const rows = data?.breakdown || [];
+  if (rows.length === 0) {
+    return <div className="card p-6 text-center text-sm text-slate-500" data-testid="empty-items">Nenhum item com vendas no periodo.</div>;
+  }
+  const typeBadge = (t) => {
+    const map = {
+      service: { label: 'Servico', cls: 'bg-blue-100 text-blue-700' },
+      product: { label: 'Produto', cls: 'bg-orange-100 text-orange-700' },
+      subscription: { label: 'Assinatura', cls: 'bg-violet-100 text-violet-700' },
+    };
+    const m = map[t] || { label: t, cls: 'bg-slate-100 text-slate-700' };
+    return <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${m.cls}`}>{m.label}</span>;
+  };
+  return (
+    <>
+      <div className="space-y-2 sm:hidden" data-testid="items-cards-mobile">
+        {rows.map((r, i) => (
+          <div key={r.service_id || `noid-${i}`} className="card p-3" data-testid={`item-card-${r.service_id || i}`}>
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <p className="font-semibold text-sm text-slate-900 truncate flex-1">{r.service_name}</p>
+              {typeBadge(r.service_type)}
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div><p className="text-slate-400 text-[10px] uppercase">Qtd</p><p className="font-bold text-slate-900">{r.quantity}</p></div>
+              <div><p className="text-slate-400 text-[10px] uppercase">Faturado</p><p className="font-bold text-slate-700">{fBRL(r.revenue)}</p></div>
+              <div><p className="text-slate-400 text-[10px] uppercase">Comissao{r.commission_percent != null ? ` (${r.commission_percent}%)` : ''}</p><p className="font-bold text-emerald-600">{fBRL(r.commission)}</p></div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card hidden sm:block">
+        <table className="w-full" data-testid="items-table">
+          <thead><tr className="border-b border-slate-200">
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Item</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Tipo</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Quantidade</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Faturamento</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">% Comissao</th>
+            <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Valor Comissao</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.service_id || `noid-${i}`} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
+                <td className="py-3 px-4 font-medium text-slate-900">{r.service_name}</td>
+                <td className="py-3 px-4">{typeBadge(r.service_type)}</td>
+                <td className="py-3 px-4 text-slate-600">{r.quantity}</td>
+                <td className="py-3 px-4 text-slate-600">{fBRL(r.revenue)}</td>
+                <td className="py-3 px-4 text-slate-500">{r.commission_percent != null ? `${r.commission_percent}%` : <span className="text-slate-400 italic text-xs">prof.</span>}</td>
+                <td className="py-3 px-4 font-bold text-emerald-600">{fBRL(r.commission)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 };
 
