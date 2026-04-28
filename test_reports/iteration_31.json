@@ -1,0 +1,28 @@
+{
+  "summary": "Re-tested only the previously failing test from iteration 30: test_resync_features_also_syncs_mobile_bottom_nav. Test now PASSES — POST /api/super-admin/companies/{id}/resync-features now correctly propagates BOTH features and mobile_bottom_nav from the business_type to the company in a single $set call.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_30.py",
+    "/app/test_reports/pytest/iteration_31.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix in resync_company_features confirmed working: $set now contains both features and mobile_bottom_nav from the business_type lookup."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Super Admin: admin@agentcrm.com / admin123",
+  "seed_data_creation": "None — test creates and uses temp business_type/company fixtures",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 30 bug fully resolved. All 11 tests in test_iteration_30.py are now green (only the resync test was re-executed in this iteration since the others were already verified green in iter30).",
+  "rca of the issue": "Original bug: resync_company_features in /app/backend/routes/super_admin_routes.py only set 'features' on the company doc, ignoring 'mobile_bottom_nav' from the business_type. Fix: include mobile_bottom_nav in the same $set call. Verified by test that mutates the company's mobile_bottom_nav to a stale value, calls /resync-features, and asserts it is overwritten with the BT's current value."
+}

@@ -357,9 +357,10 @@ async def resync_company_features(
         raise HTTPException(status_code=404, detail="Tipo de negocio da empresa nao foi encontrado")
 
     bt_features = bt.get("features", [])
+    bt_bottom_nav = bt.get("mobile_bottom_nav", [])
     await db.companies.update_one(
         {"id": company_id},
-        {"$set": {"features": bt_features}}
+        {"$set": {"features": bt_features, "mobile_bottom_nav": bt_bottom_nav}}
     )
 
     updated = await db.companies.find_one({"id": company_id}, {"_id": 0})
