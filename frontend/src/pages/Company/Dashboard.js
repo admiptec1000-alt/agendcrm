@@ -38,7 +38,6 @@ const FEATURE_META = {
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
-  informativos:       { icon: 'Info',             label: 'Informativos', group: 'CRM' },
   api:                { icon: 'Code',             label: 'API', group: 'Administracao' },
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
   filas_chatbot:      { icon: 'Bot',              label: 'Filas', group: 'CRM' },
@@ -589,7 +588,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'dashboard': return <DashboardPage setActivePage={setActivePage} menuGroups={menuGroups} />;
     case 'kanban': return <KanbanPage setActivePage={setActivePage} />;
     case 'atendimentos': return <AtendimentosPage />;
-    case 'contatos': return <ContactsPage />;
+    case 'contatos': return <ClientsPage />;
     case 'respostas_rapidas': return <QuickResponsesPage />;
     case 'campanhas': return <CampaignsPage />;
     case 'tags': return <TagsPage />;
@@ -1113,6 +1112,15 @@ const ClientsPage = () => {
 
                   {c.notes && <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg">{c.notes}</p>}
 
+                  {/* Person type + CPF/CNPJ chips */}
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className={`px-2.5 py-1 rounded-full font-semibold ${(c.person_type || 'fisica') === 'juridica' ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                      {(c.person_type || 'fisica') === 'juridica' ? 'PJ' : 'PF'}
+                    </span>
+                    {c.cpf && <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">CPF: {c.cpf}</span>}
+                    {c.cnpj && <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">CNPJ: {c.cnpj}</span>}
+                  </div>
+
                   {/* Client info */}
                   {c.birth_date && (() => {
                     const bd = new Date(c.birth_date);
@@ -1191,6 +1199,9 @@ const ClientForm = ({ client, onSave }) => {
     phone: client?.phone || '',
     email: client?.email || '',
     birth_date: client?.birth_date || '',
+    person_type: client?.person_type || 'fisica',
+    cpf: client?.cpf || '',
+    cnpj: client?.cnpj || '',
     notes: client?.notes || ''
   });
 
@@ -1200,6 +1211,23 @@ const ClientForm = ({ client, onSave }) => {
     if (digits.length <= 7) return `(${digits.slice(0,2)}) ${digits.slice(2)}`;
     if (digits.length <= 10) return `(${digits.slice(0,2)}) ${digits.slice(2,6)}-${digits.slice(6)}`;
     return `(${digits.slice(0,2)}) ${digits.slice(2,7)}-${digits.slice(7)}`;
+  };
+
+  const formatCPF = (v) => {
+    const d = v.replace(/\D/g, '').slice(0, 11);
+    if (d.length <= 3) return d;
+    if (d.length <= 6) return `${d.slice(0,3)}.${d.slice(3)}`;
+    if (d.length <= 9) return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6)}`;
+    return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
+  };
+
+  const formatCNPJ = (v) => {
+    const d = v.replace(/\D/g, '').slice(0, 14);
+    if (d.length <= 2) return d;
+    if (d.length <= 5) return `${d.slice(0,2)}.${d.slice(2)}`;
+    if (d.length <= 8) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5)}`;
+    if (d.length <= 12) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8)}`;
+    return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
   };
 
   const age = useMemo(() => {
@@ -1263,20 +1291,57 @@ const ClientForm = ({ client, onSave }) => {
             </div>
           </div>
           <div>
-            <label htmlFor="client-birthdate" className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Data de Nascimento</label>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-              <input
-                id="client-birthdate"
-                type="date"
-                value={form.birth_date}
-                onChange={e => setForm({...form, birth_date: e.target.value})}
-                className="input-field !pl-9"
-                data-testid="client-birthdate-input"
-                max={new Date().toISOString().split('T')[0]}
-              />
+            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Tipo de Pessoa</label>
+            <div className="flex bg-slate-100 rounded-lg p-0.5 h-[42px]">
+              <button type="button" onClick={() => setForm({...form, person_type: 'fisica'})} className={`flex-1 rounded-md text-xs font-semibold transition-colors ${form.person_type === 'fisica' ? 'bg-white text-primary shadow-sm' : 'text-slate-500'}`} data-testid="person-type-fisica">Pessoa Fisica</button>
+              <button type="button" onClick={() => setForm({...form, person_type: 'juridica'})} className={`flex-1 rounded-md text-xs font-semibold transition-colors ${form.person_type === 'juridica' ? 'bg-white text-primary shadow-sm' : 'text-slate-500'}`} data-testid="person-type-juridica">Pessoa Juridica</button>
             </div>
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {form.person_type === 'fisica' ? (
+            <>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">CPF</label>
+                <input
+                  value={form.cpf}
+                  onChange={e => setForm({...form, cpf: formatCPF(e.target.value)})}
+                  placeholder="000.000.000-00"
+                  className="input-field"
+                  data-testid="client-cpf-input"
+                  inputMode="numeric"
+                />
+              </div>
+              <div>
+                <label htmlFor="client-birthdate" className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Data de Nascimento</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                  <input
+                    id="client-birthdate"
+                    type="date"
+                    value={form.birth_date}
+                    onChange={e => setForm({...form, birth_date: e.target.value})}
+                    className="input-field !pl-9"
+                    data-testid="client-birthdate-input"
+                    max={new Date().toISOString().split('T')[0]}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="sm:col-span-2">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">CNPJ</label>
+              <input
+                value={form.cnpj}
+                onChange={e => setForm({...form, cnpj: formatCNPJ(e.target.value)})}
+                placeholder="00.000.000/0000-00"
+                className="input-field"
+                data-testid="client-cnpj-input"
+                inputMode="numeric"
+              />
+            </div>
+          )}
         </div>
         <div className="relative">
           <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />

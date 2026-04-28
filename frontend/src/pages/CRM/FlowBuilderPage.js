@@ -33,10 +33,12 @@ const FlowNode = ({ data, id }) => {
   const Icon = cfg.icon;
   const summary = data.config?.summary || data.label || cfg.label;
   const isStart = data.nodeType === 'start';
+  const isMenu = data.nodeType === 'menu';
+  const menuOptions = (data.config?.options) || [];
 
   return (
     <div
-      className="rounded-lg shadow-md bg-white border-2 min-w-[200px] max-w-[260px] group relative"
+      className="rounded-lg shadow-md bg-white border-2 min-w-[220px] max-w-[280px] group relative"
       style={{ borderColor: cfg.color }}
       data-testid={`flow-node-${data.nodeType}`}
     >
@@ -68,16 +70,46 @@ const FlowNode = ({ data, id }) => {
         <span>{cfg.label}</span>
       </div>
       <div className="p-2.5">
-        <p className="text-[12px] text-slate-700 line-clamp-3">{summary}</p>
+        <p className="text-[12px] text-slate-700 line-clamp-2">{summary}</p>
+        {isMenu && menuOptions.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {menuOptions.map((opt, i) => (
+              <div
+                key={i}
+                className="relative flex items-center gap-2 text-[11px] py-1 px-2 rounded bg-slate-50 border border-slate-200"
+                title={`Saida da opcao ${i + 1}`}
+              >
+                <span className="w-4 h-4 rounded-full bg-violet-500 text-white text-[9px] font-bold flex items-center justify-center flex-shrink-0">{i + 1}</span>
+                <span className="truncate text-slate-700">{opt.label || `Opcao ${i + 1}`}</span>
+                {/* Per-option output handle — placed on the right edge */}
+                <Handle
+                  id={`option-${i}`}
+                  type="source"
+                  position={Position.Right}
+                  style={{
+                    background: cfg.color, width: 10, height: 10, border: '2px solid white',
+                    top: 'auto',
+                    transform: 'translate(50%, 0)',
+                    right: -5,
+                  }}
+                  isConnectable
+                />
+              </div>
+            ))}
+            <p className="text-[9px] text-slate-400 mt-1">Conecte cada opcao a um proximo no.</p>
+          </div>
+        )}
       </div>
 
-      {/* Source handle (output) — bottom of node */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        style={{ background: cfg.color, width: 10, height: 10, border: '2px solid white' }}
-        isConnectable
-      />
+      {/* Default source handle (output) — bottom of node — hidden for menu (uses per-option) */}
+      {!isMenu && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          style={{ background: cfg.color, width: 10, height: 10, border: '2px solid white' }}
+          isConnectable
+        />
+      )}
     </div>
   );
 };
@@ -111,11 +143,21 @@ const FlowBuilderPage = () => {
   }, []);
 
   // Inject onDelete into node data so the inline X works
-  const decorateNode = useCallback((n) => ({
-    ...n,
-    type: 'flow',
-    data: { ...n.data, onDelete: deleteNode },
-  }), [deleteNode]);
+  const decorateNode = useCallback((n) => {
+    // Migrate legacy menu options (string[]) to {label}[]
+    let cfg = n.data?.config || {};
+    if (n.data?.nodeType === 'menu' && Array.isArray(cfg.options)) {
+      cfg = {
+        ...cfg,
+        options: cfg.options.map(o => typeof o === 'string' ? { label: o } : o),
+      };
+    }
+    return {
+      ...n,
+      type: 'flow',
+      data: { ...n.data, config: cfg, onDelete: deleteNode },
+    };
+  }, [deleteNode]);
 
   const onNodesChange = useCallback(changes => setNodes(ns => applyNodeChanges(changes, ns)), []);
   const onEdgesChange = useCallback(changes => setEdges(es => applyEdgeChanges(changes, es)), []);
@@ -291,7 +333,12 @@ function buildSummary(nodeType, config) {
   if (!config) return '';
   switch (nodeType) {
     case 'message': return (config.text || '').slice(0, 100) || 'Mensagem vazia';
-    case 'menu':    return `${(config.options || []).length} opcoes`;
+    case 'menu':    {
+      const opts = config.options || [];
+      const labels = opts.map(o => typeof o === 'string' ? o : (o?.label || '')).filter(Boolean);
+      if (opts.length === 0) return 'Sem opcoes';
+      return `${opts.length} opcoes: ${labels.slice(0, 2).join(', ')}${labels.length > 2 ? '...' : ''}`;
+    }
     case 'delay':   return `Aguarda ${config.seconds || 0}s`;
     case 'ticket':  return `Fila: ${config.queue_name || 'nao definida'}`;
     case 'tag':     return `${config.action || 'add'} #${config.tag_name || ''}`;
@@ -351,16 +398,37 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, o
           )}
           {node.data?.nodeType === 'menu' && (
             <div className="space-y-2">
-              <div><label className="text-[10px] font-bold uppercase text-slate-400">Pergunta</label>
-                <textarea value={config.question || ''} onChange={e => setConfig({...config, question: e.target.value})} rows={2} className="input-field text-sm" /></div>
-              <label className="text-[10px] font-bold uppercase text-slate-400">Opcoes</label>
-              {(config.options || []).map((o, i) => (
-                <div key={i} className="flex items-center gap-1">
-                  <input value={o} onChange={e => { const x = [...config.options]; x[i] = e.target.value; setConfig({...config, options: x}); }} className="input-field text-sm flex-1" placeholder={`Opcao ${i+1}`} />
-                  <button onClick={() => setConfig({...config, options: config.options.filter((_, idx) => idx !== i)})} className="p-1 rounded text-red-500 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
-                </div>
-              ))}
-              <button onClick={() => setConfig({...config, options: [...(config.options || []), '']})} className="btn-secondary text-xs w-full">+ Adicionar opcao</button>
+              <div><label className="text-[10px] font-bold uppercase text-slate-400">Pergunta enviada ao cliente</label>
+                <textarea value={config.question || ''} onChange={e => setConfig({...config, question: e.target.value})} rows={2} className="input-field text-sm" placeholder="Ex: Como posso ajudar?" /></div>
+              <div className="bg-violet-50 border border-violet-200 rounded p-2 text-[11px] text-violet-800">
+                💡 Cada opção vira uma <strong>saída separada</strong> no nó. Conecte cada saída ao próximo nó (mensagem, fila, etc.) para criar caminhos diferentes.
+              </div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Opcoes (a pessoa digita 1, 2, 3...)</label>
+              {(config.options || []).map((o, i) => {
+                const opt = typeof o === 'string' ? { label: o } : o;
+                return (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <span className="w-5 h-5 rounded-full bg-violet-500 text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0">{i + 1}</span>
+                    <input
+                      value={opt.label || ''}
+                      onChange={e => {
+                        const x = [...(config.options || [])];
+                        x[i] = { ...opt, label: e.target.value };
+                        setConfig({...config, options: x});
+                      }}
+                      className="input-field text-sm flex-1"
+                      placeholder={`Texto da opcao ${i + 1}`}
+                      data-testid={`menu-option-${i}`}
+                    />
+                    <button onClick={() => setConfig({...config, options: (config.options || []).filter((_, idx) => idx !== i)})} className="p-1 rounded text-red-500 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                );
+              })}
+              <button
+                onClick={() => setConfig({...config, options: [...(config.options || []), { label: '' }]})}
+                className="btn-secondary text-xs w-full"
+                data-testid="add-menu-option"
+              >+ Adicionar opcao</button>
             </div>
           )}
           {node.data?.nodeType === 'delay' && (

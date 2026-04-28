@@ -43,6 +43,9 @@ class ClientCreate(BaseModel):
     email: Optional[str] = None
     birth_date: Optional[str] = None  # YYYY-MM-DD
     notes: Optional[str] = None
+    person_type: Optional[str] = "fisica"  # fisica | juridica
+    cpf: Optional[str] = None
+    cnpj: Optional[str] = None
 
 def _calc_sub_status(sub: dict) -> str:
     """Determine if subscription is active or expired based on end_date and credits."""
@@ -1238,6 +1241,9 @@ async def create_client(
         "email": data.email,
         "birth_date": data.birth_date,
         "notes": data.notes,
+        "person_type": data.person_type or "fisica",
+        "cpf": data.cpf,
+        "cnpj": data.cnpj,
         "total_appointments": 0,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
