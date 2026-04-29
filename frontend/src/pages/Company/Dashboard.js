@@ -5558,7 +5558,7 @@ const UsuariosPage = () => {
   const handleSave = async (form) => {
     try {
       if (editing) {
-        const payload = { name: form.name, email: form.email, permission_profile_id: form.permission_profile_id || null, professional_id: form.professional_id || null };
+        const payload = { name: form.name, email: form.email, permission_profile_id: form.permission_profile_id || null, professional_id: form.professional_id || null, connection_ids: form.connection_ids || [] };
         if (form.password) payload.password = form.password;
         await schedulingAPI.updateCompanyUser(editing.id, payload);
         toast.success('Usuario atualizado!');
@@ -5628,7 +5628,18 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
     password: '',
     permission_profile_id: user?.permission_profile_id || '',
     professional_id: user?.professional_id || '',
+    connection_ids: user?.connection_ids || [],
   });
+  const [connections, setConnections] = useState([]);
+  useEffect(() => {
+    channelsAPI.getConnections().then(r => setConnections(r.data || [])).catch(() => {});
+  }, []);
+  const toggleConn = (id) => {
+    setForm(f => f.connection_ids.includes(id)
+      ? { ...f, connection_ids: f.connection_ids.filter(x => x !== id) }
+      : { ...f, connection_ids: [...f.connection_ids, id] }
+    );
+  };
   return (
     <div className="space-y-3">
       <div>
@@ -5649,6 +5660,7 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
           <option value="">Sem perfil (acesso limitado)</option>
           {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+        <p className="text-[10px] text-slate-400 mt-1">O perfil libera apenas as funcionalidades habilitadas para o nicho de negocio da empresa.</p>
       </div>
       <div>
         <label className="text-xs font-bold uppercase text-slate-400">Vincular a Profissional (opcional)</label>
@@ -5656,6 +5668,39 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
           <option value="">Nao vinculado</option>
           {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+      </div>
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400 flex items-center justify-between">
+          <span>Conexoes vinculadas (WhatsApp)</span>
+          {form.connection_ids.length > 0 && <span className="text-[10px] text-slate-500 normal-case">{form.connection_ids.length} selecionada(s)</span>}
+        </label>
+        {connections.length === 0 ? (
+          <p className="text-xs text-slate-400 mt-2 italic">Nenhuma conexao cadastrada ainda.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-1.5 p-2 border border-slate-200 rounded-lg max-h-40 overflow-y-auto bg-slate-50">
+            {connections.map(c => {
+              const checked = form.connection_ids.includes(c.id);
+              return (
+                <label
+                  key={c.id}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded-md border cursor-pointer text-xs transition-all ${
+                    checked ? 'bg-primary text-white border-primary' : 'bg-white border-slate-200 hover:border-primary/40 text-slate-700'
+                  }`}
+                  data-testid={`user-conn-${c.id}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleConn(c.id)}
+                    className="rounded"
+                  />
+                  <span className="truncate">{c.name}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        <p className="text-[10px] text-slate-400 mt-1">Deixe em branco para que o usuario tenha acesso a todas as conexoes.</p>
       </div>
       <div className="flex justify-end">
         <button onClick={() => form.name && form.email && onSave(form)} className="btn-primary text-sm" data-testid="save-user-btn">Salvar</button>

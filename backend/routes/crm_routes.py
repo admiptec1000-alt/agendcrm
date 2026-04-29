@@ -112,8 +112,14 @@ async def update_ticket(
     ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket não encontrado")
-    
-    update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+
+    raw = data.model_dump(exclude_unset=True)
+    # Fields where an explicit null means "clear this value" (not "ignore").
+    CLEARABLE_FIELDS = {"kanban_column_id", "queue_id", "connection_id", "assigned_to"}
+    update_data = {
+        k: v for k, v in raw.items()
+        if v is not None or k in CLEARABLE_FIELDS
+    }
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     if update_data:

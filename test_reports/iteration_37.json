@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 37 — Backend pytest 9/9 passing. Validated POST/PUT/GET /api/scheduling/company-users with connection_ids: persisted with values, defaults to [] when omitted, can be reassigned, AND empty list [] correctly CLEARS the field (not silently dropped — confirmed in DB and response). /api/auth/login user payload includes user.connection_ids. Permission-profile regression OK: /api/scheduling/all-features returns only features (a) enabled in company.features (business_type-driven) OR (b) permission_only_keys (edit_appointment, edit_appointment_price, own_appointments_only). Iter36 regression OK: PUT /api/channels/connections/{id} rename persists, PUT /api/crm/tickets/{id} kanban_column_id set/change persists.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_37.py",
+    "/app/test_reports/pytest/iteration_37.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "scheduling_routes.CompanyUserCreate.connection_ids has default `[]` and CompanyUserUpdate.connection_ids is Optional[List[str]] = None — correct contract for sparse PATCH-like updates.",
+    "create_company_user persists connection_ids (line ~924) using `data.connection_ids or []` which is safe.",
+    "update_company_user uses `if v is not None` to filter the dump (line ~943). This correctly preserves empty list `[]` (clearing) while ignoring fields that were not sent — matches the contract. NOTE: Same predicate on /api/crm/tickets PUT still strips explicit nulls for kanban_column_id (iter36 HIGH bug, separate file). Not regressed here.",
+    "list_company_users projects out password and _id (line ~903) — safe.",
+    "/api/auth/login user_data excludes only password (line ~98 auth_routes.py) — connection_ids flows through automatically. Verified.",
+    "list_all_features (scheduling_routes ~860) correctly intersects company.features (enabled) with ALL_SYSTEM_FEATURES catalog and always adds permission_only_keys. business_type-driven access control regression: OK."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_37.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "skipped per request"},
+  "test_credentials": "CRM admin: crm@test.com / crm123 (subdomain crmtest)",
+  "seed_data_creation": "Ephemeral TEST_iter37_* company_users created and cleaned up via module-scope teardown fixture (verified: 0 leftover docs in company_users). One channel_connections rename test restores original name in finally. One tickets test creates+deletes a temp ticket.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Channel connections collection is named `channel_connections` (NOT `connections`). Subdomain for CRM test login is `crmtest`. CRM company has `informativos` enabled in company.features but it is not in ALL_SYSTEM_FEATURES catalog — that is by design (intersection filter); test should not assert reverse containment.",
+  "rca of the issue": "No issues found this iteration. Iter36's PUT /api/crm/tickets clear-with-null bug (kanban_column_id) is NOT yet fixed in code (still uses `if v is not None` filter at /app/backend/routes/crm_routes.py:116) but is OUT OF SCOPE for iter37; current set test (set + change) still passes since those are non-null values."
+}

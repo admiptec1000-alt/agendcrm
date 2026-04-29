@@ -885,6 +885,7 @@ class CompanyUserCreate(BaseModel):
     password: str
     permission_profile_id: Optional[str] = None
     professional_id: Optional[str] = None
+    connection_ids: List[str] = []  # WhatsApp connections this user can act on
 
 class CompanyUserUpdate(BaseModel):
     name: Optional[str] = None
@@ -892,6 +893,7 @@ class CompanyUserUpdate(BaseModel):
     password: Optional[str] = None
     permission_profile_id: Optional[str] = None
     professional_id: Optional[str] = None
+    connection_ids: Optional[List[str]] = None
 
 @router.get("/company-users")
 async def list_company_users(
@@ -919,6 +921,7 @@ async def create_company_user(
         "role": "user",
         "permission_profile_id": data.permission_profile_id,
         "professional_id": data.professional_id,
+        "connection_ids": data.connection_ids or [],
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.company_users.insert_one(new_user)
@@ -934,7 +937,10 @@ async def update_company_user(
     existing = await db.company_users.find_one({"id": user_id, "company_id": user["company_id"]})
     if not existing:
         raise HTTPException(status_code=404, detail="Usuario nao encontrado")
-    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    raw = data.model_dump(exclude_unset=True)
+    # Allow empty list to clear connection assignments (otherwise the strip
+    # below would only remove None — empty lists go through fine).
+    update = {k: v for k, v in raw.items() if v is not None}
     if "password" in update and update["password"]:
         update["password"] = get_password_hash(update["password"])
     if update:
