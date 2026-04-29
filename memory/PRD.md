@@ -11,6 +11,13 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-29 — Vincular usuario a uma ou mais conexões WhatsApp + reforço do escopo do Perfil de Acesso
+- **CompanyUser ganhou `connection_ids: List[str]`** — POST/PUT/GET `/api/scheduling/company-users` aceitam e retornam o campo. Lista vazia `[]` LIMPA o vínculo (não é silenciosamente ignorada). Default `[]` quando omitido.
+- **`/api/auth/login` propaga `user.connection_ids`** automaticamente para o frontend.
+- **Frontend UserForm**: novo grid de checkboxes com todas as conexões da empresa, contador "X selecionada(s)" e hint explicando que vazio = acesso a todas as conexões.
+- **Hint de Perfil de Acesso** no form do usuário: "O perfil libera apenas as funcionalidades habilitadas para o nicho de negócio da empresa." Verificado que `/api/scheduling/all-features` continua filtrando pelo `company.features` (que vem do `business_type`) — comportamento já correto desde iter34/35.
+- **Testes (iter37)**: 9/9 backend PASS — incluindo regressão completa de iter36 (rename de conexão + kanban_column_id set/clear).
+
 ### 2026-04-29 — Renomear conexão WhatsApp + chips de contexto na lista de Atendimentos
 - **PUT /api/channels/connections/{id}**: novo endpoint para renomear/atualizar conexões (aceita `name`, `status`). Frontend ganhou `EditableConnectionName` — clicar no nome do card em Conexões transforma em input, Enter ou blur salva.
 - **Cards da lista de Atendimentos** agora exibem chips de **Conexão** (verde), **Fila** (azul), **Responsável** (escuro) e **Etapa do Kanban** (cor da column).
