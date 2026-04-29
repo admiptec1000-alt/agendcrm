@@ -3232,6 +3232,58 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
 const STATUS_LABEL = { connected: 'Conectado', disconnected: 'Desconectado', connecting: 'Conectando...', waiting_qr: 'Aguardando QR Code' };
 const STATUS_COLOR = { connected: 'bg-emerald-500', disconnected: 'bg-slate-400', connecting: 'bg-amber-500 animate-pulse', waiting_qr: 'bg-blue-500 animate-pulse' };
 
+const EditableConnectionName = ({ conn, onSaved }) => {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(conn.name || '');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    const trimmed = (value || '').trim();
+    if (!trimmed || trimmed === conn.name) { setEditing(false); setValue(conn.name || ''); return; }
+    setSaving(true);
+    try {
+      await channelsAPI.updateConnection(conn.id, { name: trimmed });
+      toast.success('Nome atualizado');
+      setEditing(false);
+      onSaved && onSaved();
+    } catch {
+      toast.error('Falha ao atualizar');
+    } finally { setSaving(false); }
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setEditing(false); setValue(conn.name || ''); } }}
+          onBlur={save}
+          disabled={saving}
+          className="text-sm font-semibold text-slate-900 bg-white border border-primary rounded px-2 py-0.5 outline-none w-40"
+          data-testid={`conn-name-input-${conn.id}`}
+          maxLength={60}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="group flex items-center gap-1 text-sm font-semibold text-slate-900 hover:text-primary transition-colors"
+      title="Clique para renomear"
+      data-testid={`conn-name-${conn.id}`}
+    >
+      <span>{conn.name}</span>
+      <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-60 transition-opacity" />
+    </button>
+  );
+};
+
+
 const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) => {
   const [qrData, setQrData] = useState(null);
   const [polling, setPolling] = useState(false);
@@ -3325,7 +3377,7 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
             <Phone className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-slate-900">{conn.name}</p>
+            <EditableConnectionName conn={conn} onSaved={onRefresh} />
             <div className="flex items-center gap-2 mt-0.5">
               <div className={`w-2 h-2 rounded-full ${STATUS_COLOR[conn.status] || 'bg-slate-400'}`} />
               <span className="text-xs text-slate-500">{STATUS_LABEL[conn.status] || conn.status}</span>

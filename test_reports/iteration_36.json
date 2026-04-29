@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 36 — Backend pytest 9/10 passing. Verified PUT /api/channels/connections/{id} (rename persists, 404 on unknown id, 400 on empty payload, status field still works); PUT /api/crm/tickets/{id} accepts kanban_column_id (set, change); TicketUpdate.kanban_column_id is Optional[str]; GET /api/crm/tickets returns connection_id/queue_id/assigned_to/kanban_column_id; iter35 reports/tickets regression OK. ONE FAILURE: PUT /api/crm/tickets/{id} with kanban_column_id=null does NOT clear the field (stripped by `if v is not None` filter in update_ticket). Frontend visually confirmed Kanban chip rendering on cards via Atendimentos page screenshot; nav selector issues prevented automated end-to-end UI flow but components and code paths reviewed.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PUT /api/crm/tickets/{id}", "issue": "Sending {\"kanban_column_id\": null} does NOT clear the field. update_ticket in /app/backend/routes/crm_routes.py line 116 strips None via `if v is not None`. The frontend KanbanColumnPicker sends null when user picks 'Sem etapa', so the clear UX silently fails (toast 'Etapa atualizada' shows but DB remains unchanged).", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Atendimentos -> KanbanColumnPicker clear (Sem etapa)", "issue": "UI calls crmAPI.updateTicket(id, {kanban_column_id: null}) which does not persist due to the backend bug above; subsequent GET will still show the old column.", "affected_selectors": ["[data-testid^=\"kanban-select-\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_36.py",
+    "/app/test_reports/pytest/iteration_36.xml"
+  ],
+  "action_items": [
+    "Fix update_ticket in /app/backend/routes/crm_routes.py: stop stripping None when the field is explicitly present in payload. Replace `update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}` with `update_data = data.model_dump(exclude_unset=True)` so explicit nulls go through (or branch only kanban_column_id). This is required by the review request: 'PUT /api/crm/tickets/{id} aceita kanban_column_id: null (clear)'.",
+    "(Optional) For consistency with the existing PUT /api/crm/tickets/{ticket_id}/kanban-column endpoint that handles native columns by setting None, decide which path the frontend should standardize on; today the front sends null via the generic update endpoint."
+  ],
+  "critical_code_review_comments": [
+    "channels_routes.update_connection correctly uses {'id': conn_id, 'company_id': user['company_id']} match for tenant isolation; returns full doc with _id excluded; 404 on miss; 400 when payload empty after None-filter — all confirmed by tests.",
+    "crm_routes.update_ticket strips None values, defeating the intended 'clear via null' contract for kanban_column_id (HIGH bug). The same pattern affects every Optional[str|float|...] field in TicketUpdate (assigned_to, queue_id, connection_id, value, etc.) — none can be cleared via this endpoint today.",
+    "Frontend KanbanColumnPicker uses native <select> with opacity:0 absolute overlay and stopPropagation on both the wrapping span and the select onClick — the stopPropagation pattern is correct so the card click handler should not fire (verified by code).",
+    "EditableConnectionName saves on Enter and on blur (onBlur=save). Blur-then-Enter could double-fire save() but the implementation early-returns when trimmed===conn.name, so it's safe. Toast 'Nome atualizado' fires only on success.",
+    "GET /api/crm/tickets returns raw docs with {_id:0} projection — confirmed includes connection_id/queue_id/assigned_to/kanban_column_id when populated (verified by test_list_includes_relevant_fields).",
+    "ConnectionUpdate model still accepts {name, status} — no breaking change (verified)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_36.py (NEW)"
+  ],
+  "success_rate": {"backend": "90% (9/10)", "frontend": "partial — components rendered & visible in DOM (Kanban chips on cards confirmed via screenshot); end-to-end click-flow not completed due to sidebar selector resolution issues (Loop Prevention triggered after 3 attempts)"},
+  "test_credentials": "CRM admin: crm@test.com / crm123 at /crmtest/login (URL after login is /crmtest/painel, not /dashboard)",
+  "seed_data_creation": "Ephemeral: TEST_kanban_tick_*, TEST_tick36_*, TEST_conn36_*, TEST_queue36_* — all cleaned up in teardown. UI test created/deleted TEST_R_* connections via the rename flow (and restores original name in teardown).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Sidebar CRM links use no accents: 'Atendimentos', 'Conexoes', 'Configuracoes', 'Relatorios', 'Usuarios', 'Filas'. After login, URL pattern is /<subdomain>/painel (NOT /dashboard). Use page.locator('a:has-text(\"Conexoes\")').first.click() or query_selector_all('nav a') and pick by text — get_by_role(link) sometimes fails because NavLink renders as <a> but Lucide icons inside affect the accessible name. The Atendimentos page is the default landing for CRM and renders the Kanban chip correctly out-of-the-box (screenshot in /app/.screenshots/conn_page.png).",
+  "rca of the issue": "PUT /api/crm/tickets/{id} clear-with-null bug — Root cause: /app/backend/routes/crm_routes.py:116 update_ticket does `update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}`. When the request body is {\"kanban_column_id\": null}, exclude_unset=True keeps the key (it WAS set), but the `if v is not None` filter then drops it. Result: $set is empty for that field, DB unchanged. Reproduction: 1) PUT /api/crm/tickets/{tid} {\"kanban_column_id\": \"col1\"} -> persists. 2) PUT /api/crm/tickets/{tid} {\"kanban_column_id\": null} -> response still shows col1; DB still col1. Fix: drop the `if v is not None` predicate, OR add a special-case to allow None for kanban_column_id (and any other field where clearing is a valid operation). Side-effect: doing the simple fix exposes the same clear-semantics for all Optional fields in TicketUpdate, which may be desirable; verify existing UI flows that PUT partial updates still send only the fields they want to change (they should — frontend uses sparse payloads)."
+}

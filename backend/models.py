@@ -154,6 +154,7 @@ class TicketUpdate(BaseModel):
     value: Optional[float] = None
     queue_id: Optional[str] = None
     connection_id: Optional[str] = None
+    kanban_column_id: Optional[str] = None
 
 class MessageCreate(BaseModel):
     content: str

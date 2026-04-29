@@ -600,6 +600,24 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     return {"ok": True}
 
 
+@router.put("/connections/{conn_id}")
+async def update_connection(
+    conn_id: str,
+    data: ConnectionUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if not update:
+        raise HTTPException(status_code=400, detail="Nada para atualizar")
+    result = await db.channel_connections.update_one(
+        {"id": conn_id, "company_id": user["company_id"]}, {"$set": update}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    return await db.channel_connections.find_one({"id": conn_id}, {"_id": 0})
+
+
 @router.delete("/connections/{conn_id}")
 async def delete_connection(
     conn_id: str,

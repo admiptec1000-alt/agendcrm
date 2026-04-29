@@ -30,6 +30,45 @@ const formatTime = (isoDate) => {
 
 const formatBRL = (v) => `R$ ${(Number(v) || 0).toFixed(2).replace('.', ',')}`;
 
+// Small inline dropdown to change kanban column from the ticket list item.
+// Uses native <select> for reliability (works on mobile, no popper dependency).
+const KanbanColumnPicker = ({ ticket, columns, onChange }) => {
+  const current = columns.find(c => c.id === ticket.kanban_column_id);
+  // Fallback label when no column is set
+  const hasColumns = columns && columns.length > 0;
+  if (!hasColumns) return null;
+  const label = current?.title || current?.name || 'Etapa';
+  const color = current?.color || '#6366F1';
+  return (
+    <span
+      className="relative inline-flex items-center"
+      data-testid={`kanban-picker-${ticket.id}`}
+      onClick={e => e.stopPropagation()}
+    >
+      <span
+        className="text-[9px] px-1.5 py-0.5 rounded font-bold truncate max-w-[110px]"
+        style={{ background: `${color}1A`, color }}
+        title={current ? `Kanban: ${label}` : 'Definir etapa do Kanban'}
+      >
+        {current ? label : 'Kanban'}
+      </span>
+      <select
+        value={ticket.kanban_column_id || ''}
+        onChange={e => onChange(e.target.value || null)}
+        onClick={e => e.stopPropagation()}
+        className="absolute inset-0 opacity-0 cursor-pointer"
+        aria-label="Etapa do Kanban"
+        data-testid={`kanban-select-${ticket.id}`}
+      >
+        <option value="">Sem etapa</option>
+        {columns.map(c => (
+          <option key={c.id} value={c.id}>{c.title || c.name}</option>
+        ))}
+      </select>
+    </span>
+  );
+};
+
 const AtendimentosPage = () => {
   const { user } = useAuth();
   const [tickets, setTickets] = useState([]);
@@ -51,6 +90,7 @@ const AtendimentosPage = () => {
   const [connections, setConnections] = useState([]);
   const [users, setUsers] = useState([]);
   const [queues, setQueues] = useState([]);
+  const [kanbanColumns, setKanbanColumns] = useState([]);
   const [messageInput, setMessageInput] = useState('');
   const [allTags, setAllTags] = useState([]);
   const [presenceMap, setPresenceMap] = useState({}); // phone -> {presence, updated_at}
@@ -94,8 +134,8 @@ const AtendimentosPage = () => {
 
   const loadAux = async () => {
     try {
-      const [c, q] = await Promise.all([channelsAPI.getConnections(), crmAPI.listQueues()]);
-      setConnections(c.data); setQueues(q.data);
+      const [c, q, k] = await Promise.all([channelsAPI.getConnections(), crmAPI.listQueues(), crmAPI.listKanbanColumns()]);
+      setConnections(c.data); setQueues(q.data); setKanbanColumns(k.data || []);
       try { const u = await schedulingAPI.getCompanyUsers(); setUsers(u.data); }
       catch (_) { setUsers([]); }
     } catch (e) {}
@@ -421,6 +461,40 @@ const AtendimentosPage = () => {
                     {lastMsg.content}
                   </p>
                   <div className="flex items-center gap-1 flex-wrap">
+                    {/* Conexao */}
+                    {ticket.connection_id && (() => {
+                      const c = connections.find(x => x.id === ticket.connection_id);
+                      return c ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold truncate max-w-[80px]" title={`Conexao: ${c.name}`}>{c.name}</span>
+                      ) : null;
+                    })()}
+                    {/* Fila */}
+                    {ticket.queue_id && (() => {
+                      const q = queues.find(x => x.id === ticket.queue_id);
+                      return q ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-bold truncate max-w-[80px]" title={`Fila: ${q.name}`}>{q.name}</span>
+                      ) : null;
+                    })()}
+                    {/* Responsavel */}
+                    {ticket.assigned_to && (() => {
+                      const u = users.find(x => x.id === ticket.assigned_to);
+                      return u ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-white font-bold truncate max-w-[90px]" title={`Responsavel: ${u.name}`}>{u.name}</span>
+                      ) : null;
+                    })()}
+                    {/* Kanban column - clicable */}
+                    <KanbanColumnPicker
+                      ticket={ticket}
+                      columns={kanbanColumns}
+                      onChange={async (newCol) => {
+                        try {
+                          await crmAPI.updateTicket(ticket.id, { kanban_column_id: newCol });
+                          toast.success('Etapa atualizada');
+                          loadData();
+                        } catch { toast.error('Falha ao atualizar etapa'); }
+                      }}
+                    />
+                    {/* Tags */}
                     {ticket.tags?.slice(0, 2).map((tag, i) => {
                       const td = allTags.find(t => t.name === tag);
                       return (
