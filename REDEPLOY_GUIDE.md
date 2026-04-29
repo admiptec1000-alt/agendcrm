@@ -1,5 +1,22 @@
 # Redeploy do Microserviço WhatsApp (Render)
 
+## 🔴 PENDENTE — v2.1.2 (fix crítico @lid)
+
+**O que o fix resolve:** quando o cliente responde do WhatsApp Web/Desktop, o Baileys entrega `remoteJid = xxx@lid` (ID interno do dispositivo vinculado). A versão antiga (`v2.1.1` rodando em produção hoje) apenas retira o sufixo `@lid` e gera um "número fantasma" (ex: `250615737372785`). Isso cria um ticket duplicado no CRM e, quando você responde, a mensagem não chega ao cliente porque esse número fantasma não existe no WhatsApp.
+
+**v2.1.2 corrige:**
+- Resolução do `@lid` para o número real via `msg.key.senderPn` / `participantPn` / `remoteJidAlt` / `signalRepository.lidMapping.getPNForLID` (fallback em cascata)
+- Remoção de uma declaração duplicada de `const phone` que sobrescrevia o `realJid` já resolvido — bug que causava erro de sintaxe + perda do fix no envio do webhook
+
+**Como validar pós-deploy:**
+```bash
+curl https://agendcrm.onrender.com/version
+# Deve retornar:  "version":"v2.1.2"
+#                 "features":{...,"lid_senderpn_resolver":true,"phone_shadow_fix":true}
+```
+
+---
+
 ## Por que redeploy é necessário?
 
 O microserviço Node.js em `/app/whatsapp-service/index.js` foi atualizado com **fixes críticos**:
@@ -11,6 +28,7 @@ O microserviço Node.js em `/app/whatsapp-service/index.js` foi atualizado com *
 5. **Webhook `messages.update`** — para duplo check azul (mensagem lida)
 6. **Conversão `messageTimestamp` Long → Number**
 7. **Captura de eventos `notify` E `append`** (não só `notify`)
+8. **[v2.1.2] Resolução de @lid (Linked Device JID)** — respostas do WhatsApp Web/Desktop não criam mais ticket fantasma
 
 Sem o redeploy, NENHUM desses fixes funciona em produção.
 
@@ -24,7 +42,7 @@ Se você usa "Save to Github" no Emergent, isso já foi feito. Caso contrário:
 ```bash
 cd /app
 git add whatsapp-service/index.js
-git commit -m "fix: anti-blank messages, presence, ack receipts, contacts import"
+git commit -m "fix(whatsapp): v2.1.2 — @lid resolver + shadow phone const fix"
 git push origin main
 ```
 

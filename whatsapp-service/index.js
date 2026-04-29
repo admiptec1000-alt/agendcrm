@@ -465,15 +465,15 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.1',
+    version: 'v2.1.2',
   });
 });
 
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.1',
-    built_at: '2026-04-27',
+    version: 'v2.1.2',
+    built_at: '2026-04-29',
     features: {
       sent_message_store: true,       // anti blank message fix
       multi_message_types: true,      // captions, buttons, lists
@@ -485,6 +485,8 @@ app.get('/version', (req, res) => {
       jid_normalization: true,        // @s.whatsapp.net vs @lid
       crash_guard: true,              // uncaughtException handler (v2.1.1)
       conflict_backoff: true,         // slow retry on stream:error conflict (v2.1.1)
+      lid_senderpn_resolver: true,    // resolve @lid via senderPn/participantPn/remoteJidAlt/lidMapping (v2.1.2)
+      phone_shadow_fix: true,         // removed duplicate `const phone` that reverted realJid (v2.1.2)
     },
     fastapi_url: FASTAPI_URL,
   });
