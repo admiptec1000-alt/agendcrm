@@ -169,6 +169,29 @@ def init_object_storage():
         logger.warning(f"Failed to initialize storage: {e}")
 
 
+async def backfill_feature_keys(db):
+    """Ensure newly-added feature keys are present on existing CRM/both tenants
+    and business_types. Idempotent — only adds when absent.
+
+    We key off the presence of 'atendimentos' (the core CRM feature) rather
+    than plan_type, because plan_type values vary (starter/pro/...) and
+    business_types may not have base_type populated on older installs.
+    """
+    # Business types that already have 'atendimentos' should also have the new
+    # relatorio_atendimentos feature.
+    await db.business_types.update_many(
+        {"features.feature_key": "atendimentos",
+         "features.feature_key": {"$ne": "relatorio_atendimentos"}},
+        {"$addToSet": {"features": {"feature_key": "relatorio_atendimentos", "enabled": True}}}
+    )
+    # Same for companies
+    await db.companies.update_many(
+        {"features": {"$elemMatch": {"feature_key": "atendimentos"}},
+         "features.feature_key": {"$ne": "relatorio_atendimentos"}},
+        {"$addToSet": {"features": {"feature_key": "relatorio_atendimentos", "enabled": True}}}
+    )
+
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting AgentCRM & Booking System...")
@@ -177,6 +200,7 @@ async def startup_event():
     await seed_super_admin(db)
     await seed_business_types(db)
     await backfill_ticket_numbers(db)
+    await backfill_feature_keys(db)
     init_object_storage()
     # Start WhatsApp keep-alive background loop (Render free tier wake-up)
     try:
