@@ -46,6 +46,11 @@ class ClientCreate(BaseModel):
     person_type: Optional[str] = "fisica"  # fisica | juridica
     cpf: Optional[str] = None
     cnpj: Optional[str] = None
+    company_name: Optional[str] = None  # razão social / nome da empresa (PJ)
+    cep: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None  # UF (2 letras)
 
 def _calc_sub_status(sub: dict) -> str:
     """Determine if subscription is active or expired based on end_date and credits."""
@@ -817,6 +822,7 @@ from auth import get_password_hash, verify_password
 ALL_SYSTEM_FEATURES = [
     {"feature_key": "dashboard", "label": "Inicio", "category": "Principal"},
     {"feature_key": "atendimentos", "label": "Atendimentos", "category": "CRM"},
+    {"feature_key": "relatorio_atendimentos", "label": "Relatorio de Atendimentos", "category": "CRM"},
     {"feature_key": "respostas_rapidas", "label": "Respostas Rapidas", "category": "CRM"},
     {"feature_key": "kanban", "label": "Kanban", "category": "CRM"},
     {"feature_key": "contatos", "label": "Contatos", "category": "CRM"},
@@ -1257,6 +1263,11 @@ async def create_client(
         "person_type": data.person_type or "fisica",
         "cpf": data.cpf,
         "cnpj": data.cnpj,
+        "company_name": data.company_name,
+        "cep": data.cep,
+        "address": data.address,
+        "city": data.city,
+        "state": data.state,
         "total_appointments": 0,
         "created_at": datetime.now(timezone.utc).isoformat()
     }

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { crmAPI, schedulingAPI, uploadAPI, reportsAPI, notificationsAPI, channelsAPI } from '../../services/api';
+import api from '../../services/api';
 import { useCompanyBranding } from '../../hooks/useCompanyBranding';
 import { toast } from 'sonner';
 import {
@@ -10,7 +11,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -32,6 +33,7 @@ const ICON_MAP = {
 const FEATURE_META = {
   dashboard:          { icon: 'LayoutDashboard', label: 'Início', group: 'Principal' },
   atendimentos:       { icon: 'Headphones',      label: 'Atendimentos', group: 'CRM' },
+  relatorio_atendimentos: { icon: 'BarChart3', label: 'Relatorios', group: 'CRM' },
   respostas_rapidas:  { icon: 'Zap',             label: 'Respostas Rapidas', group: 'CRM' },
   kanban:             { icon: 'Columns3',         label: 'Kanban', group: 'CRM' },
   contatos:           { icon: 'Users',            label: 'Clientes / Leads', group: 'CRM' },
@@ -600,6 +602,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'dashboard': return <DashboardPage setActivePage={setActivePage} menuGroups={menuGroups} />;
     case 'kanban': return <KanbanPage setActivePage={setActivePage} />;
     case 'atendimentos': return <AtendimentosPage />;
+    case 'relatorio_atendimentos': return <TicketsReportPage />;
     case 'contatos': return <ClientsPage />;
     case 'respostas_rapidas': return <QuickResponsesPage />;
     case 'campanhas': return <CampaignsPage />;
@@ -1214,8 +1217,14 @@ const ClientForm = ({ client, onSave }) => {
     person_type: client?.person_type || 'fisica',
     cpf: client?.cpf || '',
     cnpj: client?.cnpj || '',
+    company_name: client?.company_name || '',
+    cep: client?.cep || '',
+    address: client?.address || '',
+    city: client?.city || '',
+    state: client?.state || '',
     notes: client?.notes || ''
   });
+  const [cepLoading, setCepLoading] = useState(false);
 
   const formatPhone = (v) => {
     const digits = v.replace(/\D/g, '').slice(0, 11);
@@ -1240,6 +1249,32 @@ const ClientForm = ({ client, onSave }) => {
     if (d.length <= 8) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5)}`;
     if (d.length <= 12) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8)}`;
     return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
+  };
+
+  const formatCEP = (v) => {
+    const d = v.replace(/\D/g, '').slice(0, 8);
+    if (d.length <= 5) return d;
+    return `${d.slice(0,5)}-${d.slice(5)}`;
+  };
+
+  const lookupCep = async (cepValue) => {
+    const raw = cepValue.replace(/\D/g, '');
+    if (raw.length !== 8) return;
+    try {
+      setCepLoading(true);
+      const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
+      const j = await res.json();
+      if (!j.erro) {
+        setForm(f => ({
+          ...f,
+          address: [j.logradouro, j.bairro].filter(Boolean).join(' - ') || f.address,
+          city: j.localidade || f.city,
+          state: (j.uf || f.state || '').toUpperCase(),
+        }));
+      }
+    } catch { /* ignore — user can still fill manually */ } finally {
+      setCepLoading(false);
+    }
   };
 
   const age = useMemo(() => {
@@ -1342,17 +1377,29 @@ const ClientForm = ({ client, onSave }) => {
               </div>
             </>
           ) : (
-            <div className="sm:col-span-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">CNPJ</label>
-              <input
-                value={form.cnpj}
-                onChange={e => setForm({...form, cnpj: formatCNPJ(e.target.value)})}
-                placeholder="00.000.000/0000-00"
-                className="input-field"
-                data-testid="client-cnpj-input"
-                inputMode="numeric"
-              />
-            </div>
+            <>
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Empresa (Razao Social)</label>
+                <input
+                  value={form.company_name}
+                  onChange={e => setForm({...form, company_name: e.target.value})}
+                  placeholder="Nome da empresa"
+                  className="input-field"
+                  data-testid="client-company-input"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block mb-1">CNPJ</label>
+                <input
+                  value={form.cnpj}
+                  onChange={e => setForm({...form, cnpj: formatCNPJ(e.target.value)})}
+                  placeholder="00.000.000/0000-00"
+                  className="input-field"
+                  data-testid="client-cnpj-input"
+                  inputMode="numeric"
+                />
+              </div>
+            </>
           )}
         </div>
         <div className="relative">
@@ -1366,6 +1413,51 @@ const ClientForm = ({ client, onSave }) => {
             data-testid="client-email-input"
           />
         </div>
+      </div>
+
+      {/* Endereço */}
+      <div className="space-y-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Endereco</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="relative">
+            <input
+              value={form.cep}
+              onChange={e => {
+                const val = formatCEP(e.target.value);
+                setForm({...form, cep: val});
+                if (val.replace(/\D/g, '').length === 8) lookupCep(val);
+              }}
+              placeholder="CEP"
+              className="input-field"
+              data-testid="client-cep-input"
+              inputMode="numeric"
+              maxLength={9}
+            />
+            {cepLoading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">buscando...</span>}
+          </div>
+          <input
+            value={form.city}
+            onChange={e => setForm({...form, city: e.target.value})}
+            placeholder="Cidade"
+            className="input-field sm:col-span-1"
+            data-testid="client-city-input"
+          />
+          <input
+            value={form.state}
+            onChange={e => setForm({...form, state: e.target.value.toUpperCase().slice(0, 2)})}
+            placeholder="UF"
+            className="input-field"
+            data-testid="client-state-input"
+            maxLength={2}
+          />
+        </div>
+        <input
+          value={form.address}
+          onChange={e => setForm({...form, address: e.target.value})}
+          placeholder="Rua, numero, complemento, bairro"
+          className="input-field"
+          data-testid="client-address-input"
+        />
       </div>
 
       {/* Observações */}
@@ -4405,6 +4497,292 @@ const FinanceiroPage = () => {
     </div>
   );
 };
+
+
+/* ========== RELATORIO DE ATENDIMENTOS (TICKETS) ========== */
+const TICKET_STATUS_LABELS = {
+  aberto: { label: 'Aberto', cls: 'bg-emerald-100 text-emerald-700' },
+  em_atendimento: { label: 'Em atendimento', cls: 'bg-blue-100 text-blue-700' },
+  aguardando: { label: 'Aguardando', cls: 'bg-amber-100 text-amber-700' },
+  fechado: { label: 'Fechado', cls: 'bg-slate-200 text-slate-700' },
+  cancelado: { label: 'Cancelado', cls: 'bg-rose-100 text-rose-700' },
+};
+
+const formatDuration = (s) => {
+  if (s == null) return '-';
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
+};
+
+const formatDateTime = (iso) => {
+  if (!iso) return '-';
+  try { return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }); }
+  catch { return '-'; }
+};
+
+const TicketsReportPage = () => {
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Populate filter dropdowns
+  const [connections, setConnections] = useState([]);
+  const [queues, setQueues] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [tagsList, setTagsList] = useState([]);
+
+  const [filters, setFilters] = useState({
+    search: '',
+    connection_id: '',
+    status: '',
+    user_id: '',
+    tag: '',
+    queue_id: '',
+    start_date: '',
+    end_date: '',
+    only_rated: false,
+  });
+
+  const load = async (p = page, ps = pageSize, filterOverride = filters) => {
+    setLoading(true);
+    try {
+      const params = { page: p, page_size: ps };
+      Object.entries(filterOverride).forEach(([k, v]) => {
+        if (v === '' || v === false || v == null) return;
+        params[k] = v;
+      });
+      const r = await reportsAPI.getTickets(params);
+      setRows(r.data.rows || []);
+      setTotal(r.data.total || 0);
+    } catch { setRows([]); setTotal(0); } finally { setLoading(false); }
+  };
+
+  useEffect(() => {
+    load(1, pageSize, filters);
+    // fetch filter options
+    api.get('/channels/connections').then(r => setConnections(r.data || [])).catch(() => {});
+    api.get('/crm/queues').then(r => setQueues(r.data || [])).catch(() => {});
+    api.get('/scheduling/company-users').then(r => setUsers(r.data || [])).catch(() => {});
+    api.get('/crm/tags').then(r => setTagsList(r.data || [])).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const applyFilters = () => { setPage(1); load(1, pageSize, filters); };
+  const resetFilters = () => {
+    const empty = { search: '', connection_id: '', status: '', user_id: '', tag: '', queue_id: '', start_date: '', end_date: '', only_rated: false };
+    setFilters(empty); setPage(1); load(1, pageSize, empty);
+  };
+
+  const exportCsv = async () => {
+    // fetch all matching (capped at 5000 to keep payload sane)
+    const params = { page: 1, page_size: 5000 };
+    Object.entries(filters).forEach(([k, v]) => { if (v !== '' && v !== false && v != null) params[k] = v; });
+    const r = await reportsAPI.getTickets(params);
+    const data = r.data.rows || [];
+    const headers = ['Ticket', 'Conexao', 'Cliente', 'Telefone', 'Usuario', 'Fila', 'Tags', 'Valor', 'Status', 'Avaliacao', 'Ult. Mensagem', 'Abertura', 'Fechamento', 'Tempo (min)'];
+    const esc = (v) => {
+      if (v == null) return '';
+      const s = String(v).replace(/"/g, '""');
+      return `"${s}"`;
+    };
+    const lines = [headers.map(esc).join(';')];
+    data.forEach(row => {
+      lines.push([
+        `#${row.ticket_number ?? ''}`,
+        row.connection,
+        row.customer_name,
+        row.customer_phone,
+        row.assigned_user,
+        row.queue,
+        (row.tags || []).join(', '),
+        (row.value || 0).toFixed(2).replace('.', ','),
+        TICKET_STATUS_LABELS[row.status]?.label || row.status,
+        row.rating ?? '',
+        formatDateTime(row.last_message_at),
+        formatDateTime(row.created_at),
+        formatDateTime(row.closed_at),
+        row.duration_seconds != null ? Math.round(row.duration_seconds / 60) : '',
+      ].map(esc).join(';'));
+    });
+    const csv = '\uFEFF' + lines.join('\n'); // BOM so Excel opens UTF-8 correctly
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0, 10);
+    link.download = `relatorio-atendimentos-${stamp}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const statusBadge = (s) => {
+    const m = TICKET_STATUS_LABELS[s] || { label: s || '-', cls: 'bg-slate-100 text-slate-600' };
+    return <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${m.cls}`}>{m.label}</span>;
+  };
+
+  return (
+    <div className="animate-fade-in" data-testid="tickets-report-page">
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <p className="text-xs sm:text-sm text-slate-600">Visualize e exporte todos os atendimentos.</p>
+        <button
+          onClick={exportCsv}
+          disabled={loading || total === 0}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-primary text-primary hover:bg-primary hover:text-white transition-colors disabled:opacity-50"
+          data-testid="export-csv-btn"
+        >
+          <Download className="w-3.5 h-3.5" /> Exportar Excel
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="card p-3 sm:p-4 mb-4" data-testid="tickets-report-filters">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-2">
+          <input
+            value={filters.search}
+            onChange={e => setFilters({ ...filters, search: e.target.value })}
+            placeholder="Pesquisar contato (nome ou tel.)"
+            className="input-field text-xs"
+            data-testid="filter-search"
+          />
+          <select value={filters.connection_id} onChange={e => setFilters({ ...filters, connection_id: e.target.value })} className="input-field text-xs" data-testid="filter-connection">
+            <option value="">Filtro por Conexao</option>
+            {connections.map(c => <option key={c.id} value={c.id}>{c.name || c.id.slice(0, 6)}</option>)}
+          </select>
+          <select value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })} className="input-field text-xs" data-testid="filter-status">
+            <option value="">Filtro por Status</option>
+            {Object.entries(TICKET_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <select value={filters.user_id} onChange={e => setFilters({ ...filters, user_id: e.target.value })} className="input-field text-xs" data-testid="filter-user">
+            <option value="">Filtro por Usuarios</option>
+            {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+          <select value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })} className="input-field text-xs" data-testid="filter-tag">
+            <option value="">Filtro por Tags</option>
+            {tagsList.map(t => <option key={t.id || t.name} value={t.name}>{t.name}</option>)}
+          </select>
+          <select value={filters.queue_id} onChange={e => setFilters({ ...filters, queue_id: e.target.value })} className="input-field text-xs" data-testid="filter-queue">
+            <option value="">Filas</option>
+            {queues.map(q => <option key={q.id} value={q.id}>{q.name}</option>)}
+          </select>
+          <input type="date" value={filters.start_date} onChange={e => setFilters({ ...filters, start_date: e.target.value })} className="input-field text-xs" data-testid="filter-start-date" />
+          <input type="date" value={filters.end_date} onChange={e => setFilters({ ...filters, end_date: e.target.value })} className="input-field text-xs" data-testid="filter-end-date" />
+          <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer" data-testid="filter-only-rated-label">
+            <input type="checkbox" checked={filters.only_rated} onChange={e => setFilters({ ...filters, only_rated: e.target.checked })} className="rounded" data-testid="filter-only-rated" />
+            Apenas Avaliados
+          </label>
+        </div>
+        <div className="flex items-center justify-end gap-2 mt-3">
+          <button onClick={resetFilters} className="text-xs px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100" data-testid="reset-filters-btn">Limpar</button>
+          <button onClick={applyFilters} disabled={loading} className="btn-primary text-xs px-4" data-testid="apply-filters-btn">
+            {loading ? 'Carregando...' : 'Aplicar Filtro'}
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile cards */}
+      <div className="space-y-2 sm:hidden" data-testid="tickets-report-cards">
+        {rows.length === 0 && !loading && (
+          <div className="card p-6 text-center text-sm text-slate-500">Nenhum atendimento encontrado.</div>
+        )}
+        {rows.map(r => (
+          <div key={r.id} className="card p-3" data-testid={`ticket-row-${r.id}`}>
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="font-semibold text-sm text-slate-900 truncate flex-1 mr-2">#{r.ticket_number ?? '-'} · {r.customer_name}</p>
+              {statusBadge(r.status)}
+            </div>
+            <div className="text-[11px] text-slate-500 mb-2 truncate">{r.customer_phone} · {r.connection}</div>
+            <div className="grid grid-cols-3 gap-2 text-[11px]">
+              <div><p className="text-slate-400 uppercase">Usuario</p><p className="text-slate-800 font-medium truncate">{r.assigned_user}</p></div>
+              <div><p className="text-slate-400 uppercase">Fila</p><p className="text-slate-800 truncate">{r.queue}</p></div>
+              <div><p className="text-slate-400 uppercase">Valor</p><p className="text-slate-800 font-medium">R$ {Number(r.value || 0).toFixed(2)}</p></div>
+              <div><p className="text-slate-400 uppercase">Abertura</p><p className="text-slate-700">{formatDateTime(r.created_at)}</p></div>
+              <div><p className="text-slate-400 uppercase">Fechamento</p><p className="text-slate-700">{formatDateTime(r.closed_at)}</p></div>
+              <div><p className="text-slate-400 uppercase">Tempo</p><p className="text-slate-800 font-medium">{formatDuration(r.duration_seconds)}</p></div>
+            </div>
+            {(r.tags || []).length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">{r.tags.map(t => <span key={t} className="text-[9px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded">{t}</span>)}</div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop table */}
+      <div className="card hidden sm:block overflow-x-auto" data-testid="tickets-report-table-wrapper">
+        <table className="w-full min-w-[1100px]" data-testid="tickets-report-table">
+          <thead><tr className="border-b border-slate-200">
+            {['Ticket', 'Conexao', 'Cliente', 'Usuario', 'Fila', 'Tags', 'Valor', 'Status', 'Ult. Mensagem', 'Data Abertura', 'Data Fechamento', 'Tempo'].map(h =>
+              <th key={h} className="text-left py-3 px-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">{h}</th>
+            )}
+          </tr></thead>
+          <tbody>
+            {rows.length === 0 && !loading && (
+              <tr><td colSpan={12} className="py-10 text-center text-sm text-slate-500">Nenhum atendimento encontrado.</td></tr>
+            )}
+            {rows.map(r => (
+              <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm" data-testid={`ticket-row-${r.id}`}>
+                <td className="py-2.5 px-3 font-semibold text-primary">#{r.ticket_number ?? '-'}</td>
+                <td className="py-2.5 px-3 text-slate-600 truncate max-w-[120px]">{r.connection}</td>
+                <td className="py-2.5 px-3 text-slate-900">
+                  <div className="font-medium truncate max-w-[170px]">{r.customer_name}</div>
+                  <div className="text-[10px] text-slate-400">{r.customer_phone}</div>
+                </td>
+                <td className="py-2.5 px-3 text-slate-700 truncate max-w-[120px]">{r.assigned_user}</td>
+                <td className="py-2.5 px-3 text-slate-600 truncate max-w-[100px]">{r.queue}</td>
+                <td className="py-2.5 px-3">
+                  <div className="flex flex-wrap gap-0.5 max-w-[120px]">
+                    {(r.tags || []).slice(0, 3).map(t => <span key={t} className="text-[9px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded truncate">{t}</span>)}
+                  </div>
+                </td>
+                <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">R$ {Number(r.value || 0).toFixed(2)}</td>
+                <td className="py-2.5 px-3">{statusBadge(r.status)}</td>
+                <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap text-xs">{formatDateTime(r.last_message_at)}</td>
+                <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap text-xs">{formatDateTime(r.created_at)}</td>
+                <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap text-xs">{formatDateTime(r.closed_at)}</td>
+                <td className="py-2.5 px-3 text-slate-800 font-medium whitespace-nowrap">{formatDuration(r.duration_seconds)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-2 mt-3 text-xs text-slate-600">
+        <div>{total} atendimento(s) · Pagina {page} de {totalPages}</div>
+        <div className="flex items-center gap-2">
+          <select
+            value={pageSize}
+            onChange={e => { const ps = Number(e.target.value); setPageSize(ps); setPage(1); load(1, ps, filters); }}
+            className="input-field text-xs !py-1 !px-2"
+            data-testid="page-size-select"
+          >
+            {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n}/pagina</option>)}
+          </select>
+          <button
+            onClick={() => { const np = Math.max(1, page - 1); setPage(np); load(np, pageSize, filters); }}
+            disabled={page <= 1 || loading}
+            className="px-3 py-1 rounded border border-slate-200 disabled:opacity-40"
+            data-testid="page-prev"
+          >&lt;</button>
+          <button
+            onClick={() => { const np = Math.min(totalPages, page + 1); setPage(np); load(np, pageSize, filters); }}
+            disabled={page >= totalPages || loading}
+            className="px-3 py-1 rounded border border-slate-200 disabled:opacity-40"
+            data-testid="page-next"
+          >&gt;</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 
 /* ========== COMISSOES (REAL) ========== */
 const ComissoesPage = () => {

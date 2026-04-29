@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 35 - Expanded client fields (cep/address/city/state/company_name), new /api/reports/tickets endpoint with filters+pagination+hydration+duration, own_appointments_only gating for tickets, /scheduling/all-features catalog and iter33/34 regression all verified. 18/18 backend pytest pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/scheduling/all-features", "issue": "Existing CRM companies created before the 'relatorio_atendimentos' feature was added to seed_business_types do NOT have it in their company.features array, so the menu item does not appear until a Super-Admin toggles it on (or a one-off migration is added). Endpoint behaviour is correct; this is a seed/migration gap. Confirmed on crm@test.com (company c477e72c...): its features list has 16 keys and the new key is absent. seed_business_types in server.py is idempotent (early-returns when business_types collection is non-empty), so adding the key to the seed list does not backfill existing companies."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_35.py",
+    "/app/test_reports/pytest/iteration_35.xml"
+  ],
+  "action_items": [
+    "Add a lightweight migration in server.py startup that ensures every CRM/both company has 'relatorio_atendimentos' in its features array (idempotent $addToSet on companies.features) so the new menu appears for pre-existing tenants without Super-Admin intervention.",
+    "(Optional) Consider the same migration pattern for any future feature additions to seed_business_types — today the seeder is a pure insert-if-empty and silently skips updates."
+  ],
+  "critical_code_review_comments": [
+    "reports_routes.get_tickets_report correctly force-overrides user_id with current user.id when perms contain 'own_appointments_only' (verified via test_restricted_user_cannot_bypass_via_user_id_query).",
+    "Hydration (connection/assigned_user/queue) is done via bulk find({'id': {'$in': [...]}}) - no N+1. Missing references safely fall back to '-' (which matches the 6 pre-existing tickets that have neither assigned_to nor queue_id).",
+    "duration_seconds uses datetime.fromisoformat with Z->+00:00 coercion; returns None when closed_at missing, matching requirement.",
+    "Filters composed correctly: created_at range, status, connection_id, queue_id, assigned_to, tags (single-value match), and case-insensitive $regex $or on customer_name/customer_phone. only_rated uses $exists+$ne:None which excludes both missing and null ratings (verified).",
+    "scheduling_routes.create_client/update_client persist all 5 new fields (company_name, cep, address, city, state) and return them on the response and on GET /clients (verified).",
+    "ClientCreate does NOT enforce that company_name is only accepted for person_type=juridica on the server - the server accepts it for any person_type. Not a bug per review request (frontend-only gating) but worth noting.",
+    "update_client uses data.model_dump(exclude_unset=True) and excludes None — this means a PUT cannot clear the new fields back to null (only change to a non-None value or omit). If the UI needs to clear a CEP, it will silently no-op. Minor UX consideration.",
+    "ALL_SYSTEM_FEATURES includes relatorio_atendimentos under category 'CRM' (line 825). super_admin_routes.ALL_FEATURES uses lowercase 'crm' — inconsistent casing across files (not functional, just cosmetic).",
+    "seed_business_types is idempotent on the collection (early return when non-empty). Adding a new feature-key to crm_features does not backfill existing companies (root cause of the minor issue reported above)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_35.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "skipped (backend-only request)"},
+  "test_credentials": "CRM admin crm@test.com/crm123 (company c477e72c-5633-4b2f-a252-8068d167ad5a); Boss admin admin@boss.com.br/boss123. Restricted test user is created+deleted within the fixture (TEST_restricted_*@example.com / TestPwd123).",
+  "seed_data_creation": "All ephemeral: clients with 'TEST_' prefix, one hydration ticket (TEST_tick_*) with seeded TEST_Connection_Alpha + TEST_Queue_Bravo, one tag ticket (TEST_tag_*), two own-appointments tickets (TEST_own_mine_*, TEST_own_other_*), one permission profile (TEST_Restricted_*) and one company_user (TEST_restricted_*). All cleaned up in fixture teardown/finally blocks.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Permission profile POST payload uses field name 'permissions' (not 'feature_keys'). The CRM test company (c477e72c...) lacks 'relatorio_atendimentos' in its features array — the frontend menu will not render it until (a) a migration is added or (b) Super-Admin toggles it on via /api/super-admin/companies/{id}/features. /api/scheduling/all-features correctly reads company.features for gating; the catalog itself (ALL_SYSTEM_FEATURES) has the entry. Endpoint /api/reports/tickets is working perfectly and pagination returns absolute total.",
+  "rca of the issue": "MISSING 'relatorio_atendimentos' IN CATALOG FOR EXISTING COMPANIES — Root cause: server.py:seed_business_types() early-returns when business_types collection has any docs, so appending a feature to crm_features only affects fresh installs. For already-seeded tenants (like crm@test.com), neither business_types nor companies.features are updated. Mitigation: add an idempotent startup migration such as `await db.companies.update_many({'base_type': {'$in': ['crm','both']}, 'features.feature_key': {'$ne': 'relatorio_atendimentos'}}, {'$addToSet': {'features': {'feature_key': 'relatorio_atendimentos', 'enabled': True}}})` right after seed_business_types in server.startup_event."
+}

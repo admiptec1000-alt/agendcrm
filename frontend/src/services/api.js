@@ -266,6 +266,7 @@ export const channelsAPI = {
 export const reportsAPI = {
   getCommissions: (params) => api.get('/reports/commissions', { params }),
   getFinancial: (params) => api.get('/reports/financial', { params }),
+  getTickets: (params) => api.get('/reports/tickets', { params }),
 };
 
 // Notifications API

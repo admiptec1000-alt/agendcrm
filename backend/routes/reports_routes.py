@@ -214,3 +214,120 @@ async def get_financial_report(
         "pending_count": len(pending),
         "cancelled_count": len(cancelled)
     }
+
+
+
+@router.get("/tickets")
+async def get_tickets_report(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    start_date: str = None,          # ISO 8601 (created_at >=)
+    end_date: str = None,            # ISO 8601 (created_at <=)
+    search: str = None,              # nome ou telefone do contato
+    connection_id: str = None,       # channel_connection_id
+    status: str = None,              # ticket status
+    user_id: str = None,             # assigned user
+    tag: str = None,                 # tag name
+    queue_id: str = None,            # department/queue id
+    only_rated: bool = False,        # somente atendimentos com avaliação
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Relatório de atendimentos (tickets) com filtros completos para exibição
+    em tabela. Restringe automaticamente quando o usuário tem permissão
+    `own_appointments_only` — nesse caso só vê tickets atribuídos a ele.
+    """
+    company_id = user["company_id"]
+    query = {"company_id": company_id}
+
+    if start_date:
+        query["created_at"] = {"$gte": start_date}
+    if end_date:
+        query.setdefault("created_at", {})["$lte"] = end_date
+    if status:
+        query["status"] = status
+    if connection_id:
+        query["channel_connection_id"] = connection_id
+    if queue_id:
+        query["queue_id"] = queue_id
+    if only_rated:
+        query["rating"] = {"$exists": True, "$ne": None}
+    if tag:
+        query["tags"] = tag
+
+    # User visibility: own_appointments_only restricts the `assigned_to` to me.
+    # Non-admin users never see tickets not assigned to them when this perm is on.
+    is_admin = user.get("role") in ("company_admin", "super_admin")
+    if not is_admin:
+        perms = await _load_user_perms(db, user)
+        if "own_appointments_only" in perms:
+            user_id = user.get("id")  # force-override any client filter
+    if user_id:
+        query["assigned_to"] = user_id
+
+    # Contact search — we scan name + phone on the ticket docs (denormalized).
+    if search:
+        rx = {"$regex": search, "$options": "i"}
+        query["$or"] = [{"customer_name": rx}, {"customer_phone": rx}]
+
+    total = await db.tickets.count_documents(query)
+    skip = max(0, (page - 1) * page_size)
+    cursor = db.tickets.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size)
+    tickets = await cursor.to_list(page_size)
+
+    # Hydrate user/connection/queue names in bulk (avoid N+1)
+    user_ids = {t.get("assigned_to") for t in tickets if t.get("assigned_to")}
+    conn_ids = {t.get("channel_connection_id") for t in tickets if t.get("channel_connection_id")}
+    queue_ids = {t.get("queue_id") for t in tickets if t.get("queue_id")}
+
+    users_map = {}
+    if user_ids:
+        async for u in db.company_users.find({"id": {"$in": list(user_ids)}}, {"_id": 0, "id": 1, "name": 1}):
+            users_map[u["id"]] = u.get("name") or "-"
+    conns_map = {}
+    if conn_ids:
+        async for c in db.channel_connections.find({"id": {"$in": list(conn_ids)}}, {"_id": 0, "id": 1, "name": 1}):
+            conns_map[c["id"]] = c.get("name") or "-"
+    queues_map = {}
+    if queue_ids:
+        async for q in db.queues.find({"id": {"$in": list(queue_ids)}}, {"_id": 0, "id": 1, "name": 1}):
+            queues_map[q["id"]] = q.get("name") or "-"
+
+    def _duration_seconds(t):
+        c = t.get("created_at")
+        cl = t.get("closed_at")
+        if not c or not cl:
+            return None
+        try:
+            a = datetime.fromisoformat(c.replace("Z", "+00:00"))
+            b = datetime.fromisoformat(cl.replace("Z", "+00:00"))
+            return int((b - a).total_seconds())
+        except Exception:
+            return None
+
+    rows = []
+    for t in tickets:
+        rows.append({
+            "id": t.get("id"),
+            "ticket_number": t.get("ticket_number"),
+            "connection": conns_map.get(t.get("channel_connection_id"), "-"),
+            "customer_name": t.get("customer_name"),
+            "customer_phone": t.get("customer_phone"),
+            "assigned_user": users_map.get(t.get("assigned_to"), "-"),
+            "queue": queues_map.get(t.get("queue_id"), "-"),
+            "tags": t.get("tags") or [],
+            "value": t.get("value") or 0,
+            "status": t.get("status"),
+            "rating": t.get("rating"),
+            "last_message_at": t.get("last_message_at") or t.get("updated_at"),
+            "created_at": t.get("created_at"),
+            "closed_at": t.get("closed_at"),
+            "duration_seconds": _duration_seconds(t),
+        })
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "rows": rows,
+    }

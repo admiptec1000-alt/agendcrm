@@ -112,7 +112,7 @@ async def seed_business_types(db):
         for k in ["dashboard", "atendimentos", "respostas_rapidas", "kanban", "contatos",
                    "tags", "chat_interno", "campanhas", "flowbuilder", "informativos",
                    "api", "usuarios", "filas_chatbot", "conexoes", "agente_ia",
-                   "configuracoes", "relatorios"]
+                   "configuracoes", "relatorios", "relatorio_atendimentos"]
     ]
     sched_features = [
         {"feature_key": k, "enabled": True}

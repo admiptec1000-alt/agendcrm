@@ -20,6 +20,7 @@ ALL_FEATURES = [
     {"feature_key": "kanban", "label": "Kanban", "category": "crm", "icon": "Columns3"},
     {"feature_key": "contatos", "label": "Clientes / Leads", "category": "crm", "icon": "Users"},
     {"feature_key": "tags", "label": "Tags", "category": "crm", "icon": "Tag"},
+    {"feature_key": "relatorio_atendimentos", "label": "Relatorio de Atendimentos", "category": "crm", "icon": "BarChart3"},
     {"feature_key": "chat_interno", "label": "Chat Interno", "category": "crm", "icon": "MessageSquare"},
     {"feature_key": "campanhas", "label": "Campanhas", "category": "crm", "icon": "Megaphone"},
     {"feature_key": "flowbuilder", "label": "Flowbuilder", "category": "crm", "icon": "GitBranch"},
