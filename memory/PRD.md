@@ -11,6 +11,11 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-29 — Perfis de Acesso liberado na Incinera + Valor sai do contato e vai pro header do chat
+- **Produção**: habilitado `perfis_acesso: enabled=true` no Tipo de Negócio "Atendimento ao Cliente" (usado pela Incinera). Propagado automaticamente para a company.
+- **Campo "Valor" removido do EditContactModal** (ele pertence ao ticket, não ao contato). Substituído por `TicketValueEditor` inline no header do chat — clique no valor → input edita → Enter/blur salva → toast. Atende ao mockup do usuário.
+- **Próximo passo (pendente)**: unificar EditContactModal com ClientForm completo (CPF/CNPJ, endereço, CEP, empresa) + modo compacto/expandir, amarrado ao cadastro real do cliente/lead (necessita adicionar `client_id` no ticket).
+
 ### 2026-04-29 — Vincular usuario a uma ou mais conexões WhatsApp + reforço do escopo do Perfil de Acesso
 - **CompanyUser ganhou `connection_ids: List[str]`** — POST/PUT/GET `/api/scheduling/company-users` aceitam e retornam o campo. Lista vazia `[]` LIMPA o vínculo (não é silenciosamente ignorada). Default `[]` quando omitido.
 - **`/api/auth/login` propaga `user.connection_ids`** automaticamente para o frontend.
