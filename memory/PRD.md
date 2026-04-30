@@ -11,6 +11,19 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Modulo de Orcamentos - Fase 3 (Atalho no chat + Upload .docx + WYSIWYG)
+- **Atalho "Novo Orcamento" no header do ticket** (`AtendimentosPage.js`): icone FileText verde (`data-testid="new-quote-from-ticket-btn"`) ao lado de Editar Contato/Excluir. Abre o `QuoteEditor` com `client_id` e `ticket_id` pre-preenchidos. Footer do editor agora tem **2 botoes**:
+  - **Salvar Orcamento** (verde) — salva e fecha. Disponivel depois em Orcamentos ou via "Anexar Orcamento" no chat.
+  - **Salvar e Enviar via WhatsApp** (azul) — salva e abre automaticamente o `QuoteAttachModal` com o orcamento recem-criado **ja selecionado** (preview carregado, conexao auto-selecionada, basta clicar Enviar).
+- **Upload de template .docx** (`POST /api/quotes/templates/upload-docx`): 
+  - Multipart com `file` (.docx), `name`, `is_default`. Limite 10MB. Reject extensao invalida.
+  - Conversao via **mammoth** (preserva paragrafos, tabelas, bold/italic, listas).
+  - Helper `_normalize_docx_placeholders` converte placeholders Word-friendly para canonicos: `{ NOME }` -> `{{nome}}`, `{ RAZÃO_SOCIAL_/_FANTASIA }` -> `{{razao_social}}` (com strip de acentos), `{ CNPJ_CPF }` -> `{{cnpj_cpf}}`, `{ SOMA_TOTAL_ITENS }` -> `{{total_value}}`, etc. 12+ tokens da estrutura Incinera mapeados automaticamente. Tokens nao reconhecidos preservam como `{{ITEM_1}}` para o usuario ajustar no editor.
+  - Multi-tenant safe + apos upload abre auto-mente no editor para refinamento.
+- **Editor WYSIWYG (Quill)** no `TemplatesTab`: substituido `<textarea>` HTML cru por `react-quill-new` com toolbar (Bold/Italic/Underline/Strike, cores, listas, alinhamento, link). Placeholders chips clicaveis (copy clipboard) continuam disponiveis. Usuario comum agora pode editar sem saber HTML.
+- **Bug @lid/numero estranho no chat resolvido**: usuario redeployou microservico no Render (commit `58d294e`) — `/send-media` (Fase 2) e fix `senderPn` (handoff anterior) agora ativos em prod.
+- **Testes**: 36/36 backend (7 novos iter43 + 29 regressao iter40/42) + 7/7 frontend E2E. Todos os fluxos validados.
+
 ### 2026-04-30 — Modulo de Orcamentos - Fase 2 (PDF + envio via WhatsApp no chat)
 - **Backend - geracao de PDF server-side** (`/app/backend/routes/quotes_routes.py`):
   - Instalado **WeasyPrint 68.1** (deps libpango/libcairo ja presentes no container).
