@@ -270,14 +270,29 @@ const FreightsTab = () => {
 
 // ─── TEMPLATES ───────────────────────────────────────────────────────────────
 const PLACEHOLDERS = [
-  '{{quote_number}}', '{{data_emissao}}', '{{validity_days}}',
-  '{{razao_social}}', '{{cnpj_cpf}}', '{{nome}}', '{{telefone}}', '{{email}}',
-  '{{endereco}}', '{{cidade}}', '{{estado}}', '{{cep}}',
-  '{{items_total}}', '{{freights_total}}', '{{total_value}}',
-  '{{minimum_billing_kg}}', '{{payment_terms}}', '{{payment_method}}',
-  '{{seller_name}}', '{{seller_contact}}', '{{notes}}',
-  '{{#items}}...{{description}} {{quantity}} {{unit_price}} {{total}}...{{/items}}',
-  '{{#freights}}...{{description}} {{km_total}} {{price_per_km}} {{total}}...{{/freights}}',
+  { group: 'Orcamento', token: '{{quote_number}}', label: 'Numero do orcamento' },
+  { group: 'Orcamento', token: '{{data_emissao}}', label: 'Data de emissao' },
+  { group: 'Orcamento', token: '{{validity_days}}', label: 'Validade (dias)' },
+  { group: 'Cliente', token: '{{razao_social}}', label: 'Razao social / Nome fantasia' },
+  { group: 'Cliente', token: '{{cnpj_cpf}}', label: 'CNPJ ou CPF' },
+  { group: 'Cliente', token: '{{nome}}', label: 'Nome do contato' },
+  { group: 'Cliente', token: '{{telefone}}', label: 'Telefone do cliente' },
+  { group: 'Cliente', token: '{{email}}', label: 'E-mail do cliente' },
+  { group: 'Cliente', token: '{{endereco}}', label: 'Endereco completo' },
+  { group: 'Cliente', token: '{{cidade}}', label: 'Cidade' },
+  { group: 'Cliente', token: '{{estado}}', label: 'Estado (UF)' },
+  { group: 'Cliente', token: '{{cep}}', label: 'CEP' },
+  { group: 'Valores', token: '{{items_total}}', label: 'Subtotal dos itens' },
+  { group: 'Valores', token: '{{freights_total}}', label: 'Subtotal do frete' },
+  { group: 'Valores', token: '{{total_value}}', label: 'Valor total do orcamento' },
+  { group: 'Condicoes', token: '{{minimum_billing_kg}}', label: 'Faturamento minimo' },
+  { group: 'Condicoes', token: '{{payment_terms}}', label: 'Prazo de pagamento (dias)' },
+  { group: 'Condicoes', token: '{{payment_method}}', label: 'Forma de pagamento' },
+  { group: 'Vendedor', token: '{{seller_name}}', label: 'Nome do vendedor' },
+  { group: 'Vendedor', token: '{{seller_contact}}', label: 'Contato do vendedor' },
+  { group: 'Observacoes', token: '{{notes}}', label: 'Observacoes livres' },
+  { group: 'Blocos (listas)', token: '{{#items}}...{{description}} {{quantity}} {{unit_price}} {{total}}...{{/items}}', label: 'Loop de itens — repete para cada item' },
+  { group: 'Blocos (listas)', token: '{{#freights}}...{{description}} {{km_total}} {{price_per_km}} {{total}}...{{/freights}}', label: 'Loop de fretes — repete para cada frete' },
 ];
 
 const TemplatesTab = () => {
@@ -465,13 +480,28 @@ const TemplatesTab = () => {
                 Placeholders disponiveis abaixo; blocos de itens: <code className="bg-slate-100 px-1">{'{{#items}}...{{/items}}'}</code>.
               </p>
             </Field>
-            <div className="bg-slate-50 rounded p-3">
-              <p className="text-xs font-semibold text-slate-700 mb-1">Placeholders disponiveis (clique para copiar):</p>
-              <div className="flex flex-wrap gap-1">
-                {PLACEHOLDERS.map(p => (
-                  <button key={p} onClick={() => navigator.clipboard.writeText(p)} className="text-xs bg-white border border-slate-300 px-2 py-0.5 rounded hover:bg-emerald-50 font-mono">{p}</button>
-                ))}
-              </div>
+            <div className="bg-slate-50 rounded p-3" data-testid="placeholder-list">
+              <p className="text-xs font-semibold text-slate-700 mb-2">Placeholders disponiveis (clique para copiar):</p>
+              {Object.entries(PLACEHOLDERS.reduce((acc, p) => {
+                (acc[p.group] = acc[p.group] || []).push(p);
+                return acc;
+              }, {})).map(([groupName, tokens]) => (
+                <div key={groupName} className="mb-3 last:mb-0">
+                  <div className="text-[10px] font-bold uppercase text-emerald-700 mb-1">{groupName}</div>
+                  <div className="space-y-0.5">
+                    {tokens.map(p => (
+                      <button
+                        key={p.token}
+                        onClick={() => { navigator.clipboard.writeText(p.token); toast.success('Placeholder copiado', { duration: 1500 }); }}
+                        className="w-full flex items-start gap-2 text-left bg-white border border-slate-200 px-2 py-1 rounded hover:bg-emerald-50 hover:border-emerald-300 transition"
+                      >
+                        <code className="text-[11px] font-mono text-emerald-700 flex-shrink-0 whitespace-nowrap">{p.token.length > 40 ? p.token.substring(0, 37) + '...' : p.token}</code>
+                        <span className="text-[11px] text-slate-600">{p.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-4 border-t mt-4">
