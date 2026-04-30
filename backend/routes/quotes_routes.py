@@ -10,7 +10,7 @@ Collections:
   - quote_templates      HTML templates with placeholders, one is_default per tenant
   - quotes               generated proposals (header data, items[], freights[], totals)
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ import base64
 import logging
 
 import httpx
+import mammoth
 from weasyprint import HTML
 
 from database import get_database
@@ -450,6 +451,108 @@ async def delete_quote_template(tid: str, user=Depends(get_current_user), db: As
     if r.deleted_count == 0:
         raise HTTPException(404, "Template nao encontrado")
     return {"deleted": True}
+
+
+def _normalize_docx_placeholders(html: str) -> str:
+    """Word splits placeholder text across runs and may add spaces. Convert
+    user-friendly Word tokens like { ITEM_1 } or {{NOME}} into the canonical
+    {{placeholder}} format the renderer understands.
+
+    Rules applied:
+      - Single-brace tokens "{ TOKEN }" -> "{{TOKEN}}"
+      - Trim spaces inside double braces: "{{ TOKEN }}" -> "{{TOKEN}}"
+      - Lowercase + collapse the most common Incinera-style tokens
+        (RAZAO_SOCIAL, CNPJ_CPF, NOME, NUMERO, EMAIL, ENDERECO, CIDADE,
+         ESTADO, ITEM_N, UNIDADE_N, VALOR_UNI_N, QTDE_N, VALOR_TOTAL_N_SOMA,
+         ITEM_FRETE_N, QTDE_FRETE_N, VALOR_UNI_FRETE_N, VALOR_TOTAL_FRETE_N,
+         SOMA_TOTAL_ITENS, Faturamento_minimo_em_kg, Prazo_de_pagamento,
+         Forma_de_pagamento) so existing INCINERA-style models render with
+        the canonical context produced by /render.
+    """
+    # First convert "{ X }" single-brace to "{{X}}" (Word artifact)
+    html = re.sub(r"\{\s*([A-Za-z0-9_\u00C0-\u017F /\-]+?)\s*\}", lambda m: "{{" + m.group(1).strip().replace(" ", "_") + "}}", html)
+    # Trim inside double braces
+    html = re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", lambda m: "{{" + m.group(1).strip() + "}}", html)
+
+    # Map verbose Incinera tokens to canonical names used by /render context
+    token_map = {
+        "RAZAO_SOCIAL_/_FANTASIA": "razao_social",
+        "RAZAO_SOCIAL/FANTASIA": "razao_social",
+        "RAZAO_SOCIAL": "razao_social",
+        "CNPJ/CPF": "cnpj_cpf",
+        "CNPJ_CPF": "cnpj_cpf",
+        "NOME": "nome",
+        "NUMERO": "telefone",
+        "TELEFONE": "telefone",
+        "EMAIL": "email",
+        "E-MAIL": "email",
+        "ENDERECO": "endereco",
+        "ENDEREÇO": "endereco",
+        "CIDADE": "cidade",
+        "ESTADO": "estado",
+        "CEP": "cep",
+        "SOMA_TOTAL_ITENS": "total_value",
+        "VALOR_TOTAL_DO_ORCAMENTO": "total_value",
+        "FATURAMENTO_MINIMO_EM_KG": "minimum_billing_kg",
+        "PRAZO_DE_PAGAMENTO": "payment_terms",
+        "FORMA_DE_PAGAMENTO": "payment_method",
+    }
+    def _replace(match):
+        token = match.group(1).strip()
+        # Normalize: uppercase, replace spaces with underscore, strip accents
+        import unicodedata
+        upper = unicodedata.normalize("NFKD", token).encode("ASCII", "ignore").decode("ASCII")
+        upper = upper.upper().replace(" ", "_")
+        canonical = token_map.get(upper)
+        if canonical:
+            return "{{" + canonical + "}}"
+        return match.group(0)
+    html = re.sub(r"\{\{([^{}]+?)\}\}", _replace, html)
+    return html
+
+
+@router.post("/templates/upload-docx")
+async def upload_docx_template(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    is_default: bool = Form(False),
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Convert an uploaded .docx into a quote template (HTML) via Mammoth.
+
+    Preserves headings, tables, bold/italic, lists. Converts user-friendly
+    placeholders ({ NOME }, { ITEM_1 }, etc) to the canonical {{placeholder}}
+    format expected by /render. The resulting HTML is editable later in the
+    rich-text editor.
+    """
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(400, "Envie um arquivo .docx")
+    raw = await file.read()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo muito grande (limite 10MB)")
+    try:
+        from io import BytesIO
+        result = mammoth.convert_to_html(BytesIO(raw))
+        html = result.value or ""
+    except Exception as e:
+        logger.warning("mammoth failed for %s: %s", file.filename, e)
+        raise HTTPException(400, f"Falha ao converter .docx: {e}")
+    html = _normalize_docx_placeholders(html)
+
+    if is_default:
+        await db.quote_templates.update_many({"company_id": user["company_id"]}, {"$set": {"is_default": False}})
+    doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": name,
+        "content": html,
+        "is_default": bool(is_default),
+        "source_filename": file.filename,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.quote_templates.insert_one(doc)
+    return await db.quote_templates.find_one({"id": doc["id"]}, {"_id": 0})
 
 
 # ─── QUOTES (proposals) ──────────────────────────────────────────────────────

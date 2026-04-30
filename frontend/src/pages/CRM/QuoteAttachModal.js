@@ -15,7 +15,7 @@ const formatBRL = (v) => {
  * tab via Orcamentos. After selecting, choose the WhatsApp connection and
  * fire /quotes/{id}/send-whatsapp which generates the PDF + dispatches it.
  */
-const QuoteAttachModal = ({ ticket, connections, onClose, onSent }) => {
+const QuoteAttachModal = ({ ticket, connections, onClose, onSent, initialQuoteId }) => {
   const [quotes, setQuotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedQuote, setSelectedQuote] = useState(null);
@@ -40,6 +40,15 @@ const QuoteAttachModal = ({ ticket, connections, onClose, onSent }) => {
   }, [ticket?.client_id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-select the just-created quote when called from the QuoteEditor flow
+  useEffect(() => {
+    if (initialQuoteId && quotes.length) {
+      const found = quotes.find(q => q.id === initialQuoteId);
+      if (found) handleSelect(found);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuoteId, quotes]);
 
   useEffect(() => {
     if (!connId && whatsappConns.length === 1) setConnId(whatsappConns[0].id);

@@ -1,0 +1,26 @@
+{
+  "summary": "Iteration 43 (Orcamentos Fase 3) — full backend + frontend E2E pass. New upload-docx endpoint (+ placeholder normalization, multi-tenancy, size/extension rejection) validated with 7 new tests. Regression of Fases 1+2 (iter40 20/20 + iter42 9/9) still 100% green. Frontend: new-quote-from-ticket-btn in ticket header opens QuoteEditor with client pre-filled, Templates tab has Upload .docx + Novo Template, Quill editor active with toolbar, and save-and-send triggers QuoteAttachModal with the recently created quote auto-selected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_43.py",
+    "/app/test_reports/pytest/iter43_results.xml",
+    "/app/test_reports/pytest/iter40_42_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "quotes_routes.py _normalize_docx_placeholders: token_map only maps accent-stripped uppercase forms; ACENTO in tokens like ENDEREÇO already normalized via unicodedata → OK. Small nit: the generic {X} → {{X}} regex could false-match JS/CSS braces inside mammoth output but rare.",
+    "upload-docx endpoint reads entire file into memory before size check — for a 10MB limit this is fine, but could bail faster if UploadFile size hint is available.",
+    "QuoteAttachModal auto-select via initialQuoteId depends on quotes list containing the just-created id; current flow worked in E2E (~3s wait). If server-side list is slow, add retry/reload after save in OrcamentosPage before opening the attach modal."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_43.py"
+  ],
+  "success_rate": {"backend": "100% (36/36: 7 new + 29 regression)", "frontend": "100% (7/7 E2E checkpoints)"},
+  "test_credentials": "crm@test.com / crm123 (subdomain crmtest), admin@boss.com.br / boss123 (subdomain boss)",
+  "seed_data_creation": "Ephemeral templates/services/freights/quotes created with TEST_iter43_ prefix; teardown deletes all. One uploaded docx template 'Incinera Modelo (uploaded)' was created via E2E — can be manually deleted via UI if desired.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Frontend test_incinera.docx at /tmp/test_assets/test_incinera.docx (downloaded from customer-assets). Env var REACT_APP_BACKEND_URL must be exported when invoking pytest outside supervisor (already set in frontend/.env). Phase 3 closed.",
+  "rca_of_the_issue": "N/A — no bugs found."
+}

@@ -318,6 +318,7 @@ export const quotesAPI = {
   createTemplate: (data) => api.post('/quotes/templates', data),
   updateTemplate: (id, data) => api.put(`/quotes/templates/${id}`, data),
   deleteTemplate: (id) => api.delete(`/quotes/templates/${id}`),
+  uploadTemplateDocx: (formData) => api.post('/quotes/templates/upload-docx', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   // Quotes
   list: (params) => api.get('/quotes', { params }),
   get: (id) => api.get(`/quotes/${id}`),

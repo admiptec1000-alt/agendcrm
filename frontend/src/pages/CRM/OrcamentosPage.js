@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { quotesAPI, schedulingAPI } from '../../services/api';
-import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy } from 'lucide-react';
+import { quotesAPI, schedulingAPI, channelsAPI } from '../../services/api';
+import { toast } from 'sonner';
+import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy, Upload, Send, Loader2 } from 'lucide-react';
+import ReactQuill from 'react-quill-new';
+import 'react-quill-new/dist/quill.snow.css';
 
 const TABS = [
   { key: 'list', label: 'Orcamentos', icon: FileText },
@@ -279,6 +282,8 @@ const PLACEHOLDERS = [
 const TemplatesTab = () => {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
     const { data } = await quotesAPI.listTemplates();
@@ -292,7 +297,7 @@ const TemplatesTab = () => {
       else await quotesAPI.createTemplate(form);
       setEditing(null);
       await load();
-    } catch (e) { alert('Erro: ' + (e?.response?.data?.detail || e.message)); }
+    } catch (e) { toast.error('Erro: ' + (e?.response?.data?.detail || e.message)); }
   };
 
   const handleDuplicate = async (t) => {
@@ -306,17 +311,57 @@ const TemplatesTab = () => {
     await load();
   };
 
+  const handleUploadDocx = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+      toast.error('Selecione um arquivo .docx do Word');
+      e.target.value = '';
+      return;
+    }
+    const name = window.prompt('Nome do template:', file.name.replace(/\.docx$/i, '')) || file.name.replace(/\.docx$/i, '');
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('name', name);
+      fd.append('is_default', 'false');
+      const { data } = await quotesAPI.uploadTemplateDocx(fd);
+      toast.success(`Template "${data.name}" criado a partir do .docx`);
+      await load();
+      // Auto-open the editor so the user can adjust the converted HTML if needed
+      setEditing(data);
+    } catch (err) {
+      toast.error('Falha no upload: ' + (err?.response?.data?.detail || err.message));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   return (
     <div data-testid="templates-tab">
-      <div className="flex justify-between items-center mb-3">
-        <p className="text-sm text-slate-600">Templates HTML com placeholders. Marque um como padrao para ser usado automaticamente.</p>
-        <button
-          data-testid="new-template-btn"
-          onClick={() => setEditing({ name: '', content: '', is_default: false })}
-          className="flex items-center gap-1 bg-emerald-600 text-white px-3 py-2 rounded-md text-sm hover:bg-emerald-700"
-        >
-          <Plus className="w-4 h-4" /> Novo Template
-        </button>
+      <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+        <p className="text-sm text-slate-600">Importe um modelo .docx do Word ou crie um template novo. Os placeholders sao convertidos automaticamente.</p>
+        <div className="flex gap-2">
+          <input ref={fileInputRef} type="file" accept=".docx" onChange={handleUploadDocx} className="hidden" data-testid="upload-docx-input" />
+          <button
+            data-testid="upload-docx-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-1 bg-blue-600 text-white px-3 py-2 rounded-md text-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            {uploading ? 'Enviando...' : 'Upload .docx'}
+          </button>
+          <button
+            data-testid="new-template-btn"
+            onClick={() => setEditing({ name: '', content: '', is_default: false })}
+            className="flex items-center gap-1 bg-emerald-600 text-white px-3 py-2 rounded-md text-sm hover:bg-emerald-700"
+          >
+            <Plus className="w-4 h-4" /> Novo Template
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -354,8 +399,27 @@ const TemplatesTab = () => {
                 </label>
               </Field>
             </div>
-            <Field label="Conteudo HTML *">
-              <textarea data-testid="template-content" rows={16} className="w-full border rounded px-3 py-2 text-xs font-mono" value={editing.content} onChange={(e) => setEditing({ ...editing, content: e.target.value })} />
+            <Field label="Conteudo do template *">
+              <div className="border rounded bg-white" data-testid="template-content-quill">
+                <ReactQuill
+                  theme="snow"
+                  value={editing.content}
+                  onChange={(html) => setEditing({ ...editing, content: html })}
+                  modules={{
+                    toolbar: [
+                      [{ header: [1, 2, 3, false] }],
+                      ['bold', 'italic', 'underline', 'strike'],
+                      [{ color: [] }, { background: [] }],
+                      [{ list: 'ordered' }, { list: 'bullet' }],
+                      [{ align: [] }],
+                      ['link'],
+                      ['clean'],
+                    ],
+                  }}
+                  style={{ minHeight: '320px' }}
+                />
+              </div>
+              <p className="text-xs text-slate-500 mt-1">Dica: use os placeholders abaixo para campos dinamicos. Para listas (itens, fretes), use os blocos <code className="bg-slate-100 px-1">{'{{#items}}...{{/items}}'}</code>.</p>
             </Field>
             <div className="bg-slate-50 rounded p-3">
               <p className="text-xs font-semibold text-slate-700 mb-1">Placeholders disponiveis (clique para copiar):</p>
@@ -461,11 +525,12 @@ const QuotesTab = () => {
   );
 };
 
-const QuoteEditor = ({ initial, onClose, onSaved }) => {
+const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
   const isEdit = !!initial?.id;
   const [form, setForm] = useState({
     template_id: initial?.template_id || '',
     client_id: initial?.client_id || '',
+    ticket_id: initial?.ticket_id || '',
     items: initial?.items?.length ? initial.items.map(i => ({ description: i.description, unit: i.unit, quantity: i.quantity, unit_price: i.unit_price })) : [],
     freights: initial?.freights?.length ? initial.freights.map(f => ({ description: f.description, km_total: f.km_total, price_per_km: f.price_per_km })) : [],
     minimum_billing_kg: initial?.minimum_billing_kg || '',
@@ -548,13 +613,20 @@ const QuoteEditor = ({ initial, onClose, onSaved }) => {
     } catch (e) { alert('Erro: ' + (e?.response?.data?.detail || e.message)); }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (sendAfter = false) => {
     setSaving(true);
     try {
-      if (isEdit) await quotesAPI.update(initial.id, form);
-      else await quotesAPI.create(form);
-      onSaved();
-    } catch (e) { alert('Erro: ' + (e?.response?.data?.detail || e.message)); }
+      let saved;
+      if (isEdit) {
+        const { data } = await quotesAPI.update(initial.id, form);
+        saved = data;
+      } else {
+        const { data } = await quotesAPI.create(form);
+        saved = data;
+      }
+      if (sendAfter && onSavedAndSend) onSavedAndSend(saved);
+      else if (onSaved) onSaved(saved);
+    } catch (e) { toast.error('Erro: ' + (e?.response?.data?.detail || e.message)); }
     finally { setSaving(false); }
   };
 
@@ -705,9 +777,22 @@ const QuoteEditor = ({ initial, onClose, onSaved }) => {
         </div>
       </div>
 
-      <div className="flex justify-end gap-2 pt-4 border-t mt-4">
+      <div className="flex flex-wrap justify-end gap-2 pt-4 border-t mt-4">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600">Cancelar</button>
-        <button data-testid="save-quote-btn" onClick={handleSave} disabled={saving} className="bg-emerald-600 text-white px-4 py-2 rounded text-sm disabled:opacity-50">{saving ? 'Salvando...' : 'Salvar Orcamento'}</button>
+        <button data-testid="save-quote-btn" onClick={() => handleSave(false)} disabled={saving} className="bg-emerald-600 text-white px-4 py-2 rounded text-sm disabled:opacity-50">
+          {saving ? 'Salvando...' : 'Salvar Orcamento'}
+        </button>
+        {onSavedAndSend && (
+          <button
+            data-testid="save-and-send-quote-btn"
+            onClick={() => handleSave(true)}
+            disabled={saving}
+            className="bg-blue-600 text-white px-4 py-2 rounded text-sm flex items-center gap-1 hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            Salvar e Enviar via WhatsApp
+          </button>
+        )}
       </div>
 
       {pickService && (
@@ -796,4 +881,5 @@ const ModalShell = ({ title, children, onClose, large }) => {
   );
 };
 
+export { QuoteEditor };
 export default OrcamentosPage;

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { quotesAPI } from '../../services/api';
 import QuoteAttachModal from './QuoteAttachModal';
+import { QuoteEditor } from './OrcamentosPage';
 
 const STATUS_COLORS = {
   aberto: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Aberto' },
@@ -141,6 +142,8 @@ const AtendimentosPage = () => {
   const [showNewTicket, setShowNewTicket] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showQuote, setShowQuote] = useState(false);
+  const [showQuoteEditor, setShowQuoteEditor] = useState(false);
+  const [pendingSendQuote, setPendingSendQuote] = useState(null);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [showEditContact, setShowEditContact] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -623,6 +626,7 @@ const AtendimentosPage = () => {
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
               <TicketValueEditor ticket={selectedTicket} onSaved={loadData} />
+              <button onClick={() => setShowQuoteEditor(true)} className="p-2 rounded-lg hover:bg-emerald-50 text-emerald-600" title="Novo Orcamento" data-testid="new-quote-from-ticket-btn"><FileText className="w-4 h-4" /></button>
               <button onClick={() => setShowEditContact(true)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Editar contato" data-testid="edit-contact-btn"><Pencil className="w-4 h-4" /></button>
               <button onClick={handleDeleteTicket} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Excluir atendimento" data-testid="delete-ticket-btn"><Trash2 className="w-4 h-4" /></button>
               <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hidden sm:block" title="Transferir"><ArrowRightLeft className="w-4 h-4" /></button>
@@ -883,8 +887,17 @@ const AtendimentosPage = () => {
         <QuoteAttachModal
           ticket={selectedTicket}
           connections={connections}
-          onClose={() => setShowQuote(false)}
-          onSent={() => { setShowQuote(false); crmAPI.getTicket(selectedTicket.id).then(r => setSelectedTicket(r.data)).catch(() => {}); }}
+          initialQuoteId={pendingSendQuote}
+          onClose={() => { setShowQuote(false); setPendingSendQuote(null); }}
+          onSent={() => { setShowQuote(false); setPendingSendQuote(null); crmAPI.getTicket(selectedTicket.id).then(r => setSelectedTicket(r.data)).catch(() => {}); }}
+        />
+      )}
+      {showQuoteEditor && selectedTicket && (
+        <QuoteEditor
+          initial={{ client_id: selectedTicket.client_id || '', ticket_id: selectedTicket.id }}
+          onClose={() => setShowQuoteEditor(false)}
+          onSaved={() => { setShowQuoteEditor(false); toast.success('Orcamento salvo. Disponivel em "Anexar Orcamento" ou no menu Orcamentos.'); }}
+          onSavedAndSend={(quote) => { setShowQuoteEditor(false); setPendingSendQuote(quote.id); setShowQuote(true); }}
         />
       )}
     </div>
