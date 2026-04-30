@@ -216,12 +216,14 @@ async function createConnection(instanceId) {
       //   2) msg.key.participantPn     (group-like fallback)
       //   3) msg.key.remoteJidAlt      (legacy alt jid)
       //   4) signalRepository LID->PN mapping (if available)
-      //   5) strip @lid as last resort (will still create duplicate)
+      //   5) onWhatsApp lookup using stripped LID (asks server)
+      //   6) strip @lid as last resort (will still create duplicate)
       let realJid = remoteJid;
       if (remoteJid.endsWith('@lid')) {
         realJid = msg.key.senderPn
                || msg.key.participantPn
                || msg.key.remoteJidAlt
+               || msg.key.participant
                || null;
         if (!realJid) {
           try {
@@ -231,10 +233,36 @@ async function createConnection(instanceId) {
             }
           } catch (_) {}
         }
+        // Try store contacts (Baileys keeps a contact map populated by chat sync)
         if (!realJid) {
-          // Last resort: keep the @lid id so we do not lose the message,
-          // but log so operator can investigate
-          console.warn(`[${instanceId}] unresolved @lid: ${remoteJid} (no senderPn / participantPn)`);
+          try {
+            const store = instance.sock?.store;
+            const contacts = store?.contacts || {};
+            const lidId = remoteJid.replace('@lid', '');
+            for (const [jid, c] of Object.entries(contacts)) {
+              if (c?.lid === remoteJid || c?.lid === lidId) { realJid = jid; break; }
+            }
+          } catch (_) {}
+        }
+        if (!realJid) {
+          // Detailed log so operator can inspect the payload format and
+          // post the JSON in support if the LID still does not resolve.
+          // Stripped to a single line for friendliness with Render log UI.
+          try {
+            const dbg = {
+              remoteJid,
+              keyKeys: Object.keys(msg.key || {}),
+              senderPn: msg.key?.senderPn,
+              participantPn: msg.key?.participantPn,
+              remoteJidAlt: msg.key?.remoteJidAlt,
+              participant: msg.key?.participant,
+              fromMe: msg.key?.fromMe,
+              pushName: msg.pushName,
+            };
+            console.warn(`[${instanceId}] UNRESOLVED_LID payload=${JSON.stringify(dbg)}`);
+          } catch (_) {
+            console.warn(`[${instanceId}] unresolved @lid: ${remoteJid}`);
+          }
           realJid = remoteJid;
         }
       }

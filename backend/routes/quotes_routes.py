@@ -576,17 +576,38 @@ async def _build_client_ctx(db, company_id, client_id):
 @router.post("")
 async def create_quote(data: QuoteCreate, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
     company_id = user["company_id"]
+
+    # Business rule: quotes MUST be generated from an existing open ticket.
+    # This keeps quote numbers aligned with ticket numbers (same sequence)
+    # which the user requested for simpler reference across the CRM.
+    if not data.ticket_id:
+        raise HTTPException(400, "Orcamento so pode ser gerado a partir de um atendimento (ticket). Abra o chat do cliente e use o atalho 'Novo Orcamento'.")
+    ticket = await db.tickets.find_one(
+        {"id": data.ticket_id, "company_id": company_id},
+        {"_id": 0, "ticket_number": 1, "client_id": 1, "customer_phone": 1, "customer_name": 1}
+    )
+    if not ticket:
+        raise HTTPException(404, "Atendimento (ticket) nao encontrado")
+
+    # Quote number = ticket number. One quote per ticket-number: if the user
+    # already has one for this ticket, append a version suffix (e.g. 1007.2).
+    base_number = ticket.get("ticket_number")
+    existing_count = await db.quotes.count_documents({"company_id": company_id, "ticket_id": data.ticket_id})
+    quote_number = base_number if existing_count == 0 else f"{base_number}.{existing_count + 1}"
+
+    # Auto-link client from ticket if not explicitly sent
+    client_id = data.client_id or ticket.get("client_id")
+
     items = [i.model_dump() for i in data.items]
     freights = [f.model_dump() for f in data.freights]
     items_out, freights_out, total = _compute_totals(items, freights)
 
-    quote_number = await next_sequence(db, company_id, "quotes", start=0)
     doc = {
         "id": str(uuid.uuid4()),
         "company_id": company_id,
         "quote_number": quote_number,
         "template_id": data.template_id,
-        "client_id": data.client_id,
+        "client_id": client_id,
         "ticket_id": data.ticket_id,
         "items": items_out,
         "freights": freights_out,

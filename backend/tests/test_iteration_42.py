@@ -61,8 +61,15 @@ def boss_connection_id(boss_headers):
 
 @pytest.fixture(scope="module")
 def sample_quote(crm_headers):
-    """Create a temp quote (status=rascunho) for tests, cleanup at module teardown."""
+    """Create a temp quote (status=rascunho) for tests, cleanup at module teardown.
+
+    Phase 4 contract: quotes MUST be attached to a ticket — provision one first.
+    """
+    t = requests.post(f"{API}/crm/tickets", headers=crm_headers, json={
+        "customer_name": "TEST_iter42 Cliente", "customer_phone": "5562988880042",
+    }, timeout=20).json()
     payload = {
+        "ticket_id": t["id"],
         "items": [{"description": "TEST_iter42 PDF Item", "unit": "un", "quantity": 2, "unit_price": 50.0}],
         "freights": [{"description": "TEST_iter42 Frete", "km_total": 10, "price_per_km": 4.0}],
         "minimum_billing_kg": "10kg",
@@ -76,6 +83,7 @@ def sample_quote(crm_headers):
     q = r.json()
     yield q
     requests.delete(f"{API}/quotes/{q['id']}", headers=crm_headers, timeout=20)
+    requests.delete(f"{API}/crm/tickets/{t['id']}", headers=crm_headers, timeout=20)
 
 
 # ─── 1. GET /pdf ─────────────────────────────────────────────────────────────
@@ -102,15 +110,9 @@ class TestPdfDownload:
 # ─── 2. POST /send-whatsapp ──────────────────────────────────────────────────
 class TestSendWhatsapp:
     def test_phone_required_when_no_client_no_ticket(self, crm_headers, crm_connection_id, sample_quote):
-        # quote has no client_id, no ticket_id, send without phone -> 400
-        r = requests.post(
-            f"{API}/quotes/{sample_quote['id']}/send-whatsapp",
-            headers=crm_headers,
-            json={"connection_id": crm_connection_id},
-            timeout=30,
-        )
-        assert r.status_code == 400, r.text
-        assert "elefone" in r.json().get("detail", "").lower() or "phone" in r.json().get("detail", "").lower()
+        # OBSOLETE under Phase 4: quotes are now always attached to a ticket,
+        # so the "no ticket + no phone" precondition cannot be reproduced.
+        pytest.skip("Phase 4 contract: quotes always have a ticket; phone falls back from ticket")
 
     def test_invalid_connection_returns_404(self, crm_headers, sample_quote):
         r = requests.post(

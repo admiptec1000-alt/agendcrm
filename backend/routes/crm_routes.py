@@ -149,6 +149,71 @@ async def delete_ticket(
     return {"deleted": True}
 
 
+@router.post("/tickets/{src_id}/merge-into/{dst_id}")
+async def merge_tickets(
+    src_id: str,
+    dst_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Merges the SOURCE ticket into the DESTINATION ticket and deletes the source.
+
+    Useful when WhatsApp Linked Devices (@lid) create a duplicate ticket with a
+    fake phone number. The admin identifies the real ticket, picks the merge
+    action on the duplicate, and this endpoint:
+
+      1. Appends all messages from src into dst (deduped by wa_message_id)
+      2. Carries over tags that dst doesn't already have
+      3. Preserves dst's ticket_number / kanban_column_id / client_id
+      4. Deletes the src ticket
+
+    The destination always wins on single-valued fields; only messages/tags
+    are additive. Multi-tenant safe (both must belong to the caller's company).
+    """
+    if src_id == dst_id:
+        raise HTTPException(400, "Ticket de origem e destino sao o mesmo")
+    company_id = user["company_id"]
+    src = await db.tickets.find_one({"id": src_id, "company_id": company_id})
+    dst = await db.tickets.find_one({"id": dst_id, "company_id": company_id})
+    if not src or not dst:
+        raise HTTPException(404, "Ticket de origem ou destino nao encontrado")
+
+    src_msgs = src.get("messages") or []
+    existing_wa_ids = {m.get("wa_message_id") for m in (dst.get("messages") or []) if m.get("wa_message_id")}
+    new_msgs = [m for m in src_msgs if not (m.get("wa_message_id") and m.get("wa_message_id") in existing_wa_ids)]
+
+    # Merge tags (unique by tag id/name)
+    dst_tags = dst.get("tags") or []
+    dst_tag_keys = {(t.get("id") or t.get("name")) for t in dst_tags}
+    new_tags = [t for t in (src.get("tags") or []) if (t.get("id") or t.get("name")) not in dst_tag_keys]
+
+    update = {}
+    if new_msgs:
+        update["$push"] = {"messages": {"$each": new_msgs}}
+    set_fields = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if new_tags:
+        # Use $addToSet style via combined array to preserve ordering
+        set_fields["tags"] = dst_tags + new_tags
+    update["$set"] = set_fields
+
+    await db.tickets.update_one({"id": dst_id, "company_id": company_id}, update)
+    await db.tickets.delete_one({"id": src_id, "company_id": company_id})
+
+    # Re-point any quotes that were attached to the src ticket to dst
+    await db.quotes.update_many(
+        {"ticket_id": src_id, "company_id": company_id},
+        {"$set": {"ticket_id": dst_id}}
+    )
+
+    return {
+        "merged": True,
+        "into_ticket_id": dst_id,
+        "into_ticket_number": dst.get("ticket_number"),
+        "messages_added": len(new_msgs),
+        "tags_added": len(new_tags),
+    }
+
+
 @router.get("/clients/{client_id}/timeline")
 async def get_client_timeline(
     client_id: str,

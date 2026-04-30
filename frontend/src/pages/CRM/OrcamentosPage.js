@@ -474,11 +474,12 @@ const QuotesTab = () => {
   return (
     <div data-testid="quotes-list-tab">
       <div className="flex justify-between items-center mb-3">
-        <p className="text-sm text-slate-600">Orcamentos gerados. Clique em "Visualizar" para imprimir/salvar PDF.</p>
+        <p className="text-sm text-slate-600">Orcamentos sao gerados a partir de um atendimento. Abra um chat e use o atalho "Novo Orcamento" no header.</p>
         <button
           data-testid="new-quote-btn"
-          onClick={() => setEditing({})}
-          className="flex items-center gap-1 bg-emerald-600 text-white px-3 py-2 rounded-md text-sm hover:bg-emerald-700"
+          onClick={() => toast.info('Novo orcamento deve ser criado a partir de um atendimento. Acesse Atendimentos, abra um chat e clique no icone de orcamento no header.')}
+          className="flex items-center gap-1 bg-slate-200 text-slate-600 px-3 py-2 rounded-md text-sm cursor-help"
+          title="Novo orcamento e criado pelo atalho dentro de um atendimento"
         >
           <Plus className="w-4 h-4" /> Novo Orcamento
         </button>
@@ -631,8 +632,20 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
   };
 
   return (
-    <ModalShell title={isEdit ? `Editar Orcamento #${initial.quote_number}` : 'Novo Orcamento'} onClose={onClose} large>
+    <ModalShell title={isEdit ? `Editar Orcamento #${initial.quote_number}` : (initial?.ticket_number ? `Novo Orcamento — Atendimento #${initial.ticket_number}` : 'Novo Orcamento')} onClose={onClose} large>
       <div className="space-y-4">
+        {/* Banner do ticket vinculado */}
+        {form.ticket_id && initial?.ticket_number && (
+          <div className="bg-blue-50 border border-blue-200 rounded p-3 flex items-center justify-between" data-testid="quote-ticket-link">
+            <div>
+              <div className="text-xs text-blue-600 font-semibold uppercase">Vinculado ao Atendimento</div>
+              <div className="text-sm text-blue-900 font-medium">#{initial.ticket_number} {initial.customer_name ? `— ${initial.customer_name}` : ''}</div>
+              {initial.customer_phone && <div className="text-xs text-blue-700">{initial.customer_phone}</div>}
+            </div>
+            <div className="text-xs text-slate-500 italic">Numero do orcamento sera o mesmo do atendimento</div>
+          </div>
+        )}
+
         {/* Cliente */}
         <section className="border rounded-lg p-3 bg-slate-50">
           <h3 className="font-semibold text-sm text-slate-700 mb-2 flex items-center gap-2"><Search className="w-4 h-4" /> Cliente</h3>
@@ -640,10 +653,17 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
             <div className="flex justify-between items-center bg-white border rounded p-2">
               <div>
                 <div className="font-medium">{selectedClient.name}</div>
-                <div className="text-xs text-slate-500">{selectedClient.phone} {selectedClient.cnpj && `• CNPJ ${selectedClient.cnpj}`}</div>
+                <div className="text-xs text-slate-500">
+                  {selectedClient.phone} {selectedClient.cnpj && `• CNPJ ${selectedClient.cnpj}`}
+                  {selectedClient.city && ` • ${selectedClient.city}/${selectedClient.state || ''}`}
+                </div>
               </div>
-              <button onClick={() => setForm({ ...form, client_id: '' })} className="text-xs text-red-600">Trocar</button>
+              {!form.ticket_id && (
+                <button onClick={() => setForm({ ...form, client_id: '' })} className="text-xs text-red-600">Trocar</button>
+              )}
             </div>
+          ) : form.ticket_id ? (
+            <div className="text-sm text-slate-500 italic p-2">Carregando dados do cliente do atendimento...</div>
           ) : (
             <div className="space-y-2">
               <div className="flex gap-2">
@@ -864,17 +884,17 @@ const Field = ({ label, children }) => (
 
 const ModalShell = ({ title, children, onClose, large }) => {
   return createPortal(
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto" onClick={onClose}>
       <div
-        className={`bg-white rounded-lg shadow-xl w-full ${large ? 'max-w-4xl' : 'max-w-lg'} my-8`}
+        className={`bg-white rounded-lg shadow-xl w-full ${large ? 'max-w-4xl' : 'max-w-lg'} my-4 max-h-[95vh] sm:max-h-[90vh] flex flex-col`}
         onClick={(e) => e.stopPropagation()}
         data-testid="modal-shell"
       >
-        <div className="flex justify-between items-center px-4 py-3 border-b">
-          <h2 className="font-semibold text-slate-800">{title}</h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-800" data-testid="modal-close"><X className="w-5 h-5" /></button>
+        <div className="flex justify-between items-center px-4 py-3 border-b flex-shrink-0">
+          <h2 className="font-semibold text-slate-800 truncate pr-2">{title}</h2>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-800 flex-shrink-0" data-testid="modal-close"><X className="w-5 h-5" /></button>
         </div>
-        <div className="p-4">{children}</div>
+        <div className="p-4 overflow-y-auto flex-1">{children}</div>
       </div>
     </div>,
     document.body

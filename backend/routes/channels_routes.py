@@ -7,6 +7,7 @@ from typing import Optional, List
 import uuid
 import httpx
 import os
+import re
 import logging
 from datetime import datetime, timezone, timedelta
 from counters import next_ticket_number
@@ -549,7 +550,58 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     if not phone:
         return {"ok": True}
 
-    ticket = await db.tickets.find_one({
+    # @lid / LID fallback guard:
+    # Baileys may deliver messages from WhatsApp Linked Devices using an
+    # opaque Linked-Identifier (e.g. 250615737372785) instead of the real
+    # phone number. The microservice tries to resolve via senderPn /
+    # participantPn / remoteJidAlt / lidMapping, but it can fail, in which
+    # case the webhook arrives with a fake phone. Without intervention, the
+    # same human creates many duplicate tickets. We guard server-side:
+    # if the phone looks like a LID (non-Brazilian format, unusually long
+    # prefix) AND we already have an OPEN ticket for the same pushName +
+    # connection in the last 72h, we append the message there instead of
+    # creating a duplicate. The "right" phone is NOT overwritten, so when
+    # the user eventually replies from their real device and Baileys
+    # resolves it, the message flows to the correct ticket.
+    def _looks_like_lid(p: str) -> bool:
+        if not p:
+            return False
+        digits = re.sub(r"\D", "", p)
+        if len(digits) < 12:
+            return False  # too short to be LID
+        # Real Brazilian: starts with 55 + (10|11) digits = 12 or 13 total.
+        if digits.startswith("55") and len(digits) in (12, 13):
+            return False
+        # International numbers also typically fit 10-14 digits; LIDs are
+        # typically 14-17 and do not match common country code prefixes of
+        # our user base. This heuristic errs on the side of safety (it only
+        # triggers the merge when BOTH (a) the phone is suspicious AND
+        # (b) we already have a ticket with the same push_name for the
+        # same connection).
+        if len(digits) >= 14:
+            return True
+        return False
+
+    fallback_ticket = None
+    if _looks_like_lid(phone) and name:
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+        fallback_ticket = await db.tickets.find_one({
+            "company_id": company_id,
+            "connection_id": instance_id,
+            "customer_name": name,
+            "status": {"$nin": ["fechado"]},
+            "updated_at": {"$gte": cutoff},
+            "customer_phone": {"$ne": phone},  # look for a NON-LID phone
+        }, sort=[("updated_at", -1)])
+        if fallback_ticket:
+            logger.warning(
+                f"[webhook][lid-fallback] LID phone={phone} name={name!r} "
+                f"merged into ticket {fallback_ticket.get('ticket_number')} "
+                f"(real_phone={fallback_ticket.get('customer_phone')})"
+            )
+
+    ticket = fallback_ticket or await db.tickets.find_one({
         "company_id": company_id,
         "customer_phone": phone,
         "status": {"$nin": ["fechado"]}
@@ -573,6 +625,7 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "id": ticket_id,
             "ticket_number": ticket_number,
             "company_id": company_id,
+            "connection_id": instance_id,
             "client_id": client_id,
             "customer_name": name,
             "customer_phone": phone,
@@ -585,6 +638,7 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "messages": [new_message],
             "tags": [],
             "value": 0.0,
+            "pending_lid_resolution": _looks_like_lid(phone),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }

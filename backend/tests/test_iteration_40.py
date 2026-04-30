@@ -132,6 +132,8 @@ class TestQuotes:
     qnum = None
     sid = None
     fid = None
+    tid = None       # ticket id used to create quotes (mandatory now)
+    tnum = None      # ticket number (becomes the quote_number)
 
     def test_setup_catalog(self, crm_headers):
         s = requests.post(f"{API}/quotes/services", headers=crm_headers, json={
@@ -141,9 +143,15 @@ class TestQuotes:
             "description": "TEST_iter40 Rota X", "default_km": 100, "default_price_per_km": 2.5,
         }, timeout=20).json()
         TestQuotes.sid, TestQuotes.fid = s["id"], f["id"]
+        # Quotes are now ALWAYS attached to a ticket; provision one for the suite.
+        t = requests.post(f"{API}/crm/tickets", headers=crm_headers, json={
+            "customer_name": "TEST_iter40 Cliente", "customer_phone": "5562988887777",
+        }, timeout=20).json()
+        TestQuotes.tid, TestQuotes.tnum = t["id"], t["ticket_number"]
 
     def test_create_quote_computes_totals(self, crm_headers):
         payload = {
+            "ticket_id": TestQuotes.tid,
             "items": [
                 {"description": "Coleta A", "unit": "kg", "quantity": 100, "unit_price": 5.0,
                  "quote_service_id": TestQuotes.sid},
@@ -166,9 +174,19 @@ class TestQuotes:
         assert d["items_total"] == 100 * 5.0 + 50 * 2.0  # 600
         assert d["freights_total"] == 100 * 3.0  # 300
         assert d["total_value"] == 900
-        assert isinstance(d["quote_number"], int) and d["quote_number"] >= 1
+        # quote_number now comes FROM the ticket number
+        assert d["quote_number"] == TestQuotes.tnum
         TestQuotes.qid = d["id"]
         TestQuotes.qnum = d["quote_number"]
+
+    def test_create_without_ticket_rejected(self, crm_headers):
+        """Quotes MUST come from a ticket — POST without ticket_id => 400."""
+        r = requests.post(f"{API}/quotes", headers=crm_headers, json={
+            "items": [{"description": "X", "quantity": 1, "unit_price": 1}],
+            "freights": [],
+        }, timeout=20)
+        assert r.status_code == 400
+        assert "atendimento" in r.text.lower()
 
     def test_get_quote(self, crm_headers):
         r = requests.get(f"{API}/quotes/{TestQuotes.qid}", headers=crm_headers, timeout=20)
@@ -212,22 +230,26 @@ class TestQuotes:
         assert "{{#items}}" not in html and "{{#freights}}" not in html
 
     def test_sequential_quote_number(self, crm_headers):
+        # Second quote on the SAME ticket gets versioned suffix (#N.2)
         r = requests.post(f"{API}/quotes", headers=crm_headers, json={
+            "ticket_id": TestQuotes.tid,
             "items": [{"description": "X", "quantity": 1, "unit_price": 1}],
             "freights": [],
         }, timeout=20)
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         new_num = r.json()["quote_number"]
-        assert new_num == TestQuotes.qnum + 1
+        assert str(new_num).startswith(str(TestQuotes.qnum))
+        assert "." in str(new_num)
         # Cleanup the second
         requests.delete(f"{API}/quotes/{r.json()['id']}", headers=crm_headers, timeout=20)
 
     def test_delete_quote(self, crm_headers):
         r = requests.delete(f"{API}/quotes/{TestQuotes.qid}", headers=crm_headers, timeout=20)
         assert r.status_code == 200 and r.json().get("deleted") is True
-        # cleanup catalog
+        # cleanup catalog + ticket
         requests.delete(f"{API}/quotes/services/{TestQuotes.sid}", headers=crm_headers, timeout=20)
         requests.delete(f"{API}/quotes/freights/{TestQuotes.fid}", headers=crm_headers, timeout=20)
+        requests.delete(f"{API}/crm/tickets/{TestQuotes.tid}", headers=crm_headers, timeout=20)
 
 
 # ─── Multi-tenant isolation ──────────────────────────────────────────────────
@@ -253,7 +275,12 @@ class TestMultiTenant:
             requests.delete(f"{API}/quotes/services/{sid}", headers=crm_headers, timeout=20)
 
     def test_quote_not_visible_to_other_tenant(self, crm_headers, boss_headers):
+        # Need a ticket first (POST /quotes now requires ticket_id)
+        t = requests.post(f"{API}/crm/tickets", headers=crm_headers, json={
+            "customer_name": "TEST iso", "customer_phone": "5562988880001",
+        }, timeout=20).json()
         q = requests.post(f"{API}/quotes", headers=crm_headers, json={
+            "ticket_id": t["id"],
             "items": [{"description": "iso", "quantity": 1, "unit_price": 1}],
             "freights": [],
         }, timeout=20).json()

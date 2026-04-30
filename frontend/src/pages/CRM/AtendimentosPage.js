@@ -144,6 +144,8 @@ const AtendimentosPage = () => {
   const [showQuote, setShowQuote] = useState(false);
   const [showQuoteEditor, setShowQuoteEditor] = useState(false);
   const [pendingSendQuote, setPendingSendQuote] = useState(null);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [showEditContact, setShowEditContact] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -631,7 +633,27 @@ const AtendimentosPage = () => {
               <button onClick={handleDeleteTicket} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Excluir atendimento" data-testid="delete-ticket-btn"><Trash2 className="w-4 h-4" /></button>
               <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hidden sm:block" title="Transferir"><ArrowRightLeft className="w-4 h-4" /></button>
               <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hidden sm:block" title="Fechar"><Ban className="w-4 h-4" /></button>
-              <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Mais"><MoreVertical className="w-4 h-4" /></button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowMoreMenu(v => !v)}
+                  className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                  title="Mais"
+                  data-testid="ticket-more-btn"
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </button>
+                {showMoreMenu && (
+                  <div className="absolute right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-30 min-w-[220px]" onMouseLeave={() => setShowMoreMenu(false)}>
+                    <button
+                      onClick={() => { setShowMoreMenu(false); setShowMergeModal(true); }}
+                      className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                      data-testid="merge-ticket-btn"
+                    >
+                      <ArrowRightLeft className="w-4 h-4 text-amber-600" /> Mesclar com outro atendimento
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -894,10 +916,24 @@ const AtendimentosPage = () => {
       )}
       {showQuoteEditor && selectedTicket && (
         <QuoteEditor
-          initial={{ client_id: selectedTicket.client_id || '', ticket_id: selectedTicket.id }}
+          initial={{
+            client_id: selectedTicket.client_id || '',
+            ticket_id: selectedTicket.id,
+            ticket_number: selectedTicket.ticket_number,
+            customer_name: selectedTicket.customer_name,
+            customer_phone: selectedTicket.customer_phone,
+          }}
           onClose={() => setShowQuoteEditor(false)}
           onSaved={() => { setShowQuoteEditor(false); toast.success('Orcamento salvo. Disponivel em "Anexar Orcamento" ou no menu Orcamentos.'); }}
           onSavedAndSend={(quote) => { setShowQuoteEditor(false); setPendingSendQuote(quote.id); setShowQuote(true); }}
+        />
+      )}
+      {showMergeModal && selectedTicket && (
+        <MergeTicketModal
+          source={selectedTicket}
+          allTickets={tickets}
+          onClose={() => setShowMergeModal(false)}
+          onMerged={() => { setShowMergeModal(false); setSelectedTicket(null); loadData(); }}
         />
       )}
     </div>
@@ -1472,5 +1508,89 @@ const ScheduleMessageModal = ({ recipient, onClose, onSave }) => {
     </div>
   );
 };
+
+// Merge a duplicate ticket (e.g. created from an unresolved @lid phone)
+// into another existing ticket. Backend endpoint copies messages/tags
+// and deletes the source ticket.
+const MergeTicketModal = ({ source, allTickets, onClose, onMerged }) => {
+  const [search, setSearch] = useState('');
+  const [merging, setMerging] = useState(false);
+  const candidates = (allTickets || [])
+    .filter(t => t.id !== source.id)
+    .filter(t => {
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return String(t.ticket_number || '').includes(q)
+        || (t.customer_name || '').toLowerCase().includes(q)
+        || (t.customer_phone || '').includes(q);
+    })
+    .slice(0, 50);
+
+  const handleMerge = async (target) => {
+    if (!window.confirm(
+      `Mesclar atendimento #${source.ticket_number} (${source.customer_phone}) DENTRO de #${target.ticket_number} (${target.customer_phone})?\n\n` +
+      `Todas as mensagens e tags serao copiadas para #${target.ticket_number} e o atendimento #${source.ticket_number} sera EXCLUIDO.\n\nEsta acao nao pode ser desfeita.`
+    )) return;
+    setMerging(true);
+    try {
+      const { data } = await crmAPI.mergeTickets(source.id, target.id);
+      toast.success(`Mesclado: ${data.messages_added} msgs e ${data.tags_added} tags adicionadas em #${data.into_ticket_number}`);
+      onMerged && onMerged(target.id);
+    } catch (e) {
+      toast.error('Erro ao mesclar: ' + (e?.response?.data?.detail || e.message));
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-start justify-center p-4 overflow-y-auto" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl my-8 flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()} data-testid="merge-ticket-modal">
+        <div className="flex justify-between items-center px-4 py-3 border-b">
+          <div>
+            <h2 className="font-semibold text-slate-800">Mesclar atendimento</h2>
+            <p className="text-xs text-slate-500">Origem: #{source.ticket_number} {source.customer_name} — {source.customer_phone}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-800"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-4 overflow-y-auto">
+          <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900 mb-3">
+            Selecione o atendimento <strong>de destino</strong> que vai receber as mensagens. O atendimento de origem (#{source.ticket_number}) sera <strong>excluido</strong>.
+          </div>
+          <input
+            data-testid="merge-search"
+            placeholder="Buscar por nome, telefone ou numero..."
+            className="w-full border rounded px-3 py-2 text-sm mb-3"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            autoFocus
+          />
+          <div className="space-y-1">
+            {candidates.length === 0 ? (
+              <div className="text-center text-slate-400 py-6 text-sm">Nenhum atendimento encontrado.</div>
+            ) : candidates.map(t => (
+              <button
+                key={t.id}
+                onClick={() => handleMerge(t)}
+                disabled={merging}
+                className="w-full text-left p-2 border rounded hover:bg-emerald-50 hover:border-emerald-300 flex justify-between items-center disabled:opacity-50"
+                data-testid={`merge-target-${t.id}`}
+              >
+                <div>
+                  <div className="font-mono text-sm text-slate-700">#{t.ticket_number}</div>
+                  <div className="text-sm text-slate-800">{t.customer_name}</div>
+                  <div className="text-xs text-slate-500">{t.customer_phone}</div>
+                </div>
+                <div className="text-xs bg-slate-100 px-2 py-0.5 rounded">{t.status}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 
 export default AtendimentosPage;
