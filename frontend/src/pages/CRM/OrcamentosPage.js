@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { quotesAPI, schedulingAPI } from '../../services/api';
 import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy } from 'lucide-react';
 
@@ -776,20 +777,23 @@ const Field = ({ label, children }) => (
   </label>
 );
 
-const ModalShell = ({ title, children, onClose, large }) => (
-  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
-    <div
-      className={`bg-white rounded-lg shadow-xl w-full ${large ? 'max-w-4xl' : 'max-w-lg'} my-8`}
-      onClick={(e) => e.stopPropagation()}
-      data-testid="modal-shell"
-    >
-      <div className="flex justify-between items-center px-4 py-3 border-b">
-        <h2 className="font-semibold text-slate-800">{title}</h2>
-        <button onClick={onClose} className="text-slate-500 hover:text-slate-800" data-testid="modal-close"><X className="w-5 h-5" /></button>
+const ModalShell = ({ title, children, onClose, large }) => {
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
+      <div
+        className={`bg-white rounded-lg shadow-xl w-full ${large ? 'max-w-4xl' : 'max-w-lg'} my-8`}
+        onClick={(e) => e.stopPropagation()}
+        data-testid="modal-shell"
+      >
+        <div className="flex justify-between items-center px-4 py-3 border-b">
+          <h2 className="font-semibold text-slate-800">{title}</h2>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-800" data-testid="modal-close"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-4">{children}</div>
       </div>
-      <div className="p-4">{children}</div>
-    </div>
-  </div>
-);
+    </div>,
+    document.body
+  );
+};
 
 export default OrcamentosPage;
