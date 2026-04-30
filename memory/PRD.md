@@ -11,6 +11,25 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Modulo de Orcamentos - Fase 2 (PDF + envio via WhatsApp no chat)
+- **Backend - geracao de PDF server-side** (`/app/backend/routes/quotes_routes.py`):
+  - Instalado **WeasyPrint 68.1** (deps libpango/libcairo ja presentes no container).
+  - Novo `GET /api/quotes/{id}/pdf` retorna PDF binario (Content-Type: application/pdf) com filename `orcamento-{N}.pdf` — gerado a partir do mesmo HTML do `/render`. ~15KB por orcamento, header `%PDF-1.7` valido.
+  - Refator: extraido helper `_build_quote_html(qid, user, db)` reusado por `/render`, `/pdf` e `/send-whatsapp`.
+- **Backend - envio direto via WhatsApp** (`POST /api/quotes/{id}/send-whatsapp`):
+  - Resolve telefone na ordem `data.phone -> quote.client.phone -> ticket.customer_phone`. 400 se nao puder resolver.
+  - Valida ownership da `connection_id` (multi-tenant) — 404 cross-tenant.
+  - Codifica PDF em base64 e POSTa no microservico Node.js endpoint `/instances/{conn}/send-media`.
+  - Loga mensagem do tipo `document` com `attachment_kind='quote_pdf'` no `tickets.messages` (sempre, mesmo em falha — permite retry).
+  - Atualiza `quote.last_sent_at/phone/status` e promove rascunho->enviado SOMENTE em sucesso.
+  - Falha 502 com mensagem amigavel sanitizada (sem leak de stacktrace) — diferenciacao automatica entre "Not connected" / "send-media nao implementado" / generico.
+- **Microservico Node.js** (`/app/whatsapp-service/index.js`): novo endpoint `/instances/:id/send-media` aceita `{phone, filename, mimetype, data_base64, caption}`. Suporta image (`image:`) ou document (`document:` com `fileName`). Reusa toda a logica de resolucao de JID brasileiro (onWhatsApp + 4 fallbacks) ja consolidada no `/send`. **Producao requer redeploy no Render** para entrar em uso (dev: testado e funcional na porta 3002).
+- **Frontend - integracao no chat** (`/app/frontend/src/pages/CRM/AtendimentosPage.js`):
+  - Botao discreto `data-testid="attach-quote-btn"` (icone FileText verde) no rodape do chat ao lado do schedule-message-btn.
+  - Renderizacao de mensagens `type='document'` com chip clicavel `chat-quote-attachment-{id}` linkando para o PDF inline.
+- **Componente `QuoteAttachModal.js`**: 2 colunas (lista de orcamentos do cliente + preview HTML scaled), select da conexao WhatsApp, textarea de legenda pre-preenchida, botao "Abrir PDF" (download direto) e "Enviar via WhatsApp" com toast de feedback.
+- **Testes**: 9/9 backend Phase 2 (test_iteration_42.py) + 60% frontend smoke (modal opens, lista carrega — full pick→send→chip flow disponivel apos seed de quote vinculado a ticket, ja criado: quote #17 → ticket #1006).
+
 ### 2026-04-30 — Modulo de Orcamentos (Quotes) - Fase 1 Completa
 - **Backend completo** (`/app/backend/routes/quotes_routes.py`):
   - 4 collections: `quote_services` (catalogo de produtos), `quote_freights` (catalogo de fretes), `quote_templates` (HTML templates com placeholders), `quotes` (propostas geradas).
@@ -165,10 +184,11 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - (nenhum bloqueador conhecido)
 
 ### P1
-- Modulo Orcamentos — Fase 2: integrar criação de orcamento direto no chat (modal dentro do ticket), envio do PDF gerado direto para o WhatsApp do cliente
+- Modulo Orcamentos — Fase 3: ja recebido como entrega Fase 2 — restante: BackgroundTasks para gerar PDF assincrono em quotes muito grandes (atual: sincrono ~100-500ms suficiente)
+- **REDEPLOY do microservico Node.js no Render** (urgente quando user quiser ativar envio de PDF via WhatsApp em producao) — adiciona endpoint `/send-media`
 - Importacao Incinera (BLOCKED, aguardando CSV do usuario)
 - Inserir cards de Planos/Preços na Landing Page com botão "Contratar"
-- Refatoração do `Dashboard.js` (+5000 linhas → quebrar em Tabs/AgendaTab.js, ConfigTab.js, etc.) e do `OrcamentosPage.js` (~800 linhas → splitar em ServicesTab/FreightsTab/TemplatesTab/QuoteEditor)
+- Refatoração do `Dashboard.js` (+5000 linhas → quebrar em Tabs/AgendaTab.js, ConfigTab.js, etc.) e do `quotes_routes.py` (~750 linhas → splitar em quotes_catalog/quotes_send_service)
 - Integração Stripe (Cartão + Pix)
 - Notificações Push (Web Push API)
 

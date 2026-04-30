@@ -684,7 +684,7 @@ async def send_quote_whatsapp(
     pdf_bytes = _generate_pdf_bytes(html)
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
     filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
-    caption = data.caption or f"Segue orcamento #{quote.get('quote_number')} no valor de R$ {quote.get('total_value', 0):.2f}".replace(".", ",")
+    caption = data.caption or f"Segue orcamento #{quote.get('quote_number')} no valor de {_format_brl(quote.get('total_value', 0))}"
 
     # Forward to the WhatsApp microservice (/sendMedia endpoint)
     payload = {
@@ -748,5 +748,12 @@ async def send_quote_whatsapp(
     await db.quotes.update_one({"id": qid}, {"$set": quote_update})
 
     if delivery_status == "failed":
-        raise HTTPException(502, f"Falha ao enviar via WhatsApp: {delivery_error}")
+        # Avoid leaking raw stack/internal IPs to the client; full error stays
+        # logged on the ticket and in our backend logger above.
+        public_msg = "Microservico WhatsApp indisponivel ou nao conectado"
+        if delivery_error and "Not connected" in delivery_error:
+            public_msg = "Conexao WhatsApp nao esta conectada — escaneie o QR e tente novamente"
+        elif delivery_error and "404" in delivery_error and "send-media" in delivery_error:
+            public_msg = "Microservico WhatsApp ainda nao foi atualizado (redeploy pendente)"
+        raise HTTPException(502, f"Falha ao enviar via WhatsApp: {public_msg}")
     return {"success": True, "delivery_status": delivery_status, "wa_message_id": wa_message_id, "filename": filename}
