@@ -1068,11 +1068,15 @@ const NewTicketModal = ({ onClose, onSave }) => {
 const EditContactModal = ({ ticket, onClose, onSave }) => {
   // Now backed by the real Client/Lead record. Compact mode shows the
   // essentials; "Ver mais" expands to CPF/CNPJ + endereço completo.
+  const [tab, setTab] = useState('cadastro'); // cadastro | historico
   const [client, setClient] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [cepLoading, setCepLoading] = useState(false);
+  // Timeline state
+  const [timeline, setTimeline] = useState(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -1082,6 +1086,16 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
     }).catch(() => setClient({})).finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, [ticket.id]);
+
+  // Load timeline lazily when the tab is opened.
+  useEffect(() => {
+    if (tab !== 'historico' || timeline || !client?.id) return;
+    setTimelineLoading(true);
+    crmAPI.getClientTimeline(client.id)
+      .then(r => setTimeline(r.data))
+      .catch(() => setTimeline({ tickets: [], stats: {} }))
+      .finally(() => setTimelineLoading(false));
+  }, [tab, client?.id, timeline]);
 
   const set = (patch) => setClient(c => ({ ...(c || {}), ...patch }));
 
@@ -1130,7 +1144,26 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
 
-        {loading ? (
+        {/* Tabs */}
+        <div className="flex gap-1 mb-4 bg-slate-100 p-1 rounded-lg">
+          <button
+            onClick={() => setTab('cadastro')}
+            className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${tab === 'cadastro' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'}`}
+            data-testid="tab-cadastro"
+          >Cadastro</button>
+          <button
+            onClick={() => setTab('historico')}
+            disabled={!client?.id}
+            className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center justify-center gap-1 disabled:opacity-50 ${tab === 'historico' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'}`}
+            data-testid="tab-historico"
+          >
+            Historico {timeline?.stats?.total_tickets > 0 && (
+              <span className="text-[10px] bg-primary text-white rounded-full px-1.5 py-0.5 leading-none">{timeline.stats.total_tickets}</span>
+            )}
+          </button>
+        </div>
+
+        {tab === 'cadastro' && (loading ? (
           <div className="py-10 text-center text-sm text-slate-500">Carregando...</div>
         ) : (
           <>
@@ -1242,6 +1275,85 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
               </div>
             )}
           </>
+        ))}
+
+        {tab === 'historico' && (
+          timelineLoading ? (
+            <div className="py-10 text-center text-sm text-slate-500" data-testid="timeline-loading">Carregando historico...</div>
+          ) : (
+            <div data-testid="client-timeline">
+              {/* Stats grid */}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-slate-50 rounded-lg p-2.5 text-center">
+                  <p className="text-[9px] uppercase font-bold text-slate-400">Atendimentos</p>
+                  <p className="text-xl font-bold text-slate-900">{timeline?.stats?.total_tickets || 0}</p>
+                  <p className="text-[10px] text-slate-500">{timeline?.stats?.open || 0} abertos</p>
+                </div>
+                <div className="bg-emerald-50 rounded-lg p-2.5 text-center">
+                  <p className="text-[9px] uppercase font-bold text-emerald-600">Total movimentado</p>
+                  <p className="text-base font-bold text-emerald-700 leading-tight whitespace-nowrap">{`R$ ${(timeline?.stats?.total_value || 0).toFixed(2).replace('.', ',')}`}</p>
+                  <p className="text-[10px] text-emerald-600">Media R$ {(timeline?.stats?.avg_value || 0).toFixed(2).replace('.', ',')}</p>
+                </div>
+                <div className="bg-violet-50 rounded-lg p-2.5 text-center">
+                  <p className="text-[9px] uppercase font-bold text-violet-600">Ultima visita</p>
+                  <p className="text-xs font-bold text-violet-700 leading-tight">
+                    {timeline?.stats?.last_visit
+                      ? new Date(timeline.stats.last_visit).toLocaleDateString('pt-BR')
+                      : '-'}
+                  </p>
+                  <p className="text-[10px] text-violet-600">
+                    {timeline?.stats?.last_visit
+                      ? new Date(timeline.stats.last_visit).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                      : ''}
+                  </p>
+                </div>
+              </div>
+
+              {/* Tickets list */}
+              {(timeline?.tickets || []).length === 0 ? (
+                <p className="text-center py-6 text-xs text-slate-400">Nenhum atendimento anterior.</p>
+              ) : (
+                <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
+                  {timeline.tickets.map(t => {
+                    const statusMeta = {
+                      aberto: { cls: 'bg-emerald-100 text-emerald-700', label: 'Aberto' },
+                      em_atendimento: { cls: 'bg-blue-100 text-blue-700', label: 'Em atendimento' },
+                      aguardando: { cls: 'bg-amber-100 text-amber-700', label: 'Aguardando' },
+                      fechado: { cls: 'bg-slate-200 text-slate-700', label: 'Fechado' },
+                      cancelado: { cls: 'bg-rose-100 text-rose-700', label: 'Cancelado' },
+                    }[t.status] || { cls: 'bg-slate-100 text-slate-600', label: t.status || '-' };
+                    const isCurrent = t.id === ticket.id;
+                    return (
+                      <div
+                        key={t.id}
+                        className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border transition-colors ${
+                          isCurrent ? 'bg-primary/5 border-primary/40' : 'bg-white border-slate-200 hover:border-slate-300'
+                        }`}
+                        data-testid={`timeline-ticket-${t.id}`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="text-[10px] font-bold text-slate-400 flex-shrink-0">#{t.ticket_number ?? '?'}</span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${statusMeta.cls}`}>{statusMeta.label}</span>
+                              {isCurrent && <span className="text-[9px] text-primary font-semibold">atual</span>}
+                            </div>
+                            <p className="text-[11px] text-slate-500">
+                              {new Date(t.created_at).toLocaleDateString('pt-BR')} às {new Date(t.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              {t.channel && ` · ${t.channel}`}
+                            </p>
+                          </div>
+                        </div>
+                        {(t.value || 0) > 0 && (
+                          <span className="text-xs font-bold text-emerald-700 flex-shrink-0">{`R$ ${Number(t.value).toFixed(2).replace('.', ',')}`}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )
         )}
 
         <div className="flex justify-end gap-2 mt-5">

@@ -149,6 +149,57 @@ async def delete_ticket(
     return {"deleted": True}
 
 
+@router.get("/clients/{client_id}/timeline")
+async def get_client_timeline(
+    client_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    limit: int = 50,
+):
+    """360° view of a client: full ticket history + summary stats.
+
+    Returns tickets ordered by created_at desc plus aggregated stats so the
+    chat sidebar can render a single panel without N+1 queries.
+    """
+    company_id = user["company_id"]
+
+    # Verify the client belongs to this tenant
+    client = await db.clients.find_one(
+        {"id": client_id, "company_id": company_id}, {"_id": 0}
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente nao encontrado")
+
+    cursor = db.tickets.find(
+        {"company_id": company_id, "client_id": client_id},
+        {"_id": 0, "id": 1, "ticket_number": 1, "status": 1, "value": 1,
+         "channel": 1, "created_at": 1, "closed_at": 1, "updated_at": 1,
+         "customer_name": 1, "tags": 1, "rating": 1, "kanban_column_id": 1},
+    ).sort("created_at", -1).limit(limit)
+    tickets = await cursor.to_list(limit)
+
+    total = len(tickets)
+    total_value = sum(float(t.get("value") or 0) for t in tickets)
+    open_count = sum(1 for t in tickets if t.get("status") not in ("fechado", "cancelado"))
+    closed_count = sum(1 for t in tickets if t.get("status") == "fechado")
+    last_visit = tickets[0].get("created_at") if tickets else None
+    avg_value = (total_value / total) if total else 0.0
+
+    return {
+        "client": client,
+        "stats": {
+            "total_tickets": total,
+            "open": open_count,
+            "closed": closed_count,
+            "total_value": total_value,
+            "avg_value": avg_value,
+            "last_visit": last_visit,
+        },
+        "tickets": tickets,
+    }
+
+
+
 @router.get("/tickets/{ticket_id}/client")
 async def get_ticket_client(
     ticket_id: str,

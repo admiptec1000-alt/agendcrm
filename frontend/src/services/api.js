@@ -90,6 +90,7 @@ export const crmAPI = {
   updateTicket: (id, data) => api.put(`/crm/tickets/${id}`, data),
   getTicketClient: (id) => api.get(`/crm/tickets/${id}/client`),
   updateTicketClient: (id, data) => api.put(`/crm/tickets/${id}/client`, data),
+  getClientTimeline: (clientId, limit = 50) => api.get(`/crm/clients/${clientId}/timeline`, { params: { limit } }),
   deleteTicket: (id) => api.delete(`/crm/tickets/${id}`),
   addMessage: (ticketId, data) => api.post(`/crm/tickets/${ticketId}/messages`, data),
   addTicketTag: (ticketId, tag) => api.post(`/crm/tickets/${ticketId}/tags/add`, { tag }),

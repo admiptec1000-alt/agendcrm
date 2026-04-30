@@ -1,0 +1,27 @@
+{
+  "summary": "Iter39 (360° client timeline) fully validated. Backend pytest 8/8 pass: GET /api/crm/clients/{id}/timeline returns {client, stats, tickets}; stats has total_tickets/open/closed/total_value/avg_value/last_visit; tickets sorted by created_at desc; ?limit=N honored; 404 on unknown id and on cross-tenant id (verified by seeding a client under boss tenant and trying from crm session); null/missing value treated as 0; open = status NOT in (fechado, cancelado); closed = status == fechado; tickets expose ticket_number, status, value, created_at, channel, customer_name, tags, value (and no _id leaks). Iter38 regression (ticket↔client linking + GET /tickets/{id}/client round-trip) still OK. Frontend Playwright on /crmtest/painel/atendimentos: opening EditContactModal on ticket #1006, both data-testids tab-cadastro & tab-historico render; clicking Historico fires GET /clients/{id}/timeline?limit=50, client-timeline appears with 3 stat cards (Atendimentos=1 / Total Movimentado R$ 150,50 / Ultima visita 28/04/2026 01:51), 1 timeline-ticket-{id} row shown with 'atual' label, Historico tab badge shows '1'. Tab switch back to Cadastro restores contact-name input.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_39.py",
+    "/app/test_reports/pytest/iteration_39.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MODEL GAP: TicketStatus enum in /app/backend/models.py lacks 'cancelado' (only EM_COBRANCA/PAGO/BLOQUEADO/PROPOSTA/ABERTO/FECHADO). However /api/crm/clients/{id}/timeline excludes 'cancelado' from the open count. Today PUT /api/crm/tickets/{id} {status:'cancelado'} returns 422, so that exclusion branch is unreachable from the product. Either add CANCELADO to the enum OR drop 'cancelado' from the open-count filter to keep behavior consistent.",
+    "LIMIT SEMANTICS: stats are computed over the LIMITED list (sum/count of the N most recent tickets). If a company has >50 tickets on one client, stats.total_tickets/total_value will under-count. Either document that limit caps stats, or run stats via db.tickets.count_documents + aggregate pipeline independent from the paginated list. Suggested: use separate aggregation for totals and keep the limit only for the returned tickets[].",
+    "N+1-ISH: current impl fetches up to `limit` tickets and does Python-side sum/count. Fine for <500 tickets; if client history grows big, prefer a MongoDB $group aggregation.",
+    "GET mutates on cold ticket still applies (iter38 carryover) — not affecting this route.",
+    "Timeline tickets projection omits 'updated_at' but frontend sorts/displays by 'created_at' only — consistent. No bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_39.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% (modal→tab switch→timeline load→stats+tickets render)"},
+  "test_credentials": "CRM: crm@test.com / crm123 (subdomain crmtest). Boss used for cross-tenant 404 assertion: admin@boss.com.br / boss123.",
+  "seed_data_creation": "Pytest seeded 1 client + 3 tickets (aberto/100, fechado/250.5, aberto/null) via POST /api/crm/tickets (TEST_iter39_Client). Teardown deletes them. Frontend test used existing #1006 (Cliente Atualizado) — no persistent changes.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Timeline endpoint: GET /api/crm/clients/{client_id}/timeline?limit=50. Frontend testids: tab-cadastro, tab-historico (disabled when !client?.id), client-timeline, timeline-loading, timeline-ticket-{id}. Historico tab badge shows stats.total_tickets when >0. Modal opens via edit-contact-btn in chat header AFTER selecting a conversation (click the row in the left list, e.g. text '#1006'). To exercise 'cancelado' in tests you must insert directly in mongo — PUT /api/crm/tickets/{id} rejects status='cancelado' with 422 (model enum gap).",
+  "rca of the issue": "N/A — timeline feature behaves per spec. Flagged two code-review items: (1) TicketStatus enum missing CANCELADO makes the open-count's 'cancelado' branch dead code; (2) stats aggregate over the paginated list, so raising ?limit is required to trust totals on high-volume clients."
+}
