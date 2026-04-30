@@ -14,6 +14,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 import os
 from pydantic import BaseModel
 from counters import next_ticket_number
+from clients_link import find_or_create_client_by_phone
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -81,10 +82,15 @@ async def create_ticket(
 ):
     ticket_id = str(uuid.uuid4())
     ticket_number = await next_ticket_number(db, user["company_id"])
+    client_id = await find_or_create_client_by_phone(
+        db, user["company_id"], data.customer_phone,
+        name=data.customer_name, email=data.customer_email
+    )
     ticket = {
         "id": ticket_id,
         "ticket_number": ticket_number,
         "company_id": user["company_id"],
+        "client_id": client_id,
         "customer_name": data.customer_name,
         "customer_phone": data.customer_phone,
         "customer_email": data.customer_email,
@@ -139,8 +145,107 @@ async def delete_ticket(
 ):
     result = await db.tickets.delete_one({"id": ticket_id, "company_id": user["company_id"]})
     if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Ticket não encontrado")
-    return {"message": "Ticket deletado com sucesso"}
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    return {"deleted": True}
+
+
+@router.get("/tickets/{ticket_id}/client")
+async def get_ticket_client(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Returns the linked client (cliente/lead). When the ticket has no
+    client_id yet (legacy), tries to match by phone and links it lazily.
+    """
+    ticket = await db.tickets.find_one(
+        {"id": ticket_id, "company_id": user["company_id"]}, {"_id": 0}
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+
+    cid = ticket.get("client_id")
+    if not cid:
+        cid = await find_or_create_client_by_phone(
+            db, user["company_id"],
+            ticket.get("customer_phone", ""),
+            name=ticket.get("customer_name"),
+            email=ticket.get("customer_email"),
+        )
+        if cid:
+            await db.tickets.update_one({"id": ticket_id}, {"$set": {"client_id": cid}})
+
+    if not cid:
+        # No phone, no lead yet — return a stub the frontend can fill.
+        return {
+            "id": None,
+            "name": ticket.get("customer_name", ""),
+            "phone": ticket.get("customer_phone", ""),
+            "email": ticket.get("customer_email", ""),
+            "person_type": "fisica",
+        }
+    client = await db.clients.find_one({"id": cid, "company_id": user["company_id"]}, {"_id": 0})
+    return client or {"id": cid}
+
+
+@router.put("/tickets/{ticket_id}/client")
+async def update_ticket_client(
+    ticket_id: str,
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Updates (or creates) the linked client and refreshes denormalized
+    customer_* fields on the ticket so the chat header stays in sync.
+    """
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+
+    cid = ticket.get("client_id")
+    company_id = user["company_id"]
+
+    # Whitelist the fields a chat operator can edit on the linked client
+    ALLOWED = {
+        "name", "phone", "email", "person_type", "cpf", "cnpj",
+        "company_name", "cep", "address", "city", "state",
+        "birth_date", "notes",
+    }
+    fields = {k: v for k, v in (payload or {}).items() if k in ALLOWED}
+
+    if not cid:
+        # First save creates the client document
+        if not fields.get("phone"):
+            fields["phone"] = ticket.get("customer_phone", "")
+        if not fields.get("name"):
+            fields["name"] = ticket.get("customer_name") or fields.get("phone") or "Cliente"
+        cid = str(uuid.uuid4())
+        await db.clients.insert_one({
+            "id": cid, "company_id": company_id,
+            "person_type": fields.get("person_type") or "fisica",
+            "total_appointments": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_via": "ticket_panel",
+            **fields,
+        })
+    else:
+        if fields:
+            await db.clients.update_one(
+                {"id": cid, "company_id": company_id}, {"$set": fields}
+            )
+
+    # Sync denormalized fields on the ticket so the chat header stays correct.
+    sync = {"updated_at": datetime.now(timezone.utc).isoformat(), "client_id": cid}
+    if "name" in fields:
+        sync["customer_name"] = fields["name"]
+    if "phone" in fields:
+        sync["customer_phone"] = fields["phone"]
+    if "email" in fields:
+        sync["customer_email"] = fields["email"]
+    await db.tickets.update_one({"id": ticket_id}, {"$set": sync})
+
+    client = await db.clients.find_one({"id": cid, "company_id": company_id}, {"_id": 0})
+    return client
 
 @router.post("/tickets/{ticket_id}/messages")
 async def add_message_to_ticket(
@@ -725,10 +830,14 @@ async def run_campaign_now(
                     "status": {"$ne": "fechado"}
                 })
                 if not existing:
+                    auto_client = await find_or_create_client_by_phone(
+                        db, user["company_id"], person.get("phone"), name=person.get("name")
+                    )
                     await db.tickets.insert_one({
                         "id": str(uuid.uuid4()),
                         "ticket_number": await next_ticket_number(db, user["company_id"]),
                         "company_id": user["company_id"],
+                        "client_id": auto_client,
                         "customer_name": person.get("name") or person["phone"],
                         "customer_phone": person["phone"],
                         "channel": "whatsapp",

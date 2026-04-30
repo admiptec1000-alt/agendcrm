@@ -192,6 +192,31 @@ async def backfill_feature_keys(db):
     )
 
 
+async def backfill_ticket_client_links(db):
+    """For tickets created before client_id existed, try to match a client
+    by phone (digits-only) within the same company. Idempotent.
+    """
+    cursor = db.tickets.find(
+        {"$or": [{"client_id": {"$exists": False}}, {"client_id": None}]},
+        {"_id": 0, "id": 1, "company_id": 1, "customer_phone": 1, "customer_name": 1, "customer_email": 1}
+    )
+    from clients_link import find_or_create_client_by_phone
+    linked = 0
+    async for t in cursor:
+        phone = t.get("customer_phone", "")
+        if not phone:
+            continue
+        cid = await find_or_create_client_by_phone(
+            db, t["company_id"], phone,
+            name=t.get("customer_name"), email=t.get("customer_email")
+        )
+        if cid:
+            await db.tickets.update_one({"id": t["id"]}, {"$set": {"client_id": cid}})
+            linked += 1
+    if linked:
+        logger.info(f"Backfilled client_id on {linked} tickets")
+
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting AgentCRM & Booking System...")
@@ -201,6 +226,7 @@ async def startup_event():
     await seed_business_types(db)
     await backfill_ticket_numbers(db)
     await backfill_feature_keys(db)
+    await backfill_ticket_client_links(db)
     init_object_storage()
     # Start WhatsApp keep-alive background loop (Render free tier wake-up)
     try:

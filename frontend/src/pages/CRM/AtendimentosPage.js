@@ -318,22 +318,16 @@ const AtendimentosPage = () => {
     } catch (e) { toast.error('Erro ao agendar'); }
   };
 
-  const handleSaveContact = async (form) => {
-    if (!selectedTicket) return;
-    try {
-      const r = await crmAPI.updateTicket(selectedTicket.id, {
-        customer_name: form.customer_name,
-        customer_phone: form.customer_phone,
-        customer_email: form.customer_email || null,
-        value: parseFloat(form.value) || 0,
-        description: form.description,
-        channel: form.channel,
-      });
-      setSelectedTicket(r.data);
-      loadData();
-      toast.success('Contato atualizado');
-      setShowEditContact(false);
-    } catch (e) { toast.error('Erro ao salvar'); }
+  const handleSaveContact = async (_clientData) => {
+    // Modal already persisted via PUT /tickets/{id}/client. We just refresh
+    // the list so the chat header reflects the new denormalized name/phone.
+    if (selectedTicket) {
+      try {
+        const r = await crmAPI.getTicket(selectedTicket.id);
+        setSelectedTicket(r.data);
+      } catch {}
+    }
+    loadData();
   };
 
   const handleDeleteTicket = async () => {
@@ -1072,51 +1066,189 @@ const NewTicketModal = ({ onClose, onSave }) => {
 };
 
 const EditContactModal = ({ ticket, onClose, onSave }) => {
-  const [form, setForm] = useState({
-    customer_name: ticket.customer_name || '',
-    customer_phone: ticket.customer_phone || '',
-    customer_email: ticket.customer_email || '',
-    description: ticket.description || '',
-    channel: ticket.channel || 'whatsapp',
-  });
+  // Now backed by the real Client/Lead record. Compact mode shows the
+  // essentials; "Ver mais" expands to CPF/CNPJ + endereço completo.
+  const [client, setClient] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [cepLoading, setCepLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    crmAPI.getTicketClient(ticket.id).then(r => {
+      if (!alive) return;
+      setClient(r.data || {});
+    }).catch(() => setClient({})).finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, [ticket.id]);
+
+  const set = (patch) => setClient(c => ({ ...(c || {}), ...patch }));
+
+  const formatCEP = (v) => {
+    const d = (v || '').replace(/\D/g, '').slice(0, 8);
+    return d.length <= 5 ? d : `${d.slice(0, 5)}-${d.slice(5)}`;
+  };
+  const lookupCep = async (cep) => {
+    const raw = (cep || '').replace(/\D/g, '');
+    if (raw.length !== 8) return;
+    try {
+      setCepLoading(true);
+      const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
+      const j = await res.json();
+      if (!j.erro) {
+        set({
+          address: [j.logradouro, j.bairro].filter(Boolean).join(' - ') || client?.address,
+          city: j.localidade || client?.city,
+          state: (j.uf || client?.state || '').toUpperCase(),
+        });
+      }
+    } catch {} finally { setCepLoading(false); }
+  };
+
+  const handleSave = async () => {
+    if (!client?.name?.trim()) { toast.error('Informe o nome'); return; }
+    setSaving(true);
+    try {
+      const r = await crmAPI.updateTicketClient(ticket.id, client);
+      toast.success('Cadastro atualizado');
+      onSave && onSave(r.data);
+      onClose();
+    } catch (e) {
+      toast.error('Falha ao salvar cadastro');
+    } finally { setSaving(false); }
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="edit-contact-modal">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-lg font-bold font-heading text-slate-900">Editar Contato</h3>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-5 my-8" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-lg font-bold font-heading text-slate-900">Cadastro do Cliente</h3>
+            <p className="text-[11px] text-slate-400">Mesmo cadastro de Cliente / Lead. Alteracoes refletem em todos os atendimentos deste contato.</p>
+          </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
-        <div className="space-y-3">
-          <div>
-            <label className="text-[10px] font-bold uppercase text-slate-400">Nome</label>
-            <input value={form.customer_name} onChange={e => setForm({...form, customer_name: e.target.value})} className="input-field w-full" data-testid="edit-contact-name" />
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase text-slate-400">Telefone</label>
-            <input value={form.customer_phone} onChange={e => setForm({...form, customer_phone: e.target.value})} className="input-field w-full" data-testid="edit-contact-phone" />
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase text-slate-400">Email</label>
-            <input value={form.customer_email} onChange={e => setForm({...form, customer_email: e.target.value})} className="input-field w-full" type="email" />
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase text-slate-400">Canal</label>
-            <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field text-sm w-full">
-              <option value="whatsapp">WhatsApp</option>
-              <option value="instagram">Instagram</option>
-              <option value="web">Web</option>
-              <option value="email">Email</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase text-slate-400">Observacoes</label>
-            <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} className="input-field w-full" rows={2} />
-          </div>
-        </div>
+
+        {loading ? (
+          <div className="py-10 text-center text-sm text-slate-500">Carregando...</div>
+        ) : (
+          <>
+            {/* Tipo Pessoa */}
+            <div className="flex gap-1 mb-3 bg-slate-100 p-1 rounded-lg w-full">
+              {[
+                { v: 'fisica', label: 'Pessoa Fisica' },
+                { v: 'juridica', label: 'Pessoa Juridica' },
+              ].map(o => (
+                <button
+                  key={o.v}
+                  onClick={() => set({ person_type: o.v })}
+                  className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                    (client?.person_type || 'fisica') === o.v ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'
+                  }`}
+                  data-testid={`pt-${o.v}`}
+                >{o.label}</button>
+              ))}
+            </div>
+
+            {/* Compacto: nome, telefone, email, doc */}
+            <div className="space-y-2.5">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Nome {(client?.person_type === 'juridica') && '/ Contato'}</label>
+                <input value={client?.name || ''} onChange={e => set({ name: e.target.value })} className="input-field w-full" data-testid="contact-name" />
+              </div>
+              {client?.person_type === 'juridica' && (
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Empresa (Razao Social)</label>
+                  <input value={client?.company_name || ''} onChange={e => set({ company_name: e.target.value })} className="input-field w-full" data-testid="contact-company" />
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Telefone</label>
+                  <input value={client?.phone || ''} onChange={e => set({ phone: e.target.value })} className="input-field w-full" data-testid="contact-phone" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">{client?.person_type === 'juridica' ? 'CNPJ' : 'CPF'}</label>
+                  <input
+                    value={client?.person_type === 'juridica' ? (client?.cnpj || '') : (client?.cpf || '')}
+                    onChange={e => set(client?.person_type === 'juridica' ? { cnpj: e.target.value } : { cpf: e.target.value })}
+                    className="input-field w-full"
+                    data-testid="contact-doc"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Email</label>
+                <input type="email" value={client?.email || ''} onChange={e => set({ email: e.target.value })} className="input-field w-full" data-testid="contact-email" />
+              </div>
+            </div>
+
+            {/* Toggle expand */}
+            <button
+              type="button"
+              onClick={() => setExpanded(e => !e)}
+              className="text-xs text-primary font-semibold mt-3 hover:underline flex items-center gap-1"
+              data-testid="contact-toggle-expand"
+            >
+              {expanded ? 'Ocultar detalhes' : 'Ver mais (endereco, observacoes...)'}
+              <span className={`inline-block transition-transform ${expanded ? 'rotate-180' : ''}`}>▾</span>
+            </button>
+
+            {expanded && (
+              <div className="space-y-2.5 mt-3 pt-3 border-t border-slate-200" data-testid="contact-extra-fields">
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="relative">
+                    <label className="text-[10px] font-bold uppercase text-slate-400">CEP</label>
+                    <input
+                      value={client?.cep || ''}
+                      onChange={e => {
+                        const v = formatCEP(e.target.value);
+                        set({ cep: v });
+                        if (v.replace(/\D/g, '').length === 8) lookupCep(v);
+                      }}
+                      placeholder="00000-000"
+                      maxLength={9}
+                      className="input-field w-full"
+                      data-testid="contact-cep"
+                    />
+                    {cepLoading && <span className="absolute right-2 top-1/2 mt-1 text-[10px] text-slate-400">...</span>}
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-bold uppercase text-slate-400">Cidade</label>
+                    <input value={client?.city || ''} onChange={e => set({ city: e.target.value })} className="input-field w-full" data-testid="contact-city" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-slate-400">UF</label>
+                    <input
+                      value={client?.state || ''}
+                      onChange={e => set({ state: (e.target.value || '').toUpperCase().slice(0, 2) })}
+                      maxLength={2}
+                      className="input-field w-full"
+                      data-testid="contact-state"
+                    />
+                  </div>
+                  <div className="col-span-3">
+                    <label className="text-[10px] font-bold uppercase text-slate-400">Endereco</label>
+                    <input value={client?.address || ''} onChange={e => set({ address: e.target.value })} className="input-field w-full" placeholder="Rua, numero, complemento, bairro" data-testid="contact-address" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Observacoes</label>
+                  <textarea value={client?.notes || ''} onChange={e => set({ notes: e.target.value })} className="input-field w-full" rows={2} data-testid="contact-notes" />
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
-          <button onClick={() => onSave(form)} className="btn-primary text-sm" data-testid="save-contact-btn">Salvar</button>
+          <button onClick={handleSave} disabled={saving || loading} className="btn-primary text-sm" data-testid="save-contact-btn">
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
         </div>
       </div>
     </div>

@@ -1,0 +1,28 @@
+{
+  "summary": "Iter38 ticket↔client unification fully validated. Backend pytest 10/10 passing: POST /api/crm/tickets links via find_or_create_client_by_phone (creates new client OR reuses existing client_id when phone repeats); GET /api/crm/tickets/{id}/client returns linked client doc with person_type; PUT /api/crm/tickets/{id}/client persists ALL whitelisted fields (name, person_type, cpf, cnpj, company_name, cep, address, city, state, notes), syncs ticket.customer_name AND customer_phone (phone change verified), and rejects non-whitelisted fields (id/company_id immutable). PJ flow saves cnpj+company_name. TicketUpdate now accepts client_id (round-trip OK). Iter36/37 regressions OK (kanban_column_id set/change, ticket list with status filter). Frontend Playwright e2e on /crmtest/painel/atendimentos: edit-contact-btn opens edit-contact-modal, GET pre-populated form (name+phone), Ver mais toggle reveals contact-extra-fields incl. CEP, PJ toggle reveals contact-company input, Save fires PUT and shows 'Cadastro atualizado' toast, reopen confirms persistence.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_38.py",
+    "/app/test_reports/pytest/iteration_38.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "clients_link.find_or_create_client_by_phone scans the entire clients collection per call (O(N) async iteration with digits-only normalize). Acceptable now but at >10k clients consider storing a normalized phone_digits field with index for O(1) lookup.",
+    "PUT /api/crm/tickets/{id}/client whitelist (crm_routes.py ~209) is defined inline as a set literal. Consider extracting to a module constant CLIENT_EDITABLE_FIELDS so the same whitelist can be reused on the Clientes/Leads UI route to keep edit surface aligned.",
+    "GET /api/crm/tickets/{id}/client lazy-creates a client when ticket has no client_id and a phone exists — this MUTATES on a GET (sets client_id). Documented behavior in docstring, but be aware GETs are no longer fully idempotent on a cold ticket. Not a bug; just noting for cache/CDN layers.",
+    "backfill_ticket_client_links runs on every startup and scans tickets without client_id; idempotent and bounded by 'no client_id' filter — fine.",
+    "AtendimentosPage.EditContactModal: ViaCEP is fetched directly from the browser (no auth/proxy). Confirmed not in scope; depends on external internet from client.",
+    "TicketUpdate.client_id is Optional[str] = None and propagated through the same `if v is not None or k in CLEARABLE_FIELDS` filter. client_id is NOT in CLEARABLE_FIELDS, so a future need to UNLINK a client via PUT would silently drop. Not currently required, just flagging for symmetry."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_38.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (e2e modal flow + persistence)"},
+  "test_credentials": "CRM admin: crm@test.com / crm123 (subdomain crmtest)",
+  "seed_data_creation": "Pytest created ephemeral tickets via POST /api/crm/tickets with TEST_iter38_* names — all cleaned up by teardown_module (verified 0 leftover). Frontend e2e renamed an existing ticket #1006 ('Cliente Atualizado') to TEST_iter38_UI_Updated; restored to 'Cliente Atualizado' via PUT after the test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Subdomain for CRM is /crmtest/painel/atendimentos (not /crmtest/atendimentos). The header edit-contact-btn appears only after a ticket is selected from the left list. Modal data-testids: edit-contact-modal, contact-name, contact-phone, contact-doc, contact-email, pt-fisica/pt-juridica, contact-toggle-expand, contact-extra-fields, contact-cep, contact-city, contact-state, contact-address, contact-notes, contact-company (PJ only), save-contact-btn. Backend whitelist for PUT /tickets/{id}/client: name, phone, email, person_type, cpf, cnpj, company_name, cep, address, city, state, birth_date, notes — anything else is silently dropped by design.",
+  "rca of the issue": "N/A — all features behave per spec."
+}
