@@ -11,6 +11,14 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Contato no chat = Cliente/Lead real (vínculo definitivo)
+- Novo campo `ticket.client_id` ligando o atendimento ao cadastro real do Cliente/Lead.
+- **Helper `find_or_create_client_by_phone`** (digits-only) usado em: POST /api/crm/tickets, webhook do WhatsApp e run_campaign — todo ticket novo já nasce vinculado.
+- **Backfill no startup** (`backfill_ticket_client_links`): tickets legados que tinham só `customer_phone` recebem `client_id` automaticamente via match por telefone.
+- **Novos endpoints**: `GET /api/crm/tickets/{id}/client` (lazy-link quando ainda não há vínculo) e `PUT /api/crm/tickets/{id}/client` (atualiza o cliente real e sincroniza os denormalized fields do ticket).
+- **EditContactModal reescrito**: agora carrega/edita o Cliente real. Modo compacto (nome, doc, telefone, email) + "Ver mais" expande endereço completo (CEP com auto-fill ViaCEP, cidade, UF, observações). Toggle PF/PJ controla CPF↔CNPJ e exibe campo "Empresa" para PJ.
+- **Testes (iter38)**: 10/10 backend PASS + frontend e2e completo OK.
+
 ### 2026-04-29 — Perfis de Acesso liberado na Incinera + Valor sai do contato e vai pro header do chat
 - **Produção**: habilitado `perfis_acesso: enabled=true` no Tipo de Negócio "Atendimento ao Cliente" (usado pela Incinera). Propagado automaticamente para a company.
 - **Campo "Valor" removido do EditContactModal** (ele pertence ao ticket, não ao contato). Substituído por `TicketValueEditor` inline no header do chat — clique no valor → input edita → Enter/blur salva → toast. Atende ao mockup do usuário.
