@@ -11,6 +11,18 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 6: Fix DEFINITIVO @lid (independente de connection_id + lid_phone_map persistente)
+- **Causa-raiz da Fase 5 falhar**: tickets criados manualmente (botao `+`) nao tinham `connection_id`. O fallback Strategy 1 da Fase 5 filtrava por `connection_id`, entao tickets manuais nunca casavam. User reportou caso #1014/#1015.
+- **Fix backend definitivo**:
+  - Quando agente envia outgoing via chat: `connection_id` eh setado no ticket automaticamente se estiver vazio (idempotente).
+  - Strategy 1 do webhook fallback agora eh GLOBAL na empresa (sem filtro de connection_id), janela 5min — extremamente confiavel.
+- **Fix microservico (lid_phone_map persistente em disco)**:
+  - Nova funcao `rememberLidForPhone(instanceId, lid, phone)` salva mapping LID → phone real toda vez que o operador envia outgoing (`/send` e `/send-media`).
+  - `lookupPhoneForLid` consulta o map quando chega incoming com @lid e nem `senderPn` nem `participantPn` resolveram.
+  - Persiste em `${AUTH_DIR}/${instanceId}/lid_phone_map.json` — sobrevive restarts/redeploys.
+- **Testes**: 10/10 backend test_iteration_44.py incluindo `test_lid_fallback_works_even_without_ticket_connection_id` que reproduz EXATAMENTE o caso #1014/#1015 (ticket manual sem connection_id).
+- **REDEPLOY_GUIDE.md** atualizado com instrucoes especificas para backend (prioritario) + microservico (recomendado).
+
 ### 2026-04-30 — Fase 5: Fix @lid robusto via last_outgoing_at
 - **Causa raiz identificada**: a Fase 4 fazia fallback por push_name. Mas quando o operador edita o nome do contato no CRM ('Izaque Ferreira'), o WhatsApp continua mandando o pushName real da conta WhatsApp ('Izaque Carriço'). Os nomes nao batem → fallback nao acionava → ticket duplicado.
 - **Solucao definitiva**: rastrear `last_outgoing_at` no ticket (atualizado quando agente envia msg via `/api/crm/tickets/{id}/messages`). Quando webhook chega com phone formato LID:

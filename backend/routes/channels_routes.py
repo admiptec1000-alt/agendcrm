@@ -585,15 +585,15 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     fallback_ticket = None
     if _looks_like_lid(phone):
         from datetime import timedelta
-        # Strategy 1: most recent outgoing within 5 minutes on same connection
-        # — extremely reliable: if the operator just sent something to a real
-        # phone and now an LID-tagged reply arrives within minutes, it's the
-        # same conversation. This handles edited contact names (where push_name
-        # in the WhatsApp profile differs from the ticket's customer_name).
+        # Strategy 1: most recent outgoing within 5 minutes ANYWHERE in the
+        # tenant — extremely reliable. If the operator just sent something
+        # and now an LID-tagged reply arrives within minutes, it's the same
+        # conversation. We DROP the connection_id filter so this works even
+        # for tickets created manually (which start without connection_id)
+        # and only later receive their first outgoing message.
         win_5m = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
         fallback_ticket = await db.tickets.find_one({
             "company_id": company_id,
-            "connection_id": instance_id,
             "status": {"$nin": ["fechado"]},
             "last_outgoing_at": {"$gte": win_5m},
             "customer_phone": {"$ne": phone},
@@ -602,12 +602,12 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             logger.warning(
                 f"[webhook][lid-fallback:outgoing] LID phone={phone} name={name!r} "
                 f"merged into ticket #{fallback_ticket.get('ticket_number')} "
-                f"(matched by recent outgoing on same connection, "
+                f"(matched by recent outgoing in tenant, "
                 f"real_phone={fallback_ticket.get('customer_phone')})"
             )
 
         # Strategy 2: same push_name + connection in last 72h (fallback for
-        # cases without recent outgoing — e.g. operator hasn't replied yet).
+        # cases without recent outgoing — e.g. customer wrote first).
         if not fallback_ticket and name:
             cutoff = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
             fallback_ticket = await db.tickets.find_one({

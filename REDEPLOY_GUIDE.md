@@ -1,121 +1,57 @@
-# Redeploy do Microserviço WhatsApp (Render)
+# Guia de Redeploy — Fase 6 (Fix definitivo @lid)
 
-## 🔴 PENDENTE — v2.1.2 (fix crítico @lid)
+## O QUE FOI CORRIGIDO
 
-**O que o fix resolve:** quando o cliente responde do WhatsApp Web/Desktop, o Baileys entrega `remoteJid = xxx@lid` (ID interno do dispositivo vinculado). A versão antiga (`v2.1.1` rodando em produção hoje) apenas retira o sufixo `@lid` e gera um "número fantasma" (ex: `250615737372785`). Isso cria um ticket duplicado no CRM e, quando você responde, a mensagem não chega ao cliente porque esse número fantasma não existe no WhatsApp.
+### Causa-raiz #1014/#1015
+Tickets criados **manualmente** (botao `+`, sem WhatsApp) nao tinham `connection_id`. O fallback que eu fiz na Fase 5 filtrava por `connection_id`, entao nunca achava match. Resultado: cliente respondia via @lid, sistema criava ticket novo.
 
-**v2.1.2 corrige:**
-- Resolução do `@lid` para o número real via `msg.key.senderPn` / `participantPn` / `remoteJidAlt` / `signalRepository.lidMapping.getPNForLID` (fallback em cascata)
-- Remoção de uma declaração duplicada de `const phone` que sobrescrevia o `realJid` já resolvido — bug que causava erro de sintaxe + perda do fix no envio do webhook
+### O que esta diferente agora
 
-**Como validar pós-deploy:**
-```bash
-curl https://agendcrm.onrender.com/version
-# Deve retornar:  "version":"v2.1.2"
-#                 "features":{...,"lid_senderpn_resolver":true,"phone_shadow_fix":true}
-```
+**Backend (FastAPI):**
+1. Quando o agente envia mensagem outgoing via chat:
+   - `last_outgoing_at` eh registrado
+   - Se o ticket nao tinha `connection_id`, eh setado AGORA automaticamente
+2. Webhook do WhatsApp ao receber phone formato LID:
+   - **Strategy 1 (5 min, GLOBAL na empresa)**: pega o ticket que TEM outgoing recente, **independente de connection_id**. Resolve o caso #1014/#1015.
+   - **Strategy 2 (72h, mesma connection)**: fallback por nome.
 
----
+**Microservico Node.js (Baileys):**
+3. `lid_phone_map` persistido em disco. Toda vez que o operador envia mensagem, o LID retornado pelo Baileys eh mapeado para o phone real digitado. Quando chega incoming com @lid, o microservico CONSULTA esse map e converte para o phone real ANTES de enviar pro backend. **Sobrevive a restarts/redeploys**.
 
-## Por que redeploy é necessário?
+## ORDEM DE DEPLOY
 
-O microserviço Node.js em `/app/whatsapp-service/index.js` foi atualizado com **fixes críticos**:
-
-1. **Cache de mensagens enviadas** (`sentMessageStore`) — corrige bug de mensagens em branco
-2. **Suporte a mais tipos de mensagem** — captions de imagem/vídeo/documento, respostas de botões, etc.
-3. **Endpoint `GET /instances/:id/contacts`** — para o botão "Importar Contatos"
-4. **Webhook `presence.update`** — para indicador "digitando..."
-5. **Webhook `messages.update`** — para duplo check azul (mensagem lida)
-6. **Conversão `messageTimestamp` Long → Number**
-7. **Captura de eventos `notify` E `append`** (não só `notify`)
-8. **[v2.1.2] Resolução de @lid (Linked Device JID)** — respostas do WhatsApp Web/Desktop não criam mais ticket fantasma
-
-Sem o redeploy, NENHUM desses fixes funciona em produção.
-
----
-
-## Passo a Passo (Render Dashboard)
-
-### 1. Push do código atualizado para o repositório
-Se você usa "Save to Github" no Emergent, isso já foi feito. Caso contrário:
+### 1. Backend (PRIORITARIO)
+Pode usar SOMENTE o backend e o fix ja funciona. Os tickets criados manualmente serao corretamente identificados pelo Strategy 1.
 
 ```bash
-cd /app
-git add whatsapp-service/index.js
-git commit -m "fix(whatsapp): v2.1.2 — @lid resolver + shadow phone const fix"
-git push origin main
+git push  # ou via "Save to Github" + Render auto-deploy
 ```
 
-### 2. Acesse o Render Dashboard
-- Login em https://dashboard.render.com
-- Encontre o serviço Web `agendcrm` (ou nome equivalente do microserviço Node.js)
+Verificar pos-deploy:
+- Logs devem aparecer: `[webhook][lid-fallback:outgoing] LID phone=250615... merged into ticket #N`
+- Nenhum ticket novo com phone `250615...` apos resposta de cliente que voce acabou de mandar mensagem
 
-### 3. Configure as variáveis de ambiente
-**CRÍTICO**: Verifique se `FASTAPI_URL` está configurada apontando para o backend público:
-
-| Variável        | Valor (exemplo)                                              |
-|-----------------|---------------------------------------------------------------|
-| `FASTAPI_URL`   | `https://agentcrm-book.preview.emergentagent.com`             |
-| `AUTH_DIR`      | `/var/data/auth_sessions` (caminho do disco persistente)      |
-| `PORT`          | `3002` (ou o que o Render fornecer)                           |
-| `WA_KEEPALIVE_TARGET` | (mesma URL do FASTAPI_URL)                              |
-
-⚠ Sem `FASTAPI_URL` correta, o microserviço **não consegue enviar webhooks** para o backend (mensagens recebidas, presence, acks ficam todos perdidos).
-
-### 4. Deploy manual
-- No serviço, clique em **"Manual Deploy" → "Deploy latest commit"**
-- Aguarde 2-3 min até aparecer "Live"
-- Veja os logs — deve aparecer:
-  ```
-  [whatsapp-service] Using AUTH_DIR=/var/data/auth_sessions
-  [whatsapp-service] Webhook target FASTAPI_URL=https://agentcrm-book.preview.emergentagent.com
-  WhatsApp Baileys Service running on port 3002
-  ```
-
-### 5. Reconectar o WhatsApp
-Após o redeploy, no painel **Conexões** do CRM:
-- Clique em "Sincronizar" — se voltar conectado, ótimo
-- Se não, clique em "Desconectar" → "Conectar" → escaneie o QR novamente
-
-### 6. Validação rápida
-Após reconectar:
-1. Mande uma mensagem do CRM para si mesmo via Atendimento
-2. Confira no celular se a mensagem chegou **com texto** (não em branco)
-3. Responda do celular — deve aparecer no Atendimento em até 5s
-4. Veja se aparece "digitando..." quando você digita do celular
-5. Ao ler do celular, o duplo check no CRM deve virar **azul**
-
----
-
-## Como saber se está funcionando?
+### 2. Microservico (Render)
+Recomendado — adiciona o `lid_phone_map` que torna o fix completo MESMO em casos que o backend nao consegue resolver (ex: cliente que escreveu pra voce primeiro, sem outgoing recente).
 
 ```bash
-# Health check do microserviço
-curl https://SEU-SERVICO.onrender.com/health
-# Deve retornar: {"status":"ok"}
-
-# Lista de contatos (se conectado)
-curl https://SEU-SERVICO.onrender.com/instances/SEU-INSTANCE-ID/contacts
-# Deve retornar: {"contacts":[{phone, name}, ...]}
+# git push do whatsapp-service (commit recente: lid mapping)
 ```
 
-E nos logs do backend FastAPI (Emergent), você verá:
-```
-[webhook/message] c477e72c phone=5511... mid=WAMID... text='ola'
-```
+## TESTE EM PRODUCAO
 
----
+1. Abra um ticket criado manualmente (sem connection_id) — ex `Teste Suporte`
+2. Mande "Oi" pelo chat
+3. Peca pra pessoa responder do WhatsApp dela
+4. Verifique: a resposta deve aparecer no MESMO ticket (nao criar novo)
+5. Se aparecer um novo ticket com phone `250615...`, copie esse phone + dump dos logs do backend e me envie
 
-## Problemas comuns
+## LIMPEZA DOS DUPLICADOS JA EXISTENTES
 
-### "Mensagens não aparecem no Atendimento"
-- 90% das vezes é `FASTAPI_URL` errada → corrija e redeploy
-- 5% é firewall do Render → habilite outbound HTTP
-- 5% é a sessão WA expirada → desconecte/reconecte e escaneie QR
+Para mesclar #1014/#1015, #1011/#1012, #1007/#1008:
 
-### "Mensagens enviadas chegam em branco para alguns contatos"
-- O `getMessage` ainda está retornando vazio? Confirme que o redeploy aconteceu (Render mostra timestamp do build)
-
-### "Indicador de digitando não aparece"
-- A pessoa precisa estar digitando *com a janela aberta no celular*
-- E o Baileys precisa estar inscrito naquele contato (acontece automaticamente após enviar primeira mensagem)
+1. Acesse o ticket DUPLICADO (com phone LID)
+2. Clique nos 3 pontinhos (MoreVertical) no header
+3. Selecione "Mesclar com outro atendimento"
+4. Busque o ticket REAL e clique nele
+5. Confirma — mensagens consolidam, duplicado eh deletado

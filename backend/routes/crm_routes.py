@@ -446,13 +446,19 @@ async def add_message_to_ticket(
     # Track last outgoing for the @lid fallback in the webhook handler.
     # When an incoming message arrives later with a fake LID phone, the
     # webhook resolves the destination ticket by looking up the most
-    # recent outgoing on the same connection (5-min window).
+    # recent outgoing on the same company (5-min window).
     if (
         data.sender_type == "agent"
         and ticket.get("channel") == "whatsapp"
         and message.get("delivery_status") == "sent"
     ):
         update_set["last_outgoing_at"] = update_set["updated_at"]
+        # Bind the connection_id to the ticket if it wasn't already
+        # (manual-created tickets often start without one). The ticket
+        # remembers which connection it lives on, helping the webhook
+        # match incoming replies even when the user replies via @lid.
+        if not ticket.get("connection_id") and conn_id:
+            update_set["connection_id"] = conn_id
 
     await db.tickets.update_one(
         {"id": ticket_id},

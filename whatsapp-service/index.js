@@ -61,6 +61,59 @@ function recallSent(jid, msgId) {
   return sentMessageStore[`${jid}:${msgId}`] || sentMessageStore[msgId] || null;
 }
 
+// ----------------------------------------------------------------------
+// LID <-> Phone mapping (per-instance), persisted to disk.
+//
+// Background: WhatsApp Linked Devices (Web/Desktop/iPad) deliver messages
+// with `@lid` JIDs that look like long random numbers (e.g. 250615737372785)
+// and DO NOT correspond to the contact's real phone. Baileys is supposed to
+// expose the real phone via `key.senderPn`, `key.participantPn`, contact
+// `lid` mapping, etc — but in practice these are often empty, so each LID
+// reply creates a duplicate ticket on the CRM side.
+//
+// Workaround: every time the operator successfully sends a message, the
+// sendMessage result contains `key.remoteJid` — which is the LID Baileys
+// will use for incoming replies from that contact. We persist a map
+// { LID -> phone } so when an incoming arrives with @lid, we translate
+// back to the real phone BEFORE forwarding to the backend webhook.
+// Persisted to disk so the mapping survives restarts/redeploys.
+// ----------------------------------------------------------------------
+const lidMaps = {}; // instanceId -> { lid: phone }
+function lidMapFile(instanceId) {
+  return path.join(AUTH_DIR, instanceId, 'lid_phone_map.json');
+}
+function loadLidMap(instanceId) {
+  if (lidMaps[instanceId]) return lidMaps[instanceId];
+  try {
+    const fp = lidMapFile(instanceId);
+    if (fs.existsSync(fp)) lidMaps[instanceId] = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+  } catch (_) {}
+  if (!lidMaps[instanceId]) lidMaps[instanceId] = {};
+  return lidMaps[instanceId];
+}
+function saveLidMap(instanceId) {
+  try {
+    const fp = lidMapFile(instanceId);
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    fs.writeFileSync(fp, JSON.stringify(lidMaps[instanceId] || {}));
+  } catch (e) { console.warn(`[${instanceId}] lid-map save fail: ${e.message}`); }
+}
+function rememberLidForPhone(instanceId, lid, phone) {
+  if (!instanceId || !lid || !phone) return;
+  if (!lid.endsWith('@lid')) return;
+  const m = loadLidMap(instanceId);
+  const lidKey = lid.replace('@lid', '');
+  if (m[lidKey] === phone) return;
+  m[lidKey] = phone;
+  saveLidMap(instanceId);
+}
+function lookupPhoneForLid(instanceId, lid) {
+  if (!instanceId || !lid) return null;
+  const m = loadLidMap(instanceId);
+  const lidKey = String(lid).replace('@lid', '').replace('@s.whatsapp.net', '');
+  return m[lidKey] || null;
+}
+
 // Ensure auth directory
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
@@ -243,6 +296,17 @@ async function createConnection(instanceId) {
               if (c?.lid === remoteJid || c?.lid === lidId) { realJid = jid; break; }
             }
           } catch (_) {}
+        }
+        // Last-ditch resolution: our own persisted LID->phone map populated
+        // every time the operator sent a message. Survives restarts and
+        // doesn't depend on Baileys exposing the right field. Single most
+        // reliable source for this user's setup.
+        if (!realJid) {
+          const phoneFromMap = lookupPhoneForLid(instanceId, remoteJid);
+          if (phoneFromMap) {
+            realJid = `${phoneFromMap}@s.whatsapp.net`;
+            console.log(`[${instanceId}] LID resolved via persistent map: ${remoteJid} -> ${phoneFromMap}`);
+          }
         }
         if (!realJid) {
           // Detailed log so operator can inspect the payload format and
@@ -457,6 +521,22 @@ app.post('/instances/:id/send', async (req, res) => {
     if (sent?.key?.id) {
       rememberSent(targetJid, sent.key.id, sent.message || { conversation: message });
     }
+
+    // Persist LID <-> phone mapping for the @lid fallback in incoming.
+    // The phone we just sent to is the SOURCE OF TRUTH; map every LID
+    // representation we observe (the targetJid AND the JID baileys returned
+    // on the sent message) back to the operator-provided phone.
+    try {
+      const realDigits = String(phone).replace(/\D/g, '');
+      if (targetJid && targetJid.endsWith('@lid')) {
+        rememberLidForPhone(req.params.id, targetJid, realDigits);
+      }
+      const sentJid = sent?.key?.remoteJid;
+      if (sentJid && sentJid.endsWith('@lid')) {
+        rememberLidForPhone(req.params.id, sentJid, realDigits);
+      }
+    } catch (_) {}
+
     // Reset to paused so the recipient does not see "typing" forever
     try { await instance.sock.sendPresenceUpdate('paused', targetJid); } catch (_) {}
     res.json({ success: true, jid: targetJid, message_id: sent?.key?.id });
@@ -522,6 +602,13 @@ app.post('/instances/:id/send-media', async (req, res) => {
     try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
     const sent = await instance.sock.sendMessage(targetJid, payload);
     if (sent?.key?.id) rememberSent(targetJid, sent.key.id, sent.message || {});
+    // Persist LID -> phone mapping (see /send for rationale)
+    try {
+      const realDigits = String(phone).replace(/\D/g, '');
+      if (targetJid && targetJid.endsWith('@lid')) rememberLidForPhone(req.params.id, targetJid, realDigits);
+      const sentJid = sent?.key?.remoteJid;
+      if (sentJid && sentJid.endsWith('@lid')) rememberLidForPhone(req.params.id, sentJid, realDigits);
+    } catch (_) {}
     res.json({ success: true, jid: targetJid, message_id: sent?.key?.id, filename: filename || null });
   } catch (e) {
     console.error(`[${req.params.id}] send-media error:`, e.message, e.stack?.split('\n')[1]);

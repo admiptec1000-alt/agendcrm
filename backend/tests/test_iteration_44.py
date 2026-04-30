@@ -305,6 +305,64 @@ class TestWebhookLidFallback:
             requests.delete(f"{API}/crm/tickets/{m['id']}", headers=crm_headers, timeout=20)
 
 
+    def test_lid_fallback_works_even_without_ticket_connection_id(self, crm_headers, crm_connection_id):
+        """Reproducao FIEL ao caso #1014/#1015 do user:
+        Ticket #1014 ('Teste Suporte') foi criado MANUALMENTE — sem
+        connection_id. Agente envia outgoing via /messages (que agora seta
+        connection_id automaticamente). Cliente responde com phone LID e
+        push_name diferente. O fallback deve achar o ticket pelo
+        last_outgoing_at sem depender de connection_id ser igual.
+        """
+        if not crm_connection_id:
+            pytest.skip("No CRM channel_connection available")
+
+        real_phone = "5562991700099"
+
+        # Manual ticket creation: NO connection_id
+        t = requests.post(f"{API}/crm/tickets", headers=crm_headers, json={
+            "customer_name": "Teste Suporte Manual",
+            "customer_phone": real_phone,
+            "channel": "whatsapp",
+        }, timeout=20).json()
+        tid = t["id"]
+        assert t.get("connection_id") in (None, "")  # sanity
+
+        # Force last_outgoing_at via DB (simulates a successful outgoing).
+        # Connection_id stays empty to mirror the user's real production case.
+        async def _seed_outgoing():
+            c = AsyncIOMotorClient(MONGO_URL)
+            db = c[DB_NAME]
+            from datetime import datetime, timezone
+            await db.tickets.update_one({"id": tid}, {"$set": {
+                "status": "aberto",
+                "last_outgoing_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }})
+            c.close()
+        asyncio.get_event_loop().run_until_complete(_seed_outgoing())
+
+        try:
+            lid_phone = "250615888777666"
+            payload = {
+                "instance_id": crm_connection_id,
+                "phone": lid_phone,
+                "name": "Nome Diferente Real",
+                "message": "Resposta vinda como LID",
+                "message_id": f"WA-LIDM-{int(time.time())}",
+                "timestamp": int(time.time()),
+            }
+            r = requests.post(f"{API}/channels/webhook/message", json=payload, timeout=20)
+            assert r.status_code == 200, r.text
+
+            tickets = requests.get(f"{API}/crm/tickets", headers=crm_headers, timeout=20).json()
+            assert [x for x in tickets if x.get("customer_phone") == lid_phone] == [], \
+                "LID created duplicate even after fallback dropped connection_id filter"
+            updated = requests.get(f"{API}/crm/tickets/{tid}", headers=crm_headers, timeout=20).json()
+            assert "Resposta vinda como LID" in [m.get("content") for m in (updated.get("messages") or [])]
+        finally:
+            requests.delete(f"{API}/crm/tickets/{tid}", headers=crm_headers, timeout=20)
+
+
     def test_lid_fallback_via_last_outgoing(self, crm_headers, crm_connection_id):
         """Reproducao do caso real do user (#1011/#1012):
         operador edita o nome do contato no CRM ('Izaque Ferreira'); WhatsApp
