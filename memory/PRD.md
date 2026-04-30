@@ -11,6 +11,14 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 4: Fix Bug @lid + Merge tickets + Quote = Ticket Number
+- **Fix bug `@lid` (server-side fallback)** (`/app/backend/routes/channels_routes.py`): heuristica `_looks_like_lid` (>= 14 digitos OU nao-brasileiro). Quando webhook chega com phone LID + push_name e ja existe ticket aberto recente do mesmo `customer_name + connection_id` (72h window), **mescla a mensagem nesse ticket existente** em vez de criar duplicado. customer_phone real do ticket NAO eh sobrescrito. Funciona MESMO quando o microservico Baileys nao consegue resolver `senderPn` — completamente independente de redeploy do Render.
+- **Endpoint `POST /api/crm/tickets/{src}/merge-into/{dst}`**: mescla src dentro de dst (mensagens dedup por wa_message_id + tags unicas + re-aponta quotes), deleta src, multi-tenant safe. UI: botao "Mesclar com outro atendimento" no menu MoreVertical do header do chat → `MergeTicketModal` com search e lista de candidatos.
+- **Microservico Node.js**: logging detalhado quando @lid nao resolve (printa `senderPn/participantPn/remoteJidAlt/participant/pushName`) + tentativa adicional via `store.contacts` lookup. Pendente redeploy no Render para usar (mas o fallback no backend ja resolve mesmo sem isso).
+- **Quote_number = ticket_number**: orcamento agora SO pode ser criado a partir de um ticket. POST /quotes sem ticket_id retorna 400. quote_number herdado do ticket. Segundo orcamento no mesmo ticket fica versionado (#1007.2). Botao "Novo Orcamento" na aba lista mostra apenas toast orientando criar via Atendimentos.
+- **QuoteEditor responsivo + banner ticket**: ModalShell com `max-h-[90vh] + flex-col + overflow-y-auto`. Footer agora **sticky** para sempre visivel mesmo em telas baixas. Banner azul "Vinculado ao Atendimento #N" + cliente travado (sem botao Trocar) quando vem via ticket. Header mostra "Novo Orcamento — Atendimento #1006".
+- **Testes**: 8 novos backend (test_iteration_44.py) + 32 regressao (iter40 21/21 + iter42 + iter43) all green. Frontend 10/10 E2E.
+
 ### 2026-04-30 — Modulo de Orcamentos - Fase 3 (Atalho no chat + Upload .docx + WYSIWYG)
 - **Atalho "Novo Orcamento" no header do ticket** (`AtendimentosPage.js`): icone FileText verde (`data-testid="new-quote-from-ticket-btn"`) ao lado de Editar Contato/Excluir. Abre o `QuoteEditor` com `client_id` e `ticket_id` pre-preenchidos. Footer do editor agora tem **2 botoes**:
   - **Salvar Orcamento** (verde) — salva e fecha. Disponivel depois em Orcamentos ou via "Anexar Orcamento" no chat.

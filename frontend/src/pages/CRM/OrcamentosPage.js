@@ -797,7 +797,7 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
         </div>
       </div>
 
-      <div className="flex flex-wrap justify-end gap-2 pt-4 border-t mt-4">
+      <div className="flex flex-wrap justify-end gap-2 pt-4 border-t mt-4 sticky bottom-0 bg-white -mx-4 -mb-4 px-4 pb-4 z-10">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600">Cancelar</button>
         <button data-testid="save-quote-btn" onClick={() => handleSave(false)} disabled={saving} className="bg-emerald-600 text-white px-4 py-2 rounded text-sm disabled:opacity-50">
           {saving ? 'Salvando...' : 'Salvar Orcamento'}
