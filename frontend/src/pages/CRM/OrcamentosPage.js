@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { quotesAPI, schedulingAPI, channelsAPI } from '../../services/api';
+import api from '../../services/api';
 import { toast } from 'sonner';
 import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy, Upload, Send, Loader2 } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
@@ -8,7 +9,7 @@ import 'react-quill-new/dist/quill.snow.css';
 
 const TABS = [
   { key: 'list', label: 'Orcamentos', icon: FileText },
-  { key: 'services', label: 'Produtos', icon: Package },
+  { key: 'services', label: 'Itens', icon: Package },
   { key: 'freights', label: 'Fretes', icon: Truck },
   { key: 'templates', label: 'Templates', icon: Layers },
 ];
@@ -24,7 +25,7 @@ const OrcamentosPage = () => {
     <div className="p-4 md:p-6" data-testid="orcamentos-page">
       <div className="mb-4">
         <h1 className="text-2xl font-bold text-slate-900">Orcamentos</h1>
-        <p className="text-sm text-slate-500">Gere propostas comerciais combinando produtos, fretes e templates personalizados.</p>
+        <p className="text-sm text-slate-500">Gere propostas comerciais combinando itens, fretes e templates personalizados.</p>
       </div>
 
       <div className="flex gap-1 border-b border-slate-200 mb-4 overflow-x-auto">
@@ -79,7 +80,7 @@ const ServicesTab = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Excluir este produto/servico?')) return;
+    if (!window.confirm('Excluir este item?')) return;
     await quotesAPI.deleteService(id);
     await load();
   };
@@ -87,7 +88,7 @@ const ServicesTab = () => {
   return (
     <div data-testid="services-tab">
       <div className="flex justify-between items-center mb-3">
-        <p className="text-sm text-slate-600">Cadastre produtos/servicos isolados (peso/unidade/litro etc) com preco padrao.</p>
+        <p className="text-sm text-slate-600">Cadastre itens isolados (peso/unidade/litro etc) com preco padrao.</p>
         <button
           data-testid="new-service-btn"
           onClick={() => setEditing({ description: '', unit: 'un', default_price: 0, notes: '' })}
@@ -110,7 +111,7 @@ const ServicesTab = () => {
             </thead>
             <tbody>
               {items.length === 0 ? (
-                <tr><td colSpan={4} className="text-center text-slate-400 py-6">Nenhum produto cadastrado.</td></tr>
+                <tr><td colSpan={4} className="text-center text-slate-400 py-6">Nenhum item cadastrado.</td></tr>
               ) : items.map(s => (
                 <tr key={s.id} className="border-t border-slate-100" data-testid={`service-row-${s.id}`}>
                   <td className="px-4 py-2 font-medium text-slate-800">{s.description}</td>
@@ -140,7 +141,7 @@ const ServiceModal = ({ initial, onClose, onSave }) => {
     notes: initial?.notes || '',
   });
   return (
-    <ModalShell title={initial?.id ? 'Editar Produto' : 'Novo Produto'} onClose={onClose}>
+    <ModalShell title={initial?.id ? 'Editar Item' : 'Novo Item'} onClose={onClose}>
       <div className="space-y-3">
         <Field label="Descricao *">
           <input data-testid="service-description" autoFocus className="w-full border rounded px-3 py-2 text-sm" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
@@ -406,20 +407,63 @@ const TemplatesTab = () => {
                   value={editing.content}
                   onChange={(html) => setEditing({ ...editing, content: html })}
                   modules={{
-                    toolbar: [
-                      [{ header: [1, 2, 3, false] }],
-                      ['bold', 'italic', 'underline', 'strike'],
-                      [{ color: [] }, { background: [] }],
-                      [{ list: 'ordered' }, { list: 'bullet' }],
-                      [{ align: [] }],
-                      ['link'],
-                      ['clean'],
-                    ],
+                    toolbar: {
+                      container: [
+                        [{ header: [1, 2, 3, false] }],
+                        ['bold', 'italic', 'underline', 'strike'],
+                        [{ color: [] }, { background: [] }],
+                        [{ list: 'ordered' }, { list: 'bullet' }],
+                        [{ align: [] }],
+                        ['link', 'image'],
+                        ['clean'],
+                      ],
+                      handlers: {
+                        image: function () {
+                          // Custom image handler: uploads the file to the
+                          // backend (/api/upload) which stores in object
+                          // storage and returns a PUBLIC URL that WeasyPrint
+                          // can fetch when rendering the PDF. This lets
+                          // users build letterhead (cabecalho/rodape) with
+                          // company logos.
+                          const input = document.createElement('input');
+                          input.type = 'file';
+                          input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
+                          input.onchange = async () => {
+                            const file = input.files?.[0];
+                            if (!file) return;
+                            if (file.size > 5 * 1024 * 1024) {
+                              toast.error('Imagem muito grande (limite 5MB)');
+                              return;
+                            }
+                            try {
+                              const fd = new FormData();
+                              fd.append('file', file);
+                              const resp = await api.post('/upload/', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                              const relUrl = resp.data?.url;
+                              const absUrl = relUrl?.startsWith('/api/')
+                                ? `${process.env.REACT_APP_BACKEND_URL}${relUrl}`
+                                : relUrl;
+                              const editor = this.quill;
+                              const range = editor.getSelection(true);
+                              editor.insertEmbed(range.index, 'image', absUrl, 'user');
+                              editor.setSelection(range.index + 1);
+                              toast.success('Imagem inserida');
+                            } catch (err) {
+                              toast.error('Falha no upload: ' + (err?.response?.data?.detail || err.message));
+                            }
+                          };
+                          input.click();
+                        },
+                      },
+                    },
                   }}
                   style={{ minHeight: '320px' }}
                 />
               </div>
-              <p className="text-xs text-slate-500 mt-1">Dica: use os placeholders abaixo para campos dinamicos. Para listas (itens, fretes), use os blocos <code className="bg-slate-100 px-1">{'{{#items}}...{{/items}}'}</code>.</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Dica: use o botao de imagem na barra para adicionar logotipo/cabecalho/rodape.
+                Placeholders disponiveis abaixo; blocos de itens: <code className="bg-slate-100 px-1">{'{{#items}}...{{/items}}'}</code>.
+              </p>
             </Field>
             <div className="bg-slate-50 rounded p-3">
               <p className="text-xs font-semibold text-slate-700 mb-1">Placeholders disponiveis (clique para copiar):</p>
@@ -708,9 +752,9 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
         {/* Itens */}
         <section className="border rounded-lg p-3">
           <div className="flex justify-between items-center mb-2">
-            <h3 className="font-semibold text-sm text-slate-700">Produtos / Servicos</h3>
+            <h3 className="font-semibold text-sm text-slate-700">Itens do Orcamento</h3>
             <div className="flex gap-1">
-              <button onClick={() => setPickService(true)} className="text-xs bg-emerald-50 border border-emerald-300 text-emerald-700 px-2 py-1 rounded" data-testid="pick-service-btn">+ do Catalogo</button>
+              <button onClick={() => setPickService(true)} className="text-xs bg-emerald-50 border border-emerald-300 text-emerald-700 px-2 py-1 rounded" data-testid="pick-service-btn">+ Item</button>
               <button onClick={addBlankItem} className="text-xs bg-slate-100 border px-2 py-1 rounded">+ Linha vazia</button>
             </div>
           </div>
@@ -735,7 +779,7 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
           <div className="flex justify-between items-center mb-2">
             <h3 className="font-semibold text-sm text-slate-700">Fretes / Deslocamentos</h3>
             <div className="flex gap-1">
-              <button onClick={() => setPickFreight(true)} className="text-xs bg-emerald-50 border border-emerald-300 text-emerald-700 px-2 py-1 rounded" data-testid="pick-freight-btn">+ do Catalogo</button>
+              <button onClick={() => setPickFreight(true)} className="text-xs bg-emerald-50 border border-emerald-300 text-emerald-700 px-2 py-1 rounded" data-testid="pick-freight-btn">+ Frete</button>
               <button onClick={addBlankFreight} className="text-xs bg-slate-100 border px-2 py-1 rounded">+ Linha vazia</button>
             </div>
           </div>
@@ -816,9 +860,9 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
       </div>
 
       {pickService && (
-        <ModalShell title="Adicionar do Catalogo de Produtos" onClose={() => setPickService(false)}>
+        <ModalShell title="Adicionar Item do Catalogo" onClose={() => setPickService(false)}>
           <div className="max-h-96 overflow-y-auto space-y-1">
-            {catalogServices.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">Nenhum produto cadastrado. Va para a aba "Produtos" para criar.</div>}
+            {catalogServices.length === 0 && <div className="text-center text-slate-400 py-6 text-sm">Nenhum item cadastrado. Va para a aba "Itens" para criar.</div>}
             {catalogServices.map(s => (
               <button key={s.id} onClick={() => addFromCatalog(s)} className="w-full text-left p-2 border rounded hover:bg-emerald-50 flex justify-between" data-testid={`pick-service-${s.id}`}>
                 <div>
@@ -853,21 +897,60 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
 };
 
 const PreviewModal = ({ html, quote, onClose }) => {
-  const handlePrint = () => {
-    const w = window.open('', '_blank', 'width=900,height=900');
-    if (!w) { alert('Permita popups para imprimir.'); return; }
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Orcamento #${quote?.quote_number || ''}</title></head><body>${html}<script>window.onload=function(){window.print();}</script></body></html>`);
-    w.document.close();
+  const [downloading, setDownloading] = useState(false);
+
+  // Fetch the server-rendered PDF (WeasyPrint) via axios (auth'd), build a
+  // blob URL, and open it in a new tab. More reliable than window.open('') +
+  // document.write (which produced a blank page in Safari and strict CSP
+  // environments). Also provides download button.
+  const openPdf = async () => {
+    setDownloading(true);
+    try {
+      const response = await api.get(`/quotes/${quote.id}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      // Keep the blob for at least a minute so the tab can load/print
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      toast.error('Erro ao gerar PDF: ' + (e?.response?.data?.detail || e.message));
+    } finally {
+      setDownloading(false);
+    }
   };
+
+  const downloadPdf = async () => {
+    setDownloading(true);
+    try {
+      const response = await api.get(`/quotes/${quote.id}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orcamento-${quote.quote_number || quote.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      toast.error('Erro ao baixar PDF: ' + (e?.response?.data?.detail || e.message));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <ModalShell title={`Visualizar Orcamento #${quote?.quote_number || ''}`} onClose={onClose} large>
       <div className="bg-white border rounded shadow-inner p-2 max-h-[60vh] overflow-y-auto" data-testid="quote-preview">
         <div dangerouslySetInnerHTML={{ __html: html }} />
       </div>
-      <div className="flex justify-end gap-2 pt-3 border-t mt-3">
+      <div className="flex flex-wrap justify-end gap-2 pt-3 border-t mt-3">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600">Fechar</button>
-        <button data-testid="print-quote-btn" onClick={handlePrint} className="flex items-center gap-1 bg-emerald-600 text-white px-4 py-2 rounded text-sm">
-          <Printer className="w-4 h-4" /> Imprimir / Salvar PDF
+        <button data-testid="download-pdf-btn" onClick={downloadPdf} disabled={downloading} className="flex items-center gap-1 bg-slate-600 text-white px-4 py-2 rounded text-sm disabled:opacity-50">
+          {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />} Baixar PDF
+        </button>
+        <button data-testid="print-quote-btn" onClick={openPdf} disabled={downloading} className="flex items-center gap-1 bg-emerald-600 text-white px-4 py-2 rounded text-sm disabled:opacity-50">
+          {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />} Abrir PDF / Imprimir
         </button>
       </div>
     </ModalShell>

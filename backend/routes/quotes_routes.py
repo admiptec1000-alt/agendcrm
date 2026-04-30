@@ -744,8 +744,14 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
 
 
 def _generate_pdf_bytes(html_content: str) -> bytes:
-    """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms)."""
-    return HTML(string=html_content).write_pdf()
+    """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms).
+
+    base_url lets WeasyPrint resolve relative <img src="/api/upload/..."> paths
+    against the public backend URL so company letterhead images uploaded via
+    the template editor appear in the PDF.
+    """
+    base_url = os.environ.get("PUBLIC_BACKEND_URL") or os.environ.get("FASTAPI_URL") or None
+    return HTML(string=html_content, base_url=base_url).write_pdf()
 
 
 @router.get("/{qid}/pdf")

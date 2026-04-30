@@ -11,6 +11,14 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 7: Renomeacoes + Editor de template com imagem + Fix PDF branco
+- **"Produtos/Servicos" → "Itens"** em toda UI (aba, label de secao, modais "Novo Item"/"Editar Item", placeholders, mensagens de vazio, confirmacao de delete).
+- **"+ do Catalogo" → "+ Item"** (items) / **"+ Frete"** (fretes) — botoes mais curtos e genericos.
+- **Editor de template com upload de imagem** — `ReactQuill` com handler customizado no botao de imagem: abre `<input type=file>`, envia para `POST /api/upload/`, e insere `<img src="URL publica">` no conteudo. Permite criar cabecalho/rodape/timbrado da empresa. WeasyPrint agora configurado com `base_url` (`PUBLIC_BACKEND_URL`/`FASTAPI_URL`) para resolver as URLs das imagens durante render de PDF.
+- **Bug "tela branca" do PDF RESOLVIDO**: PreviewModal substituiu `window.open('') + document.write` (que falha no Safari) por download real do PDF via `api.get(..., responseType: 'blob')` + `URL.createObjectURL` → abre no browser nativo ou faz download. 2 botoes: "Baixar PDF" (data-testid download-pdf-btn) + "Abrir PDF / Imprimir" (print-quote-btn).
+- **Checkmarks WhatsApp-style** (Fase anterior, confirmados): sent=1check cinza, delivered=2check cinza, read=2check azul — codigo ja existia no AtendimentosPage linhas 745-775 e eh atualizado via `messages.update` do microservice.
+- **Testes**: 36/36 backend (iter40 21/21 + iter44 10/10 + iter45 5/5). Novos testes iter45 validam `/api/upload/` funcionando, `/api/upload/files/{path}` publico (necessario para WeasyPrint), PDF retornando binario com header %PDF-1.x.
+
 ### 2026-04-30 — Fase 6: Fix DEFINITIVO @lid (independente de connection_id + lid_phone_map persistente)
 - **Causa-raiz da Fase 5 falhar**: tickets criados manualmente (botao `+`) nao tinham `connection_id`. O fallback Strategy 1 da Fase 5 filtrava por `connection_id`, entao tickets manuais nunca casavam. User reportou caso #1014/#1015.
 - **Fix backend definitivo**:
