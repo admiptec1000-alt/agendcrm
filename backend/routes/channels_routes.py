@@ -583,23 +583,47 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         return False
 
     fallback_ticket = None
-    if _looks_like_lid(phone) and name:
+    if _looks_like_lid(phone):
         from datetime import timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+        # Strategy 1: most recent outgoing within 5 minutes on same connection
+        # — extremely reliable: if the operator just sent something to a real
+        # phone and now an LID-tagged reply arrives within minutes, it's the
+        # same conversation. This handles edited contact names (where push_name
+        # in the WhatsApp profile differs from the ticket's customer_name).
+        win_5m = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
         fallback_ticket = await db.tickets.find_one({
             "company_id": company_id,
             "connection_id": instance_id,
-            "customer_name": name,
             "status": {"$nin": ["fechado"]},
-            "updated_at": {"$gte": cutoff},
-            "customer_phone": {"$ne": phone},  # look for a NON-LID phone
-        }, sort=[("updated_at", -1)])
+            "last_outgoing_at": {"$gte": win_5m},
+            "customer_phone": {"$ne": phone},
+        }, sort=[("last_outgoing_at", -1)])
         if fallback_ticket:
             logger.warning(
-                f"[webhook][lid-fallback] LID phone={phone} name={name!r} "
-                f"merged into ticket {fallback_ticket.get('ticket_number')} "
-                f"(real_phone={fallback_ticket.get('customer_phone')})"
+                f"[webhook][lid-fallback:outgoing] LID phone={phone} name={name!r} "
+                f"merged into ticket #{fallback_ticket.get('ticket_number')} "
+                f"(matched by recent outgoing on same connection, "
+                f"real_phone={fallback_ticket.get('customer_phone')})"
             )
+
+        # Strategy 2: same push_name + connection in last 72h (fallback for
+        # cases without recent outgoing — e.g. operator hasn't replied yet).
+        if not fallback_ticket and name:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+            fallback_ticket = await db.tickets.find_one({
+                "company_id": company_id,
+                "connection_id": instance_id,
+                "customer_name": name,
+                "status": {"$nin": ["fechado"]},
+                "updated_at": {"$gte": cutoff},
+                "customer_phone": {"$ne": phone},
+            }, sort=[("updated_at", -1)])
+            if fallback_ticket:
+                logger.warning(
+                    f"[webhook][lid-fallback:name] LID phone={phone} name={name!r} "
+                    f"merged into ticket #{fallback_ticket.get('ticket_number')} "
+                    f"(matched by push_name, real_phone={fallback_ticket.get('customer_phone')})"
+                )
 
     ticket = fallback_ticket or await db.tickets.find_one({
         "company_id": company_id,

@@ -442,9 +442,21 @@ async def add_message_to_ticket(
     if delivery_error:
         message["delivery_error"] = delivery_error
 
+    update_set = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    # Track last outgoing for the @lid fallback in the webhook handler.
+    # When an incoming message arrives later with a fake LID phone, the
+    # webhook resolves the destination ticket by looking up the most
+    # recent outgoing on the same connection (5-min window).
+    if (
+        data.sender_type == "agent"
+        and ticket.get("channel") == "whatsapp"
+        and message.get("delivery_status") == "sent"
+    ):
+        update_set["last_outgoing_at"] = update_set["updated_at"]
+
     await db.tickets.update_one(
         {"id": ticket_id},
-        {"$push": {"messages": message}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
+        {"$push": {"messages": message}, "$set": update_set}
     )
 
     return message

@@ -303,3 +303,65 @@ class TestWebhookLidFallback:
         # cleanup
         for m in match:
             requests.delete(f"{API}/crm/tickets/{m['id']}", headers=crm_headers, timeout=20)
+
+
+    def test_lid_fallback_via_last_outgoing(self, crm_headers, crm_connection_id):
+        """Reproducao do caso real do user (#1011/#1012):
+        operador edita o nome do contato no CRM ('Izaque Ferreira'); WhatsApp
+        passa pushName diferente ('Izaque Carriço'). Quando chega resposta com
+        phone LID, o match por nome NAO funciona — mas como o operador acabou
+        de mandar mensagem (last_outgoing_at), o fallback acha o ticket certo.
+        """
+        if not crm_connection_id:
+            pytest.skip("No CRM channel_connection available")
+
+        real_phone = "5562999991100"
+        ticket_custom_name = "TEST_iter44 Nome Editado"  # nome editado pelo operador
+        wa_push_name = "TEST_iter44 Nome Original"        # nome no profile do WhatsApp (diferente)
+
+        t = requests.post(f"{API}/crm/tickets", headers=crm_headers, json={
+            "customer_name": ticket_custom_name, "customer_phone": real_phone,
+        }, timeout=20).json()
+        tid = t["id"]
+
+        # Marcar last_outgoing_at agora (simula operador acabou de enviar) +
+        # connection_id + status aberto.
+        async def _bind():
+            c = AsyncIOMotorClient(MONGO_URL)
+            db = c[DB_NAME]
+            from datetime import datetime, timezone
+            await db.tickets.update_one({"id": tid}, {"$set": {
+                "connection_id": crm_connection_id,
+                "status": "aberto",
+                "last_outgoing_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }})
+            c.close()
+        asyncio.get_event_loop().run_until_complete(_bind())
+
+        try:
+            # Webhook com phone LID + pushName DIFERENTE do customer_name
+            lid_phone = "250615999999111"
+            payload = {
+                "instance_id": crm_connection_id,
+                "phone": lid_phone,
+                "name": wa_push_name,  # NAO bate com customer_name do ticket
+                "message": "Resposta LID com nome diferente",
+                "message_id": f"WA-LIDOUT-{int(time.time())}",
+                "timestamp": int(time.time()),
+            }
+            r = requests.post(f"{API}/channels/webhook/message", json=payload, timeout=20)
+            assert r.status_code == 200, r.text
+
+            # NENHUM ticket novo com o LID
+            tickets = requests.get(f"{API}/crm/tickets", headers=crm_headers, timeout=20).json()
+            lid_tickets = [x for x in tickets if x.get("customer_phone") == lid_phone]
+            assert lid_tickets == [], f"LID created duplicate: {lid_tickets}"
+
+            # Mensagem agregou no ticket original (matched via last_outgoing_at)
+            updated = requests.get(f"{API}/crm/tickets/{tid}", headers=crm_headers, timeout=20).json()
+            contents = [m.get("content") for m in (updated.get("messages") or [])]
+            assert "Resposta LID com nome diferente" in contents
+            assert updated["customer_phone"] == real_phone
+        finally:
+            requests.delete(f"{API}/crm/tickets/{tid}", headers=crm_headers, timeout=20)

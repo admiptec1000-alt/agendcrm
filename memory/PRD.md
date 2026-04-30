@@ -11,6 +11,15 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 5: Fix @lid robusto via last_outgoing_at
+- **Causa raiz identificada**: a Fase 4 fazia fallback por push_name. Mas quando o operador edita o nome do contato no CRM ('Izaque Ferreira'), o WhatsApp continua mandando o pushName real da conta WhatsApp ('Izaque Carriço'). Os nomes nao batem → fallback nao acionava → ticket duplicado.
+- **Solucao definitiva**: rastrear `last_outgoing_at` no ticket (atualizado quando agente envia msg via `/api/crm/tickets/{id}/messages`). Quando webhook chega com phone formato LID:
+  - **Strategy 1 (mais confiavel)**: ticket com `last_outgoing_at` nas ultimas 5 minutos na mesma connection → match direto. Resolve o cenario "operador acabou de mandar mensagem e cliente respondeu".
+  - **Strategy 2 (fallback)**: ticket com mesmo `customer_name` + connection nas ultimas 72h.
+  - Ambas independentes do microservico Baileys conseguir resolver `senderPn`.
+- **Testes**: 9/9 backend test_iteration_44.py incluindo novo `test_lid_fallback_via_last_outgoing` que reproduz exatamente o cenario do user (#1011/#1012).
+- **Acao do usuario**: redeployar o backend novamente para esse fix entrar em prod.
+
 ### 2026-04-30 — Fase 4: Fix Bug @lid + Merge tickets + Quote = Ticket Number
 - **Fix bug `@lid` (server-side fallback)** (`/app/backend/routes/channels_routes.py`): heuristica `_looks_like_lid` (>= 14 digitos OU nao-brasileiro). Quando webhook chega com phone LID + push_name e ja existe ticket aberto recente do mesmo `customer_name + connection_id` (72h window), **mescla a mensagem nesse ticket existente** em vez de criar duplicado. customer_phone real do ticket NAO eh sobrescrito. Funciona MESMO quando o microservico Baileys nao consegue resolver `senderPn` — completamente independente de redeploy do Render.
 - **Endpoint `POST /api/crm/tickets/{src}/merge-into/{dst}`**: mescla src dentro de dst (mensagens dedup por wa_message_id + tags unicas + re-aponta quotes), deleta src, multi-tenant safe. UI: botao "Mesclar com outro atendimento" no menu MoreVertical do header do chat → `MergeTicketModal` com search e lista de candidatos.
