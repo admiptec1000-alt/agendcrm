@@ -178,22 +178,36 @@ async def get_client_timeline(
     ).sort("created_at", -1).limit(limit)
     tickets = await cursor.to_list(limit)
 
-    total = len(tickets)
-    total_value = sum(float(t.get("value") or 0) for t in tickets)
-    open_count = sum(1 for t in tickets if t.get("status") not in ("fechado", "cancelado"))
-    closed_count = sum(1 for t in tickets if t.get("status") == "fechado")
-    last_visit = tickets[0].get("created_at") if tickets else None
+    # Stats are computed over the FULL history (independent from the paginated
+    # tickets array) so values stay correct on high-volume clients.
+    pipeline = [
+        {"$match": {"company_id": company_id, "client_id": client_id}},
+        {"$group": {
+            "_id": None,
+            "total_tickets": {"$sum": 1},
+            "open": {"$sum": {"$cond": [
+                {"$not": {"$in": ["$status", ["fechado", "cancelado"]]}}, 1, 0
+            ]}},
+            "closed": {"$sum": {"$cond": [{"$eq": ["$status", "fechado"]}, 1, 0]}},
+            "total_value": {"$sum": {"$ifNull": ["$value", 0]}},
+            "last_visit": {"$max": "$created_at"},
+        }},
+    ]
+    agg = await db.tickets.aggregate(pipeline).to_list(1)
+    s = agg[0] if agg else {"total_tickets": 0, "open": 0, "closed": 0, "total_value": 0, "last_visit": None}
+    total = s.get("total_tickets") or 0
+    total_value = float(s.get("total_value") or 0)
     avg_value = (total_value / total) if total else 0.0
 
     return {
         "client": client,
         "stats": {
             "total_tickets": total,
-            "open": open_count,
-            "closed": closed_count,
+            "open": s.get("open") or 0,
+            "closed": s.get("closed") or 0,
             "total_value": total_value,
             "avg_value": avg_value,
-            "last_visit": last_visit,
+            "last_visit": s.get("last_visit"),
         },
         "tickets": tickets,
     }

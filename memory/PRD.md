@@ -11,6 +11,13 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Visão 360° do cliente (timeline no painel de atendimento)
+- Novo endpoint `GET /api/crm/clients/{id}/timeline?limit=N` retornando `{client, stats, tickets}`.
+- **Stats via MongoDB aggregation pipeline** (`$group`) — totais corretos mesmo com mais de `limit` tickets. Inclui: `total_tickets`, `open`, `closed`, `total_value`, `avg_value`, `last_visit`.
+- **Tickets paginados** ordenados por `created_at` desc, projeção sem `_id`.
+- **EditContactModal ganhou aba "Histórico"** com badge de contagem, 3 cards de stats (Atendimentos, Total Movimentado, Última Visita) e lista de tickets passados destacando o ticket atual.
+- **Testes (iter39 + retest manual)**: 8/8 backend PASS + frontend e2e completo OK.
+
 ### 2026-04-30 — Contato no chat = Cliente/Lead real (vínculo definitivo)
 - Novo campo `ticket.client_id` ligando o atendimento ao cadastro real do Cliente/Lead.
 - **Helper `find_or_create_client_by_phone`** (digits-only) usado em: POST /api/crm/tickets, webhook do WhatsApp e run_campaign — todo ticket novo já nasce vinculado.
