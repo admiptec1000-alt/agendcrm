@@ -11,6 +11,25 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Modulo de Orcamentos (Quotes) - Fase 1 Completa
+- **Backend completo** (`/app/backend/routes/quotes_routes.py`):
+  - 4 collections: `quote_services` (catalogo de produtos), `quote_freights` (catalogo de fretes), `quote_templates` (HTML templates com placeholders), `quotes` (propostas geradas).
+  - CRUD completo para todos os modelos com isolamento multi-tenant.
+  - **Auto-seed** de 1 template default "Padrao Comercial" na primeira chamada de `GET /quotes/templates` ou `GET /quotes/{id}/render` — promove canonical/oldest se nenhum esta marcado como default (idempotente, robusto).
+  - **Quote_number sequencial** via collection `counters` (`{company_id}:quotes`) — atomico/race-safe.
+  - **Calculos automaticos** server-side: `items_total + freights_total = total_value`. Recalculo automatico no PUT quando items/freights mudam.
+  - **Template engine simples** com placeholders escalares (`{{quote_number}}`, `{{razao_social}}`, etc) e blocos de loop (`{{#items}}...{{/items}}` e `{{#freights}}...{{/freights}}`) — regex DOTALL. Valores monetarios formatados via `_format_brl` (R$ 1.350,00).
+  - **Endpoint `/render`**: combina quote + template + dados do cliente (via `clients` collection, suporta PJ via `company_name` e `cnpj`/`cpf`) e retorna `{html, quote}` para preview/impressao.
+- **Frontend completo** (`/app/frontend/src/pages/CRM/OrcamentosPage.js`):
+  - 4 abas (Orcamentos / Produtos / Fretes / Templates) com data-testids para testabilidade.
+  - **QuoteEditor**: busca/cria cliente inline (autocomplete + criar novo modal), seleciona template, "+ do Catalogo" abre modal pickando produtos/fretes pre-cadastrados, copia o `default_price` mas mantem **unit_price editavel inline** (alteracao recalcula `quote-grand-total` em tempo real). Subtotais por categoria + total geral.
+  - **PreviewModal**: HTML renderizado pelo backend exibido via `dangerouslySetInnerHTML`, botao "Imprimir / Salvar PDF" abre nova janela com `window.print()` automatico.
+  - **Templates**: editor HTML com lista de placeholders chips clicaveis (copy to clipboard), checkbox "is_default" exclusivo (apenas 1 default por empresa).
+  - **createPortal** para todos os modais (`document.body` + `z-[100]`) — fix de bug de stacking encontrado em iter40 quando picker nesteado dentro do editor.
+  - Feature `orcamentos` com icone `FileText` no menu CRM.
+- **Backfill no startup**: companies com `atendimentos` ou `agendamentos` recebem `orcamentos` automaticamente.
+- **Testes**: 20/20 backend (`/app/backend/tests/test_iteration_40.py`) + 7/7 frontend E2E (`iteration_41.json`) — flow completo validado, edicao inline de valor unitario com total atualizando ao vivo confirmada.
+
 ### 2026-04-30 — Visão 360° do cliente (timeline no painel de atendimento)
 - Novo endpoint `GET /api/crm/clients/{id}/timeline?limit=N` retornando `{client, stats, tickets}`.
 - **Stats via MongoDB aggregation pipeline** (`$group`) — totais corretos mesmo com mais de `limit` tickets. Inclui: `total_tickets`, `open`, `closed`, `total_value`, `avg_value`, `last_visit`.
@@ -146,8 +165,10 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - (nenhum bloqueador conhecido)
 
 ### P1
+- Modulo Orcamentos — Fase 2: integrar criação de orcamento direto no chat (modal dentro do ticket), envio do PDF gerado direto para o WhatsApp do cliente
+- Importacao Incinera (BLOCKED, aguardando CSV do usuario)
 - Inserir cards de Planos/Preços na Landing Page com botão "Contratar"
-- Refatoração do `Dashboard.js` (+5000 linhas → quebrar em Tabs/AgendaTab.js, ConfigTab.js, etc.)
+- Refatoração do `Dashboard.js` (+5000 linhas → quebrar em Tabs/AgendaTab.js, ConfigTab.js, etc.) e do `OrcamentosPage.js` (~800 linhas → splitar em ServicesTab/FreightsTab/TemplatesTab/QuoteEditor)
 - Integração Stripe (Cartão + Pix)
 - Notificações Push (Web Push API)
 
