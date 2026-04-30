@@ -11,6 +11,16 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 8: Placeholders com descricao amigavel + confirmacao que Fase 7 esta live
+- **Lista de placeholders melhorada**: agora agrupada em 7 categorias (ORCAMENTO, CLIENTE, VALORES, CONDICOES, VENDEDOR, OBSERVACOES, BLOCOS) com **descricao em linguagem humana** ao lado de cada token (ex: `{{razao_social}}` — "Razao social / Nome fantasia"). Click copia o token pra clipboard + toast de confirmacao.
+- **Validacao E2E** no preview Emergent: 14/14 checks PASSED pelo testing agent. Confirmado que:
+  - Aba "Itens" (nao "Produtos") esta live
+  - Modal "Novo Item" (nao "Novo Produto") esta live
+  - Botao de imagem no Quill toolbar presente (`button.ql-image`)
+  - Placeholders agrupados com descricoes funcionando
+  - Toast "Placeholder copiado" dispara no click
+- **Conclusao sobre a reclamacao do user**: nao ha bug no codebase — producao dele (`agentcrm.8ip.com.br`) esta servindo bundle antigo em cache ou git nao foi atualizado. Acao do user: fazer **hard refresh (Ctrl+Shift+R)** apos o redeploy para limpar cache do Service Worker / bundle JS.
+
 ### 2026-04-30 — Fase 7: Renomeacoes + Editor de template com imagem + Fix PDF branco
 - **"Produtos/Servicos" → "Itens"** em toda UI (aba, label de secao, modais "Novo Item"/"Editar Item", placeholders, mensagens de vazio, confirmacao de delete).
 - **"+ do Catalogo" → "+ Item"** (items) / **"+ Frete"** (fretes) — botoes mais curtos e genericos.
