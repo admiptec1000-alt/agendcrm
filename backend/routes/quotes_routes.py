@@ -11,18 +11,26 @@ Collections:
   - quotes               generated proposals (header data, items[], freights[], totals)
 """
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone
 import uuid
 import re
+import os
+import base64
+import logging
+
+import httpx
+from weasyprint import HTML
 
 from database import get_database
 from auth import get_current_user
 from counters import next_sequence
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
+logger = logging.getLogger(__name__)
 
 
 # ─── MODELS ──────────────────────────────────────────────────────────────────
@@ -566,16 +574,20 @@ async def delete_quote(qid: str, user=Depends(get_current_user), db: AsyncIOMoto
 
 @router.get("/{qid}/render")
 async def render_quote(qid: str, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
-    """Returns rendered HTML for printing/saving as PDF via the browser.
+    """Returns rendered HTML for printing/saving as PDF via the browser."""
+    html, quote = await _build_quote_html(qid, user, db)
+    return {"html": html, "quote": quote}
 
-    Combines the quote data with the linked template (or the default template
-    when none was specified at creation time).
+
+async def _build_quote_html(qid: str, user, db) -> tuple:
+    """Shared helper: returns (html, quote_dict). Raises 404 if not found.
+
+    Used by /render (preview), /pdf (download), and /send-whatsapp (attach).
     """
     quote = await db.quotes.find_one({"id": qid, "company_id": user["company_id"]}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Orcamento nao encontrado")
 
-    # Ensure at least the default template exists (idempotent)
     await _ensure_default_template(db, user["company_id"])
 
     template = None
@@ -584,7 +596,6 @@ async def render_quote(qid: str, user=Depends(get_current_user), db: AsyncIOMoto
     if not template:
         template = await db.quote_templates.find_one({"company_id": user["company_id"], "is_default": True}, {"_id": 0})
     if not template:
-        # Fallback: minimal generic template
         template = {"content": "<h1>Orcamento #{{quote_number}}</h1><pre>{{notes}}</pre>"}
 
     client_ctx = await _build_client_ctx(db, user["company_id"], quote.get("client_id"))
@@ -605,4 +616,137 @@ async def render_quote(qid: str, user=Depends(get_current_user), db: AsyncIOMoto
         "notes": quote.get("notes") or "",
         "data_emissao": datetime.fromisoformat(quote["created_at"].replace("Z", "+00:00")).strftime("%d/%m/%Y") if quote.get("created_at") else "",
     }
-    return {"html": _render_template(template["content"], ctx), "quote": quote}
+    return _render_template(template["content"], ctx), quote
+
+
+def _generate_pdf_bytes(html_content: str) -> bytes:
+    """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms)."""
+    return HTML(string=html_content).write_pdf()
+
+
+@router.get("/{qid}/pdf")
+async def download_quote_pdf(qid: str, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
+    """Streams the quote as a printable PDF (Content-Type: application/pdf)."""
+    html, quote = await _build_quote_html(qid, user, db)
+    pdf_bytes = _generate_pdf_bytes(html)
+    filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+class SendQuoteRequest(BaseModel):
+    connection_id: str
+    phone: Optional[str] = None      # if absent, taken from quote.client.phone
+    caption: Optional[str] = None    # text accompanying the document
+    ticket_id: Optional[str] = None  # if set, message is logged on the ticket
+
+
+WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3001")
+
+
+@router.post("/{qid}/send-whatsapp")
+async def send_quote_whatsapp(
+    qid: str,
+    data: SendQuoteRequest,
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Generates the PDF and forwards it as a WhatsApp document to the client.
+
+    Resolves the destination phone in this order: explicit data.phone -> client
+    record (via quote.client_id) -> ticket.customer_phone. Logs the outbound
+    message on the ticket when ticket_id is provided so it appears in the chat
+    timeline alongside text messages.
+    """
+    html, quote = await _build_quote_html(qid, user, db)
+
+    # Resolve phone
+    target_phone = data.phone
+    if not target_phone and quote.get("client_id"):
+        c = await db.clients.find_one({"id": quote["client_id"], "company_id": user["company_id"]}, {"_id": 0, "phone": 1})
+        if c: target_phone = c.get("phone")
+    if not target_phone and data.ticket_id:
+        t = await db.tickets.find_one({"id": data.ticket_id, "company_id": user["company_id"]}, {"_id": 0, "customer_phone": 1})
+        if t: target_phone = t.get("customer_phone")
+    if not target_phone:
+        raise HTTPException(400, "Telefone do destinatario nao informado e nao pode ser resolvido pelo cliente/ticket")
+
+    # Verify connection belongs to tenant
+    conn = await db.channel_connections.find_one(
+        {"id": data.connection_id, "company_id": user["company_id"]}, {"_id": 0, "status": 1}
+    )
+    if not conn:
+        raise HTTPException(404, "Conexao WhatsApp nao encontrada")
+
+    pdf_bytes = _generate_pdf_bytes(html)
+    pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+    filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
+    caption = data.caption or f"Segue orcamento #{quote.get('quote_number')} no valor de R$ {quote.get('total_value', 0):.2f}".replace(".", ",")
+
+    # Forward to the WhatsApp microservice (/sendMedia endpoint)
+    payload = {
+        "phone": target_phone,
+        "filename": filename,
+        "mimetype": "application/pdf",
+        "data_base64": pdf_b64,
+        "caption": caption,
+    }
+    delivery_status = "pending"
+    delivery_error = None
+    wa_message_id = None
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{WA_SERVICE_URL}/instances/{data.connection_id}/send-media", json=payload)
+            if r.status_code == 200:
+                rj = r.json()
+                if rj.get("success"):
+                    delivery_status = "sent"
+                    wa_message_id = rj.get("message_id")
+                else:
+                    delivery_status = "failed"
+                    delivery_error = rj.get("error") or "Microservico retornou success=false"
+            else:
+                delivery_status = "failed"
+                delivery_error = f"HTTP {r.status_code}: {r.text[:300]}"
+    except httpx.HTTPError as e:
+        delivery_status = "failed"
+        delivery_error = f"Falha de rede: {str(e)[:300]}"
+        logger.warning("WA send-media failed for quote %s: %s", qid, delivery_error)
+
+    # Log on ticket timeline (always, even on failure -> user can retry)
+    if data.ticket_id:
+        msg = {
+            "id": str(uuid.uuid4()),
+            "sender_type": "agent",
+            "sender_id": user["id"],
+            "content": caption,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "type": "document",
+            "attachment_filename": filename,
+            "attachment_kind": "quote_pdf",
+            "quote_id": qid,
+            "delivery_status": delivery_status,
+            "delivery_error": delivery_error,
+            "wa_message_id": wa_message_id,
+        }
+        await db.tickets.update_one(
+            {"id": data.ticket_id, "company_id": user["company_id"]},
+            {"$push": {"messages": msg}, "$set": {"updated_at": msg["created_at"]}},
+        )
+
+    # Update quote: status -> 'enviado' if it was draft, attach last sent metadata
+    quote_update = {
+        "last_sent_at": datetime.now(timezone.utc).isoformat(),
+        "last_sent_phone": target_phone,
+        "last_sent_status": delivery_status,
+    }
+    if quote.get("status") == "rascunho" and delivery_status == "sent":
+        quote_update["status"] = "enviado"
+    await db.quotes.update_one({"id": qid}, {"$set": quote_update})
+
+    if delivery_status == "failed":
+        raise HTTPException(502, f"Falha ao enviar via WhatsApp: {delivery_error}")
+    return {"success": True, "delivery_status": delivery_status, "wa_message_id": wa_message_id, "filename": filename}

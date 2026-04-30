@@ -325,6 +325,8 @@ export const quotesAPI = {
   update: (id, data) => api.put(`/quotes/${id}`, data),
   delete: (id) => api.delete(`/quotes/${id}`),
   render: (id) => api.get(`/quotes/${id}/render`),
+  pdfUrl: (id) => `${API_URL}/quotes/${id}/pdf`,
+  sendWhatsApp: (id, data) => api.post(`/quotes/${id}/send-whatsapp`, data),
 };
 
 // CRM additions moved into crmAPI above. AI Providers + Agents:

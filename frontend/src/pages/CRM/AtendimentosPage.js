@@ -7,8 +7,10 @@ import {
   Clock, MessageSquare, ChevronLeft, MoreVertical,
   Tag, User, Hash, ArrowRightLeft, Ban, CheckCircle2, Check,
   Smartphone, DollarSign, CalendarClock,
-  Pencil, Trash2, AlertCircle, Filter, RefreshCw, Bot
+  Pencil, Trash2, AlertCircle, Filter, RefreshCw, Bot, FileText
 } from 'lucide-react';
+import { quotesAPI } from '../../services/api';
+import QuoteAttachModal from './QuoteAttachModal';
 
 const STATUS_COLORS = {
   aberto: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Aberto' },
@@ -138,6 +140,7 @@ const AtendimentosPage = () => {
   const [showContactInfo, setShowContactInfo] = useState(false);
   const [showNewTicket, setShowNewTicket] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showQuote, setShowQuote] = useState(false);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [showEditContact, setShowEditContact] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -694,6 +697,22 @@ const AtendimentosPage = () => {
                   {msg.sender_type === 'agent' && (
                     <p className="text-[10px] font-bold text-emerald-700 mb-0.5">{msg.sender_name || 'Admin'}</p>
                   )}
+                  {msg.type === 'document' && msg.attachment_kind === 'quote_pdf' && (
+                    <a
+                      href={msg.quote_id ? `${process.env.REACT_APP_BACKEND_URL}/api/quotes/${msg.quote_id}/pdf` : '#'}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => { if (!msg.quote_id) e.preventDefault(); }}
+                      className="flex items-center gap-2 bg-white/70 border border-emerald-200 rounded p-2 mb-1 hover:bg-white"
+                      data-testid={`chat-quote-attachment-${msg.id}`}
+                    >
+                      <FileText className="w-5 h-5 text-emerald-700 flex-shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-emerald-800 truncate">{msg.attachment_filename || 'orcamento.pdf'}</p>
+                        <p className="text-[10px] text-slate-500">PDF anexado</p>
+                      </div>
+                    </a>
+                  )}
                   <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
                   <div className="text-[10px] text-slate-400 text-right mt-1 flex items-center justify-end gap-1">
                     {formatTime(msg.created_at)}
@@ -754,6 +773,14 @@ const AtendimentosPage = () => {
                 data-testid="schedule-message-btn"
               >
                 <CalendarClock className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setShowQuote(true)}
+                className="p-2 rounded-full hover:bg-emerald-50 text-emerald-600"
+                title="Anexar Orcamento"
+                data-testid="attach-quote-btn"
+              >
+                <FileText className="w-5 h-5" />
               </button>
               <button className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hidden sm:block"><Paperclip className="w-5 h-5" /></button>
               <div className="flex-1 relative min-w-0">
@@ -850,6 +877,14 @@ const AtendimentosPage = () => {
           ticket={selectedTicket}
           onClose={() => setShowEditContact(false)}
           onSave={handleSaveContact}
+        />
+      )}
+      {showQuote && selectedTicket && (
+        <QuoteAttachModal
+          ticket={selectedTicket}
+          connections={connections}
+          onClose={() => setShowQuote(false)}
+          onSent={() => { setShowQuote(false); crmAPI.getTicket(selectedTicket.id).then(r => setSelectedTicket(r.data)).catch(() => {}); }}
         />
       )}
     </div>

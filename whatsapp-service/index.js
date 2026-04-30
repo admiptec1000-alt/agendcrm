@@ -438,6 +438,71 @@ app.post('/instances/:id/send', async (req, res) => {
   }
 });
 
+// Send a media document (PDF, image, etc) as a WhatsApp attachment.
+// Accepts payload as base64 in `data_base64` so the FastAPI backend doesn't
+// need to host a public URL just to forward the bytes. Uses the same JID
+// resolution as /send (onWhatsApp + Brazilian fallbacks) to avoid the +62
+// mis-route bug.
+app.post('/instances/:id/send-media', async (req, res) => {
+  const instance = connections[req.params.id];
+  if (!instance?.sock || instance.status !== 'connected') {
+    return res.status(400).json({ success: false, error: 'Not connected' });
+  }
+  const { phone, filename, mimetype, data_base64, caption } = req.body;
+  if (!phone || !data_base64) {
+    return res.status(400).json({ success: false, error: 'Missing phone or data_base64' });
+  }
+  try {
+    let targetJid = null;
+    if (phone && !phone.includes('@')) {
+      const candidates = [];
+      const digits = String(phone).replace(/\D/g, '');
+      candidates.push(digits);
+      if (digits.startsWith('55') && digits.length >= 12) candidates.push(digits.slice(2));
+      if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) candidates.push('55' + digits);
+      if (digits.length === 12 && digits.startsWith('62')) candidates.push('55' + digits);
+      if (digits.length === 13 && digits.startsWith('55')) candidates.push(digits.slice(0, 4) + digits.slice(5));
+      else if (digits.length === 12 && digits.startsWith('55')) candidates.push(digits.slice(0, 4) + '9' + digits.slice(4));
+
+      const seen = new Set();
+      const uniq = candidates.filter(c => c && !seen.has(c) && seen.add(c));
+      for (const cand of uniq) {
+        try {
+          const results = await instance.sock.onWhatsApp(cand);
+          if (Array.isArray(results) && results.length > 0) {
+            const hit = results.find(r => r?.exists) || results[0];
+            if (hit?.jid) { targetJid = hit.jid; break; }
+          }
+        } catch (e) { /* try next */ }
+      }
+      if (!targetJid) targetJid = `${uniq[0] || digits}@s.whatsapp.net`;
+    } else {
+      targetJid = phone;
+    }
+
+    const buffer = Buffer.from(data_base64, 'base64');
+    const isImage = (mimetype || '').startsWith('image/');
+    const payload = isImage
+      ? { image: buffer, caption: caption || '', mimetype: mimetype || 'image/png' }
+      : {
+          document: buffer,
+          mimetype: mimetype || 'application/octet-stream',
+          fileName: filename || 'file.bin',
+          caption: caption || '',
+        };
+
+    try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
+    const sent = await instance.sock.sendMessage(targetJid, payload);
+    if (sent?.key?.id) rememberSent(targetJid, sent.key.id, sent.message || {});
+    res.json({ success: true, jid: targetJid, message_id: sent?.key?.id, filename: filename || null });
+  } catch (e) {
+    console.error(`[${req.params.id}] send-media error:`, e.message, e.stack?.split('\n')[1]);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+
+
 app.post('/instances/:id/disconnect', async (req, res) => {
   const instance = connections[req.params.id];
   if (!instance?.sock) return res.json({ status: 'already_disconnected' });
