@@ -11,7 +11,7 @@ import {
   Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
@@ -21,19 +21,21 @@ import AIPage from '../CRM/AIPage';
 import WhatsAppConnectionsPage from '../CRM/WhatsAppConnectionsPage';
 import CampaignsPage from '../CRM/CampaignsPage';
 import QueuesPage from '../CRM/QueuesPage';
+import OrcamentosPage from '../CRM/OrcamentosPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
   Megaphone, GitBranch, Info, Code, UserCog, Bot, Link, Sparkles, Calendar,
   CalendarCheck, UserCheck, FolderOpen, Scissors, CreditCard, Briefcase,
-  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor, Shield
+  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor, Shield, FileText
 };
 
 const FEATURE_META = {
   dashboard:          { icon: 'LayoutDashboard', label: 'Início', group: 'Principal' },
   atendimentos:       { icon: 'Headphones',      label: 'Atendimentos', group: 'CRM' },
   relatorio_atendimentos: { icon: 'BarChart3', label: 'Relatorios', group: 'CRM' },
+  orcamentos:         { icon: 'FileText',       label: 'Orcamentos', group: 'CRM' },
   respostas_rapidas:  { icon: 'Zap',             label: 'Respostas Rapidas', group: 'CRM' },
   kanban:             { icon: 'Columns3',         label: 'Kanban', group: 'CRM' },
   contatos:           { icon: 'Users',            label: 'Clientes / Leads', group: 'CRM' },
@@ -603,6 +605,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'kanban': return <KanbanPage setActivePage={setActivePage} />;
     case 'atendimentos': return <AtendimentosPage />;
     case 'relatorio_atendimentos': return <TicketsReportPage />;
+    case 'orcamentos': return <OrcamentosPage />;
     case 'contatos': return <ClientsPage />;
     case 'respostas_rapidas': return <QuickResponsesPage />;
     case 'campanhas': return <CampaignsPage />;

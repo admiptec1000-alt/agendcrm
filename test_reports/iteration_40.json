@@ -1,0 +1,31 @@
+{
+  "summary": "E2E frontend testing of Orcamentos (Quotes) module on CRM tenant. Login OK, Orcamentos sidebar item OK, all 4 tabs render with correct data-testids, Service+Freight CRUD OK, default 'Padrao Comercial' template auto-seeded (1 template visible), 23 placeholder chips OK, new client inline creation OK, default template auto-pre-selected in QuoteEditor. CRITICAL ISSUE FOUND: nested ModalShell components (parent QuoteEditor + child catalog picker) both use the same z-index (z-50). The parent fixed-overlay div intercepts pointer events on pick-service-{id} / pick-freight-{id} buttons inside the nested modal. Playwright timed out (30s) clicking the buttons; visually the modal renders correctly. Real users may experience the same blocking depending on browser stacking — confirmed via Playwright that the parent overlay captures the click. As a result, the editable-unit-price test, freight catalog pick, save-quote, preview, and print steps could not be exercised through the catalog flow.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "OrcamentosPage > QuoteEditor + ModalShell", "issue": "Nested modals share z-50. Inner catalog picker (pickService/pickFreight) is rendered INSIDE the parent ModalShell's content; the parent overlay div (`fixed inset-0 bg-black/50 z-50`) intercepts pointer events on `[data-testid^=pick-service-]` and `[data-testid^=pick-freight-]` buttons. Playwright reports: '<div ... intercepts pointer events>' at OrcamentosPage.js line 780. Fix: render nested ModalShell at higher z (e.g., z-[60]) or via createPortal with explicit stacking.", "selector": "[data-testid^=pick-service-], [data-testid^=pick-freight-]", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Add product/freight from catalog → Save quote → Preview", "issue": "Cannot complete flow via UI clicks because of the nested-modal overlay interception described above. Could not verify: editable unit_price recalculating grand total, save-quote-btn persistence, preview HTML containing R$ and client name, print-quote-btn opening popup.", "affected_selectors": ["[data-testid=pick-service-btn]", "[data-testid^=pick-service-]", "[data-testid=pick-freight-btn]", "[data-testid^=pick-freight-]", "[data-testid=save-quote-btn]", "[data-testid=quote-preview]", "[data-testid=print-quote-btn]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "FIX nested ModalShell z-index: change inner ModalShell (when used inside another open ModalShell, e.g. catalog pickers in QuoteEditor) to z-[60] or higher, OR render via React portal with bumped stacking. Currently `<div className=\"fixed inset-0 bg-black/50 z-50 ...\">` (line 780) shadows the inner picker and intercepts pointer events.",
+    "After fix, retest full flow: pick-service → edit unit_price (CRITICAL feedback: must update grand-total live), pick-freight → modify km_total, save-quote, preview-quote (verify R$ + client_name in rendered HTML), print-quote-btn."
+  ],
+  "critical_code_review_comments": [
+    "OrcamentosPage.js: nested ModalShell stacking bug — pickService/pickFreight modals are rendered as children of parent ModalShell with identical z-50, causing click interception. Recommend an optional `zIndex` prop or always use a portal.",
+    "OrcamentosPage.js line 753: window.open in handlePrint may be blocked by popup blockers; alert fallback exists, OK.",
+    "Dashboard.js line 46 has duplicate `usuarios` key (lines 46 and 68 in FEATURE_META) — minor dedup."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "60% — login, navigation, all 4 tabs, services CRUD, freights CRUD, templates seed, placeholders, inline client creation all OK. Catalog-pick → editable unit price → save → preview NOT verifiable due to overlay bug."},
+  "test_credentials": "crm@test.com / crm123 at /crmtest/login",
+  "seed_data_creation": "Created TEST_Produto E2E (kg, R$12.50), TEST_Frete E2E (100km @ R$2.5/km), TEST_Cliente E2E (11999998888) on tenant crmtest.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes nested modal z-index in OrcamentosPage.js (lines 712-744 inner ModalShells), re-run E2E focused on: pickService modal click → quote-item-0 appears → modify quantity & unit_price → verify grand-total updates → pickFreight → save → preview shows R$ and client name. Test data already seeded on tenant 'crmtest'.",
+  "rca of the issue": "RCA: Component `ModalShell` in /app/frontend/src/pages/CRM/OrcamentosPage.js (line ~779) uses `fixed inset-0 bg-black/50 z-50` for ALL instances. When a nested modal is rendered as a child of another ModalShell (via QuoteEditor's `{pickService && <ModalShell ...>}` at line 712), the inner overlay shares z-50 with the outer; even though it appears later in the DOM, Playwright (and likely some browsers) compute the OUTER overlay div as still receiving pointer events at that location. Reproduction: open Orcamentos → Novo Orcamento → click 'pick-service-btn' → try clicking any [data-testid^=pick-service-] item. Mitigation: pass an explicit higher z-index to nested instances, e.g., `<ModalShell ... zIndex='z-[60]'>`, or always render ModalShell via createPortal(document.body) with incrementing stacking context."
+}

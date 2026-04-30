@@ -300,6 +300,33 @@ export const uploadAPI = {
   deleteFile: (fileId) => api.delete(`/upload/files/${fileId}`)
 };
 
+// Quotes (Orcamentos) API
+export const quotesAPI = {
+  // Catalog: Services
+  listServices: () => api.get('/quotes/services'),
+  createService: (data) => api.post('/quotes/services', data),
+  updateService: (id, data) => api.put(`/quotes/services/${id}`, data),
+  deleteService: (id) => api.delete(`/quotes/services/${id}`),
+  // Catalog: Freights
+  listFreights: () => api.get('/quotes/freights'),
+  createFreight: (data) => api.post('/quotes/freights', data),
+  updateFreight: (id, data) => api.put(`/quotes/freights/${id}`, data),
+  deleteFreight: (id) => api.delete(`/quotes/freights/${id}`),
+  // Templates
+  listTemplates: () => api.get('/quotes/templates'),
+  getTemplate: (id) => api.get(`/quotes/templates/${id}`),
+  createTemplate: (data) => api.post('/quotes/templates', data),
+  updateTemplate: (id, data) => api.put(`/quotes/templates/${id}`, data),
+  deleteTemplate: (id) => api.delete(`/quotes/templates/${id}`),
+  // Quotes
+  list: (params) => api.get('/quotes', { params }),
+  get: (id) => api.get(`/quotes/${id}`),
+  create: (data) => api.post('/quotes', data),
+  update: (id, data) => api.put(`/quotes/${id}`, data),
+  delete: (id) => api.delete(`/quotes/${id}`),
+  render: (id) => api.get(`/quotes/${id}/render`),
+};
+
 // CRM additions moved into crmAPI above. AI Providers + Agents:
 export const aiAPI = {
   listAgentTemplates: () => api.get('/ai/agent-templates'),

@@ -264,8 +264,156 @@ async def create_quote_template(data: QuoteTemplateCreate, user=Depends(get_curr
     return await db.quote_templates.find_one({"id": doc["id"]}, {"_id": 0})
 
 
+DEFAULT_TEMPLATE_HTML = """<div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 24px; color: #111;">
+  <header style="border-bottom: 3px solid #0a4a6f; padding-bottom: 16px; margin-bottom: 24px;">
+    <h1 style="margin: 0; color: #0a4a6f; font-size: 22px;">PROPOSTA COMERCIAL N.&ordm; {{quote_number}}</h1>
+    <p style="margin: 4px 0 0; color: #666; font-size: 13px;">Emitida em {{data_emissao}} &middot; V&aacute;lida por {{validity_days}} dias</p>
+  </header>
+
+  <section style="margin-bottom: 20px;">
+    <h2 style="background: #0a4a6f; color: #fff; padding: 6px 10px; font-size: 14px; margin: 0 0 8px;">DADOS DO CLIENTE</h2>
+    <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+      <tr><td style="padding: 4px 8px; width: 30%; color: #555;">Raz&atilde;o social / Fantasia</td><td style="padding: 4px 8px;"><strong>{{razao_social}}</strong></td></tr>
+      <tr><td style="padding: 4px 8px; color: #555;">CNPJ / CPF</td><td style="padding: 4px 8px;">{{cnpj_cpf}}</td></tr>
+      <tr><td style="padding: 4px 8px; color: #555;">Solicitante</td><td style="padding: 4px 8px;">{{nome}}</td></tr>
+      <tr><td style="padding: 4px 8px; color: #555;">Telefone</td><td style="padding: 4px 8px;">{{telefone}}</td></tr>
+      <tr><td style="padding: 4px 8px; color: #555;">E-mail</td><td style="padding: 4px 8px;">{{email}}</td></tr>
+      <tr><td style="padding: 4px 8px; color: #555;">Endere&ccedil;o</td><td style="padding: 4px 8px;">{{endereco}} &mdash; {{cidade}}/{{estado}} &mdash; CEP {{cep}}</td></tr>
+    </table>
+  </section>
+
+  <section style="margin-bottom: 20px;">
+    <h2 style="background: #0a4a6f; color: #fff; padding: 6px 10px; font-size: 14px; margin: 0 0 8px;">CUSTOS DOS SERVI&Ccedil;OS</h2>
+    <table style="width: 100%; font-size: 12px; border-collapse: collapse; border: 1px solid #ddd;">
+      <thead style="background: #f3f4f6;">
+        <tr>
+          <th style="padding: 6px; text-align: left; border: 1px solid #ddd;">Item</th>
+          <th style="padding: 6px; text-align: left; border: 1px solid #ddd;">Descri&ccedil;&atilde;o</th>
+          <th style="padding: 6px; text-align: center; border: 1px solid #ddd;">Unid.</th>
+          <th style="padding: 6px; text-align: right; border: 1px solid #ddd;">Valor Unit.</th>
+          <th style="padding: 6px; text-align: right; border: 1px solid #ddd;">Qtde.</th>
+          <th style="padding: 6px; text-align: right; border: 1px solid #ddd;">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#items}}
+        <tr>
+          <td style="padding: 6px; border: 1px solid #ddd;">{{index}}</td>
+          <td style="padding: 6px; border: 1px solid #ddd;">{{description}}</td>
+          <td style="padding: 6px; text-align: center; border: 1px solid #ddd;">{{unit}}</td>
+          <td style="padding: 6px; text-align: right; border: 1px solid #ddd;">{{unit_price}}</td>
+          <td style="padding: 6px; text-align: right; border: 1px solid #ddd;">{{quantity}}</td>
+          <td style="padding: 6px; text-align: right; border: 1px solid #ddd;"><strong>{{total}}</strong></td>
+        </tr>
+        {{/items}}
+      </tbody>
+    </table>
+    <p style="font-size: 12px; color: #555; margin: 8px 0 0;">Faturamento m&iacute;nimo: <strong>{{minimum_billing_kg}}</strong></p>
+  </section>
+
+  <section style="margin-bottom: 20px;">
+    <h2 style="background: #0a4a6f; color: #fff; padding: 6px 10px; font-size: 14px; margin: 0 0 8px;">FRETE / DESLOCAMENTO</h2>
+    <table style="width: 100%; font-size: 12px; border-collapse: collapse; border: 1px solid #ddd;">
+      <thead style="background: #f3f4f6;">
+        <tr>
+          <th style="padding: 6px; text-align: left; border: 1px solid #ddd;">Item</th>
+          <th style="padding: 6px; text-align: left; border: 1px solid #ddd;">Descri&ccedil;&atilde;o do Frete</th>
+          <th style="padding: 6px; text-align: right; border: 1px solid #ddd;">Km Total</th>
+          <th style="padding: 6px; text-align: right; border: 1px solid #ddd;">Valor/Km</th>
+          <th style="padding: 6px; text-align: right; border: 1px solid #ddd;">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#freights}}
+        <tr>
+          <td style="padding: 6px; border: 1px solid #ddd;">{{index}}</td>
+          <td style="padding: 6px; border: 1px solid #ddd;">{{description}}</td>
+          <td style="padding: 6px; text-align: right; border: 1px solid #ddd;">{{km_total}}</td>
+          <td style="padding: 6px; text-align: right; border: 1px solid #ddd;">{{price_per_km}}</td>
+          <td style="padding: 6px; text-align: right; border: 1px solid #ddd;"><strong>{{total}}</strong></td>
+        </tr>
+        {{/freights}}
+      </tbody>
+    </table>
+  </section>
+
+  <section style="margin-bottom: 20px; background: #f9fafb; padding: 12px; border-left: 4px solid #0a4a6f;">
+    <table style="width: 100%; font-size: 13px;">
+      <tr><td>Subtotal Servi&ccedil;os</td><td style="text-align: right;">{{items_total}}</td></tr>
+      <tr><td>Subtotal Frete</td><td style="text-align: right;">{{freights_total}}</td></tr>
+      <tr><td style="font-size: 16px; padding-top: 8px;"><strong>VALOR TOTAL DO OR&Ccedil;AMENTO</strong></td><td style="text-align: right; font-size: 16px; padding-top: 8px; color: #0a4a6f;"><strong>{{total_value}}</strong></td></tr>
+    </table>
+  </section>
+
+  <section style="margin-bottom: 20px; font-size: 13px;">
+    <p><strong>Prazo p/ pagamento NFS-e:</strong> {{payment_terms}} dias</p>
+    <p><strong>Forma de pagamento:</strong> {{payment_method}}</p>
+  </section>
+
+  <section style="margin-bottom: 20px; font-size: 12px; color: #444;">
+    <h3 style="font-size: 13px; color: #0a4a6f;">OBSERVA&Ccedil;&Otilde;ES</h3>
+    <p style="white-space: pre-wrap;">{{notes}}</p>
+  </section>
+
+  <footer style="border-top: 2px solid #0a4a6f; padding-top: 16px; margin-top: 32px; font-size: 12px;">
+    <p style="text-align: center; color: #555;">Proposta v&aacute;lida por {{validity_days}} dias.</p>
+    <table style="width: 100%; margin-top: 32px;">
+      <tr>
+        <td style="text-align: center; width: 50%;">
+          <div style="border-top: 1px solid #333; margin: 0 16px; padding-top: 4px;">
+            <strong>{{razao_social}}</strong><br/>
+            <span style="color: #666;">{{cnpj_cpf}}</span>
+          </div>
+        </td>
+        <td style="text-align: center; width: 50%;">
+          <div style="border-top: 1px solid #333; margin: 0 16px; padding-top: 4px;">
+            <strong>{{seller_name}}</strong><br/>
+            <span style="color: #666;">{{seller_contact}}</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </footer>
+</div>"""
+
+
+async def _ensure_default_template(db, company_id: str):
+    """Idempotently ensures the company has 1 default template available.
+
+    - If zero templates exist, seeds the canonical "Padrao Comercial".
+    - If templates exist but none is_default=True, promotes the seeded one
+      (or the oldest) to default so render() always finds something.
+    """
+    count = await db.quote_templates.count_documents({"company_id": company_id})
+    if count == 0:
+        await db.quote_templates.insert_one({
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "name": "Padrao Comercial",
+            "content": DEFAULT_TEMPLATE_HTML,
+            "is_default": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return
+    has_default = await db.quote_templates.find_one(
+        {"company_id": company_id, "is_default": True}, {"_id": 0, "id": 1}
+    )
+    if has_default:
+        return
+    # Promote the canonical one (or the oldest) to default
+    canonical = await db.quote_templates.find_one(
+        {"company_id": company_id, "name": "Padrao Comercial"}, {"_id": 0, "id": 1}
+    )
+    target = canonical or await db.quote_templates.find_one(
+        {"company_id": company_id}, {"_id": 0, "id": 1}, sort=[("created_at", 1)]
+    )
+    if target:
+        await db.quote_templates.update_one({"id": target["id"]}, {"$set": {"is_default": True}})
+
+
 @router.get("/templates")
 async def list_quote_templates(user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
+    await _ensure_default_template(db, user["company_id"])
     return await db.quote_templates.find({"company_id": user["company_id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 
@@ -361,7 +509,18 @@ async def list_quotes(
     if client_id: q["client_id"] = client_id
     if ticket_id: q["ticket_id"] = ticket_id
     if status: q["status"] = status
-    return await db.quotes.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    quotes = await db.quotes.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    # Hydrate client_name for the list view (avoids N+1 by bulk fetching)
+    client_ids = list({qu.get("client_id") for qu in quotes if qu.get("client_id")})
+    if client_ids:
+        clients = await db.clients.find(
+            {"id": {"$in": client_ids}, "company_id": user["company_id"]},
+            {"_id": 0, "id": 1, "name": 1, "company_name": 1}
+        ).to_list(len(client_ids))
+        cmap = {c["id"]: (c.get("company_name") or c.get("name") or "") for c in clients}
+        for qu in quotes:
+            qu["client_name"] = cmap.get(qu.get("client_id"), "")
+    return quotes
 
 
 @router.get("/{qid}")
@@ -415,6 +574,9 @@ async def render_quote(qid: str, user=Depends(get_current_user), db: AsyncIOMoto
     quote = await db.quotes.find_one({"id": qid, "company_id": user["company_id"]}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Orcamento nao encontrado")
+
+    # Ensure at least the default template exists (idempotent)
+    await _ensure_default_template(db, user["company_id"])
 
     template = None
     if quote.get("template_id"):
