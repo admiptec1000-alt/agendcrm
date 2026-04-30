@@ -17,6 +17,7 @@ from database import connect_to_mongo, close_mongo_connection, get_database
 from routes.auth_routes import router as auth_router
 from routes.super_admin_routes import router as super_admin_router
 from routes.crm_routes import router as crm_router
+from routes.quotes_routes import router as quotes_router
 from routes.ai_routes import router as ai_router
 from routes.scheduling_routes import router as scheduling_router
 from routes.upload_routes import router as upload_router
@@ -53,6 +54,7 @@ api_router.include_router(upload_router)
 api_router.include_router(public_router)
 api_router.include_router(whatsapp_router)
 api_router.include_router(reports_router)
+api_router.include_router(quotes_router)
 api_router.include_router(notification_router)
 api_router.include_router(channels_router)
 
@@ -112,7 +114,7 @@ async def seed_business_types(db):
         for k in ["dashboard", "atendimentos", "respostas_rapidas", "kanban", "contatos",
                    "tags", "chat_interno", "campanhas", "flowbuilder", "informativos",
                    "api", "usuarios", "filas_chatbot", "conexoes", "agente_ia",
-                   "configuracoes", "relatorios", "relatorio_atendimentos"]
+                   "configuracoes", "relatorios", "relatorio_atendimentos", "orcamentos"]
     ]
     sched_features = [
         {"feature_key": k, "enabled": True}
@@ -177,7 +179,7 @@ async def backfill_feature_keys(db):
     than plan_type, because plan_type values vary (starter/pro/...) and
     business_types may not have base_type populated on older installs.
     """
-    # Business types that already have 'atendimentos' should also have the new
+    # Companies that already have 'atendimentos' should also have the new
     # relatorio_atendimentos feature.
     await db.business_types.update_many(
         {"features.feature_key": "atendimentos",
@@ -189,6 +191,17 @@ async def backfill_feature_keys(db):
         {"features": {"$elemMatch": {"feature_key": "atendimentos"}},
          "features.feature_key": {"$ne": "relatorio_atendimentos"}},
         {"$addToSet": {"features": {"feature_key": "relatorio_atendimentos", "enabled": True}}}
+    )
+    # Quotes (orcamentos) for the same set
+    await db.business_types.update_many(
+        {"features.feature_key": "atendimentos",
+         "features.feature_key": {"$ne": "orcamentos"}},
+        {"$addToSet": {"features": {"feature_key": "orcamentos", "enabled": True}}}
+    )
+    await db.companies.update_many(
+        {"features": {"$elemMatch": {"feature_key": "atendimentos"}},
+         "features.feature_key": {"$ne": "orcamentos"}},
+        {"$addToSet": {"features": {"feature_key": "orcamentos", "enabled": True}}}
     )
 
 

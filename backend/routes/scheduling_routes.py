@@ -823,6 +823,7 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "dashboard", "label": "Inicio", "category": "Principal"},
     {"feature_key": "atendimentos", "label": "Atendimentos", "category": "CRM"},
     {"feature_key": "relatorio_atendimentos", "label": "Relatorio de Atendimentos", "category": "CRM"},
+    {"feature_key": "orcamentos", "label": "Orcamentos", "category": "CRM"},
     {"feature_key": "respostas_rapidas", "label": "Respostas Rapidas", "category": "CRM"},
     {"feature_key": "kanban", "label": "Kanban", "category": "CRM"},
     {"feature_key": "contatos", "label": "Contatos", "category": "CRM"},
