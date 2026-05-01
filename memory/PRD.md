@@ -11,6 +11,35 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-01 v2 — PDF Moderno + @lid AUTO-RESOLVE (resolve as 2 follow-ups do user)
+**Reclamacao do user**: PDF orcamento-1025.pdf ainda estourava a margem direita do A4 e cabecalhos quebravam mid-word ("Descricao d / os Servicos", "Valor km rodad / 0.", "Qtde. Estim / ada"); @lid em **NOVO contato** continuava chegando como numero estranho — operador NAO TEM como digitar manualmente porque nem tem o numero salvo.
+
+**Fix PDF Modern CSS** (`quotes_routes.py _generate_pdf_bytes`):
+- Margem A4 ajustada para `16mm 14mm` (mais respiro)
+- `box-sizing: border-box` em todos os elementos + `max-width: 100% !important` em table/p/div/section/header/footer/ul/ol/blockquote/img — anula widths inline do `.docx` que estavam causando overflow
+- Word-break corrigido: `word-break: normal; overflow-wrap: anywhere; hyphens: auto` — palavras quebram em whitespace primeiro, so no meio de char se o token isolado nao couber
+- Paleta moderna slate-blue: `<h2>` com gradiente claro + border-left brand-blue + uppercase, `<th>` fundo solido brand-blue com texto branco uppercase, zebra striping `#f8fafc`, bordas `#cbd5e1` consistentes
+- Typography: Inter font, `font-size: 9.8pt` base, `line-height: 1.5`, `letter-spacing` ajustado
+- `tr { page-break-inside: avoid }` evita orphan rows
+
+**Fix @lid Auto-Resolve** (microservico v2.1.4):
+- Refatorado: nova funcao `tryResolveLid(instance, instanceId, lidJid)` com 4 estrategias em cascata (persistent_map → signalRepository.lidMapping.getPNForLID → sock.onWhatsApp probe → store.contacts cross-ref)
+- **Background sweep a cada 30s**: queue de LIDs pendentes com max 30 attempts (~15min); quando resolve, dispara `/api/channels/webhook/lid-resolved` → ticket auto-promovido ou mesclado pelo backend (logica ja existente)
+- **Endpoint `POST /instances/:id/resolve-lid`** para probe sob demanda (UI button)
+
+**Backend `channels_routes.py`**: novo `POST /api/channels/instances/{instance_id}/probe-lid` proxy graceful (sempre 200, retorna `{resolved, phone, source}` ou `{resolved:false, error:...}` mesmo com microservico down).
+
+**Frontend `AtendimentosPage.js`**: banner amarelo agora tem **DOIS botoes**:
+- `data-testid="probe-lid-btn"` "Tentar agora" — chama backend → microservico → se WA expoe o numero AGORA, ticket auto-mescla
+- `data-testid="resolve-lid-btn"` "Informar telefone" — fallback manual existente
+Novo helper `channelsAPI.probeLid(instanceId, lidJid)` em `services/api.js`.
+
+**Validacao** (testing agent iter47): 11/11 novos testes + 72/72 regressao total + UI E2E. NO bugs found.
+
+**Acao do user**:
+1. Deploy backend (Save to GitHub) — PDF moderno + endpoint probe-lid
+2. **Deploy microservico (mandatorio para auto-resolve!)** — sem isso, o @lid continua precisando do fallback manual
+
 ### 2026-05-01 — Fix DEFINITIVO PDF Orcamento + Bug @lid Novo Contato
 **Reproducao confirmada com producao** (acesso fornecido pelo user em agentcrm.8ip.com.br/incinera adm@incinera.com): baixei via script Python o HTML real do template "INCINERA - Orcamento Padao" e descobri que ele continha `<p>{{#items}}{{/items}}</p>` (par VAZIO de marcadores) ANTES da tabela, com a `<tr>` real (contendo `{{description}}`, `{{quantity}}`, etc) DESEMBRULHADA. O `_auto_wrap_loops` antigo fazia early-return ao detectar `{{#items}}` em qualquer lugar, e o `_render_template` substituia o par vazio por nada, deixando os placeholders reais vazarem para o PDF.
 

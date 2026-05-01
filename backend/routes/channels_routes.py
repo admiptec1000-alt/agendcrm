@@ -824,7 +824,11 @@ async def probe_lid_now(
             except Exception:
                 return {"resolved": False, "error": f"Microservico retornou resposta invalida (HTTP {r.status_code})"}
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"Microservico indisponivel: {e}")
+        # Microservice truly unreachable (connection refused, timeout, etc).
+        # Return 200 + resolved:false so the UI shows a friendly toast
+        # instead of a generic 502 error.
+        logger.warning(f"probe-lid microservice unreachable: {e}")
+        return {"resolved": False, "error": "Microservico WhatsApp nao respondeu. Tente em alguns segundos."}
 
 
 @router.put("/connections/{conn_id}")
