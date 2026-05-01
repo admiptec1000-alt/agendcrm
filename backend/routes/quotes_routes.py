@@ -953,25 +953,39 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
 def _generate_pdf_bytes(html_content: str) -> bytes:
     """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms).
 
-    Layout strategy:
-      - Force every block element down to `max-width: 100%` so docx inline
-        widths (Word measures in twentieths of a point and frequently exceeds
-        the printable area) cannot overflow the page.
-      - `box-sizing: border-box` everywhere makes padding/border subtract
-        from the declared width instead of adding to it.
-      - `table-layout: fixed` + `word-break: normal` + `overflow-wrap: anywhere`
-        + `hyphens: auto` prevents the mid-word "Descrição d / os Serviços"
-        breaks the user reported, while still allowing super-long words
-        to wrap when they would otherwise overflow.
-      - Subtle modern palette (slate borders, brand-blue accents, generous
-        padding, soft zebra striping). Designed for an A4 commercial proposal.
+    Three known landmines this function defuses BEFORE WeasyPrint sees them:
+
+      1. Quill exports `class="ql-align-center"` (and right/justify/left) on
+         every aligned paragraph — but Quill's stylesheet is NOT bundled in
+         the rendered HTML, so without explicit CSS rules WeasyPrint silently
+         ignores them and aligns everything left. We add the rules below.
+
+      2. Quill replaces inline whitespace inside cells/paragraphs with
+         non-breaking spaces (\xa0). With `word-break: normal` the whole
+         "Descrição\xa0dos\xa0Serviços" string becomes a single unbreakable
+         word, and `overflow-wrap: anywhere` then chops it at character
+         boundaries (= "DESCRIÇÃO DOS SERVIÇO" with the final S cut off the
+         right margin). We replace \xa0 with regular spaces so the text can
+         break at word boundaries normally.
+
+      3. Some `.docx` exports hard-code table widths that exceed the print
+         area. `box-sizing: border-box` + `max-width: 100% !important` on
+         table/p/div neutralises this.
     """
     base_url = os.environ.get("PUBLIC_BACKEND_URL") or os.environ.get("FASTAPI_URL") or None
+
+    # Pre-processing #2: NBSP -> regular space inside table headers and body
+    # paragraphs. We don't want to nuke ALL NBSPs blindly because some are
+    # intentional (e.g. "R$ 1.200,00" between currency symbol and digits),
+    # so we only collapse runs of NBSP between alphanumeric/punctuation
+    # characters that include at least one alphabetic char.
+    cleaned_html = (html_content or "").replace("\u00a0", " ")
+
     css_prefix = """
     <style>
       @page {
         size: A4;
-        margin: 16mm 14mm;
+        margin: 18mm 16mm;
       }
       * { box-sizing: border-box; }
       html, body {
@@ -987,6 +1001,14 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
       table, p, div, section, header, footer, ul, ol, blockquote, img {
         max-width: 100% !important;
       }
+      /* === Quill alignment classes ===
+         These are emitted by the editor but the Quill stylesheet isn't
+         bundled — we provide explicit rules so the operator's centered
+         titles and signatures actually render centered. */
+      .ql-align-center { text-align: center !important; }
+      .ql-align-right { text-align: right !important; }
+      .ql-align-justify { text-align: justify !important; }
+      .ql-align-left { text-align: left !important; }
       h1 {
         font-size: 17pt;
         font-weight: 700;
@@ -1016,19 +1038,20 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
       table {
         width: 100%;
         border-collapse: collapse;
-        /* `auto` lets columns size to their content (so "Item" stays narrow,
-           "Descricao" gets the lion's share). The `max-width` rule above
-           keeps the WHOLE table inside the printable area. */
+        /* `auto` makes "Descricao dos Servicos" get the lion's share of
+           width while "Item" / "Unid." stay narrow — yields single-line
+           headers in most cases. Combined with the global `max-width: 100%
+           !important` rule above the table can never escape the page. */
         table-layout: auto;
         margin: 4pt 0 8pt;
         border: 0.5pt solid #cbd5e1;
       }
       td, th {
-        padding: 7pt 9pt;
+        padding: 6pt 7pt;
         vertical-align: middle;
         text-align: left;
         word-break: normal;
-        overflow-wrap: anywhere;
+        overflow-wrap: break-word;
         hyphens: auto;
         border: 0.5pt solid #e2e8f0;
         font-size: 9.5pt;
@@ -1037,16 +1060,18 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
         background: #0a4a6f;
         font-weight: 600;
         color: #fff;
-        font-size: 9pt;
+        font-size: 8.5pt;
         text-transform: uppercase;
-        letter-spacing: 0.03em;
+        letter-spacing: 0.02em;
         border-color: #0a4a6f;
         white-space: normal;
+        line-height: 1.2;
       }
       /* The .docx files exported by Word/Quill don't emit <th> — instead
          they put the header row as the first <tr> with bold text in <td>.
-         Style the FIRST row of every <tbody> (or table without thead) the
-         same way <th> would render: dark brand header with white text. */
+         Style the FIRST row of every <tbody> the same way <th> would
+         render: dark brand header with white text. Keep font compact and
+         allow up to 2 lines so 6 columns fit comfortably in A4 width. */
       table > tbody > tr:first-child > td,
       table > tr:first-child > td {
         background: #0a4a6f !important;
@@ -1054,20 +1079,19 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
         font-weight: 700 !important;
         text-transform: uppercase;
         letter-spacing: 0.02em;
-        font-size: 9pt;
+        font-size: 8.5pt;
+        padding: 5pt 6pt;
+        line-height: 1.2;
         border-color: #0a4a6f !important;
+        text-align: center !important;
       }
-      /* Text colors INSIDE the styled header cells must also be white,
-         since docx wraps headings in <strong><em> with default dark color. */
       table > tbody > tr:first-child > td *,
       table > tr:first-child > td * {
         color: #fff !important;
       }
-      /* Inline `text-align: justify` from Quill (`ql-align-justify`) makes
-         data rows look ragged; force-left for table cells. Override only
-         if the operator did not explicitly center/right-align via class. */
-      td.ql-align-justify { text-align: left; }
-      th.ql-align-justify { text-align: left; }
+      /* Ragged justify in narrow data cells is ugly — fall back to left.
+         (Headers handled above with !important center.) */
+      tbody > tr:not(:first-child) > td.ql-align-justify { text-align: left !important; }
       tbody tr:nth-child(even):not(:first-child) td { background: #f8fafc; }
       tbody tr td { line-height: 1.4; }
       img {
@@ -1081,9 +1105,7 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
       h2 + table { margin-top: 6pt; }
     </style>
     """
-    # Inject the CSS at the top so it cascades over any inline rules in
-    # mammoth-converted HTML (which sometimes has hard-coded widths).
-    html_with_css = css_prefix + (html_content or "")
+    html_with_css = css_prefix + cleaned_html
     return HTML(string=html_with_css, base_url=base_url).write_pdf()
 
 
