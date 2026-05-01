@@ -25,6 +25,7 @@ import logging
 import httpx
 import mammoth
 from weasyprint import HTML
+from bs4 import BeautifulSoup, NavigableString
 
 from database import get_database
 from auth import get_current_user
@@ -143,72 +144,80 @@ def _format_brl(v):
 
 
 def _auto_wrap_loops(html: str) -> str:
-    """Blindagem em tempo de render: se o template tiver {{description}} +
-    {{quantity}} (ou {{unit_price}}) DENTRO de um <tr> SEM estar envolto por
-    {{#items}}...{{/items}}, envelopa automaticamente essa linha — e remove
-    as linhas irmas duplicadas. Mesma logica para fretes ({{km_total}} +
-    {{price_per_km}}).
+    """Robust loop-wrapper using a real HTML parser (BeautifulSoup).
 
-    Isso faz com que templates uploadados ANTES da logica de fold (Fase 9)
-    funcionem corretamente sem precisar do user rodar 'Reconverter'.
+    Strategy is intentionally STRIP-AND-REWRAP rather than additive:
+      1. Strip every existing `{{#items}}/{{/items}}/{{#freights}}/{{/freights}}`
+         marker from the document. This is necessary because `.docx` -> HTML
+         conversions (and operators editing in Quill) frequently end up with
+         empty marker pairs sitting OUTSIDE the table (`<p>{{#items}}{{/items}}</p>`)
+         while the actual `<tr>` with placeholders sits unwrapped further down.
+         Trying to "respect" the existing markers leaves the engine looping over
+         empty bodies and the real placeholders leak into the PDF.
+      2. Re-detect the loop body by locating the first `<tr>` that contains a
+         marker placeholder (`{{description}}` for items, `{{km_total}}` /
+         `{{price_per_km}}` for freights) and inject markers IMMEDIATELY before
+         and after that `<tr>`. Markers are injected as text siblings of the
+         `<tr>` so the regex `{{#items}}(.*?){{/items}}` in `_render_template`
+         captures the entire row HTML.
+      3. Drop sibling `<tr>` elements right after the wrapped one if they also
+         contain the same placeholders — they were duplicate "second rows" the
+         operator left in the Word document.
+
+    Resilient to:
+      - Markers nested inside `<p>` tags (Quill artifact)
+      - Inline tags inside table cells (`<strong>`, `<em>`, `<span>`)
+      - Word's `<td data-row="..">` annotations
+      - Empty marker pairs (`{{#items}}{{/items}}`)
+      - Multiple tables in the same template (only the FIRST matching <tr>
+        per loop is wrapped)
     """
-    if "{{#items}}" in html or "{{#freights}}" in html:
-        # Se ja tem pelo menos um wrapper, assumimos que o template esta OK.
-        # (auto-wrap eh fallback, nao sobrescreve intencao explicita)
+    if not html:
         return html
 
-    tr_re = re.compile(r"<tr[\s\S]*?</tr>", re.IGNORECASE)
-    trs = list(tr_re.finditer(html))
-    if not trs:
-        return html
+    # 1. Always strip existing markers — we re-detect the correct positions.
+    for marker in ("{{#items}}", "{{/items}}", "{{#freights}}", "{{/freights}}"):
+        html = html.replace(marker, "")
 
-    def _wrap(label_marker_tokens, sibling_marker_tokens, wrap_open, wrap_close):
-        nonlocal html
-        trs_local = list(tr_re.finditer(html))
-        first_idx = None
-        rows_to_remove = []
-        for i, m in enumerate(trs_local):
-            content = m.group(0)
-            if any(tok in content for tok in label_marker_tokens):
-                first_idx = i
+    soup = BeautifulSoup(html, "html.parser")
+
+    def _wrap(label_tokens, sibling_tokens, open_m, close_m):
+        target_tr = None
+        for tr in soup.find_all("tr"):
+            tr_html = tr.decode()
+            if any(tok in tr_html for tok in label_tokens):
+                target_tr = tr
                 break
-        if first_idx is None:
+        if target_tr is None:
             return
-        # Row siblings are considered duplicates if they also contain the
-        # sibling_marker_tokens (tipically the same loop tokens); we delete
-        # them so only the wrapped first row survives.
-        for i, m in enumerate(trs_local):
-            if i <= first_idx:
-                continue
-            if any(tok in m.group(0) for tok in sibling_marker_tokens):
-                rows_to_remove.append(i)
+        # Drop duplicate sibling rows that also contain the placeholders
+        siblings_to_remove = []
+        nxt = target_tr.find_next_sibling("tr")
+        while nxt is not None:
+            nxt_html = nxt.decode()
+            if any(tok in nxt_html for tok in sibling_tokens):
+                siblings_to_remove.append(nxt)
+                nxt = nxt.find_next_sibling("tr")
             else:
-                break  # stop as soon as a non-matching sibling appears
-        first_tr = trs_local[first_idx]
-        # Build replacement edits from right-to-left
-        edits = [(first_tr.start(), first_tr.end(), wrap_open + first_tr.group(0) + wrap_close)]
-        for i in rows_to_remove:
-            edits.append((trs_local[i].start(), trs_local[i].end(), ""))
-        out = list(html)
-        for start, end, new in sorted(edits, key=lambda x: -x[0]):
-            out[start:end] = list(new)
-        html = "".join(out)
+                break
+        for s in siblings_to_remove:
+            s.decompose()
+        target_tr.insert_before(NavigableString(open_m))
+        target_tr.insert_after(NavigableString(close_m))
 
-    # Items: first <tr> containing {{description}} AND ({{quantity}} OR {{unit_price}})
     _wrap(
-        label_marker_tokens=["{{description}}"],
-        sibling_marker_tokens=["{{description}}", "{{quantity}}", "{{unit_price}}"],
-        wrap_open="{{#items}}",
-        wrap_close="{{/items}}",
+        label_tokens=("{{description}}",),
+        sibling_tokens=("{{description}}", "{{quantity}}", "{{unit_price}}", "{{unit}}"),
+        open_m="{{#items}}",
+        close_m="{{/items}}",
     )
-    # Freights: first <tr> containing {{km_total}} OR {{price_per_km}}
     _wrap(
-        label_marker_tokens=["{{km_total}}", "{{price_per_km}}"],
-        sibling_marker_tokens=["{{km_total}}", "{{price_per_km}}"],
-        wrap_open="{{#freights}}",
-        wrap_close="{{/freights}}",
+        label_tokens=("{{km_total}}", "{{price_per_km}}"),
+        sibling_tokens=("{{km_total}}", "{{price_per_km}}"),
+        open_m="{{#freights}}",
+        close_m="{{/freights}}",
     )
-    return html
+    return str(soup)
 
 
 def _render_template(template_html: str, ctx: dict) -> str:

@@ -214,6 +214,38 @@ async def merge_tickets(
     }
 
 
+class ResolveLidRequest(BaseModel):
+    real_phone: str
+
+
+@router.post("/tickets/{ticket_id}/resolve-lid")
+async def resolve_ticket_lid(
+    ticket_id: str,
+    body: ResolveLidRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Manual fallback for hidden-number contacts (`pending_lid_resolution=True`).
+
+    The operator obtains the real phone via voice/email/business card and
+    submits it here. Same merge logic as `/channels/webhook/lid-resolved`:
+    if another open ticket already exists for the real phone, messages are
+    merged into that one and the LID-only ticket is deleted; otherwise the
+    LID ticket is promoted to the real phone in place.
+    """
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    if not ticket.get("lid_jid"):
+        raise HTTPException(400, "Este ticket nao tem numero oculto pendente")
+    # Reuse the same logic from the webhook handler so behavior is identical
+    from routes.channels_routes import _apply_lid_resolution
+    result = await _apply_lid_resolution(db, user["company_id"], ticket["lid_jid"], body.real_phone)
+    if not result.get("updated"):
+        raise HTTPException(400, f"Nao foi possivel resolver: {result.get('reason')}")
+    return result
+
+
 @router.get("/clients/{client_id}/timeline")
 async def get_client_timeline(
     client_id: str,
@@ -415,11 +447,20 @@ async def add_message_to_ticket(
                     {"_id": 0, "id": 1}
                 )
                 conn_id = conn["id"] if conn else None
+            # Hidden-number contacts (LID-only): WhatsApp won't accept the
+            # raw LID digits via onWhatsApp() — the only address that works
+            # is the original `XXX@lid` JID. The microservice's /send
+            # endpoint already passes through any value containing `@`
+            # straight to sendMessage (no JID resolution), so we just send
+            # the lid_jid as `phone`.
+            target_phone = ticket["customer_phone"]
+            if ticket.get("pending_lid_resolution") and ticket.get("lid_jid"):
+                target_phone = ticket["lid_jid"]
             if conn_id:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(
                         f"{wa_url}/instances/{conn_id}/send",
-                        json={"phone": ticket["customer_phone"], "message": data.content}
+                        json={"phone": target_phone, "message": data.content}
                     )
                     try:
                         res = resp.json()

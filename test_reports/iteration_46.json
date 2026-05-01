@@ -1,0 +1,34 @@
+{
+  "summary": "End-to-end validation of P0 fixes from this session: (1) PDF generation rewraps loop markers in production-broken docx-derived templates; (2) @lid hidden-number flow (webhook -> pending banner + tag, manual resolve-lid endpoint, webhook auto-merge, webhook promote). 14/14 backend pytest tests PASS on the preview URL. Frontend banner UI verified visually with Playwright: lid-pending-banner visible on LID ticket, resolve-lid-btn clickable, opens window.prompt, 'Numero Oculto' tag rendered. NO bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_46.py",
+    "/app/test_reports/pytest/iter46_results.xml"
+  ],
+  "action_items": [
+    "None for fixes — both P0s are working end-to-end on preview.",
+    "Reminder for E1: production deploy at agentcrm.8ip.com.br must be rebuilt for users to receive these fixes (preview only)."
+  ],
+  "critical_code_review_comments": [
+    "_auto_wrap_loops correctly strips ALL existing loop markers before re-detecting positions — verified against the real production template /tmp/prod_tpl_63979c6e-f70b-4c95-aee1-d2f10667309d.html which had `<p>{{#items}}{{/items}}</p>` (empty pair OUTSIDE the table) and the data row unwrapped. Render produced 0 raw placeholders + 'Servico A','Servico B','Frete rota X' all present + total_value=1.625,00 BRL formatted.",
+    "/api/crm/tickets/{id}/resolve-lid correctly delegates to channels_routes._apply_lid_resolution, ensuring promote and merge paths are identical between manual UI flow and microservice webhook.",
+    "Webhook lid-resolved -> merge flow correctly DELETES the LID ticket after merging messages dedup'd by wa_message_id and re-points quotes — confirmed via 404 on subsequent GET.",
+    "Outgoing /api/crm/tickets/{id}/messages on a NORMAL (non-LID) ticket does NOT crash on lid_jid branch — endpoint accepts request as expected.",
+    "MINOR: AtendimentosPage.js uses window.prompt() for resolve-lid which is functional but not modern UX — consider a shadcn dialog with phone-format validation in a future iteration. Not blocking for this P0 fix."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_46.py (new file)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (banner visible, button clickable, prompt opens)"},
+  "test_credentials": "crm@test.com / crm123 on https://agentcrm-book.preview.emergentagent.com/crmtest/login",
+  "seed_data_creation": "Test created TEST_iter46-prefixed tickets/quotes/templates/clients (random UUIDs in phone numbers and lid_jids ensure idempotent re-runs). Tests are self-contained — no manual cleanup required between runs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The pytest suite at /app/backend/tests/test_iteration_46.py is a regression for: (a) BeautifulSoup-based _auto_wrap_loops handling broken docx templates with empty marker pairs, (b) full @lid flow end-to-end. Test data is randomized (UUID-based phones and lid_jids) so re-runs work without DB cleanup. Quote templates require `content` field (NOT `html`); quotes require `ticket_id`. The quote response is JSON wrapping `{html, quote}` — render returns content-type application/json with html field, NOT raw HTML. The PDF endpoint returns application/pdf with %PDF header.",
+  "rca of the issue": "BOTH P0 fixes verified working end-to-end. No reproduction needed: (1) Quote PDF — production template had `<p>{{#items}}{{/items}}</p>` empty pair OUTSIDE the data table while {{description}}/{{quantity}}/etc were in an unwrapped <tr>. The strip-and-rewrap strategy in _auto_wrap_loops correctly: removes the empty markers, locates the actual <tr> by token match, injects new markers as text siblings of the <tr>, drops duplicate sibling rows. Result: 0 placeholder leaks + correct items/freights iteration + valid PDF. (2) @lid — webhook with lid_jid creates ticket{pending_lid_resolution:True, tags:['Numero Oculto'], lid_jid:<jid>}. Manual resolve-lid promotes (single-ticket case) or merges into existing real-phone ticket and DELETES LID one (verified by 404 GET after merge). Webhook lid-resolved uses the same _apply_lid_resolution helper so behavior is identical."
+}

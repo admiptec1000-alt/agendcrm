@@ -272,17 +272,20 @@ async function createConnection(instanceId) {
       //   5) onWhatsApp lookup using stripped LID (asks server)
       //   6) strip @lid as last resort (will still create duplicate)
       let realJid = remoteJid;
+      let lidResolvedSource = null;  // for telemetry + auto-merge webhook
       if (remoteJid.endsWith('@lid')) {
         realJid = msg.key.senderPn
                || msg.key.participantPn
                || msg.key.remoteJidAlt
                || msg.key.participant
                || null;
+        if (realJid) lidResolvedSource = 'baileys_key_field';
         if (!realJid) {
           try {
             const map = instance.sock?.signalRepository?.lidMapping;
             if (map?.getPNForLID) {
               realJid = await map.getPNForLID(remoteJid);
+              if (realJid) lidResolvedSource = 'signal_repository';
             }
           } catch (_) {}
         }
@@ -293,7 +296,7 @@ async function createConnection(instanceId) {
             const contacts = store?.contacts || {};
             const lidId = remoteJid.replace('@lid', '');
             for (const [jid, c] of Object.entries(contacts)) {
-              if (c?.lid === remoteJid || c?.lid === lidId) { realJid = jid; break; }
+              if (c?.lid === remoteJid || c?.lid === lidId) { realJid = jid; lidResolvedSource = 'store_contacts'; break; }
             }
           } catch (_) {}
         }
@@ -305,6 +308,7 @@ async function createConnection(instanceId) {
           const phoneFromMap = lookupPhoneForLid(instanceId, remoteJid);
           if (phoneFromMap) {
             realJid = `${phoneFromMap}@s.whatsapp.net`;
+            lidResolvedSource = 'persistent_map';
             console.log(`[${instanceId}] LID resolved via persistent map: ${remoteJid} -> ${phoneFromMap}`);
           }
         }
@@ -333,6 +337,25 @@ async function createConnection(instanceId) {
 
       const phone = realJid.replace(/@(s\.whatsapp\.net|lid|c\.us)$/, '');
       const pushName = msg.pushName || '';
+      // Preserve the original LID JID (`XXX@lid`) in the webhook payload when
+      // we could NOT resolve to a real phone. The backend stores it on the
+      // ticket so the operator's outgoing message can be addressed via the
+      // LID JID directly (the only thing WhatsApp will accept for hidden-
+      // privacy contacts on their first message). When `lid_resolved_source`
+      // is non-null, the LID was resolved successfully and `phone` is real.
+      const incomingLidJid = remoteJid.endsWith('@lid') ? remoteJid : null;
+      // If we DID resolve a LID -> phone in this call, also fire-and-forget
+      // a `/webhook/lid-resolved` so the backend can promote any pending
+      // ticket from the LID-only state to the real phone (auto-merge).
+      if (incomingLidJid && lidResolvedSource && realJid !== remoteJid) {
+        rememberLidForPhone(instanceId, incomingLidJid, phone);
+        axios.post(`${FASTAPI_URL}/api/channels/webhook/lid-resolved`, {
+          instance_id: instanceId,
+          lid_jid: incomingLidJid,
+          phone,
+          source: lidResolvedSource,
+        }, { timeout: 5000 }).catch(() => {});
+      }
 
       const m = msg.message || {};
       // Support a variety of message types
@@ -372,6 +395,7 @@ async function createConnection(instanceId) {
           message: text,
           message_id: msg.key.id,
           timestamp: ts,
+          lid_jid: incomingLidJid,  // null unless original was @lid
         }, { timeout: 10000 });
         console.log(`[${instanceId}] ✓ webhook sent phone=${phone} text="${text.slice(0, 40)}" -> ${resp.status}`);
       } catch (e) {
@@ -645,15 +669,15 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.2',
+    version: 'v2.1.3',
   });
 });
 
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.2',
-    built_at: '2026-04-29',
+    version: 'v2.1.3',
+    built_at: '2026-04-30',
     features: {
       sent_message_store: true,       // anti blank message fix
       multi_message_types: true,      // captions, buttons, lists
@@ -667,6 +691,8 @@ app.get('/version', (req, res) => {
       conflict_backoff: true,         // slow retry on stream:error conflict (v2.1.1)
       lid_senderpn_resolver: true,    // resolve @lid via senderPn/participantPn/remoteJidAlt/lidMapping (v2.1.2)
       phone_shadow_fix: true,         // removed duplicate `const phone` that reverted realJid (v2.1.2)
+      lid_jid_passthrough: true,      // pass original @lid JID in webhook for new-contact UX (v2.1.3)
+      lid_resolved_webhook: true,     // notify backend when LID is resolved so tickets can auto-merge (v2.1.3)
     },
     fastapi_url: FASTAPI_URL,
   });

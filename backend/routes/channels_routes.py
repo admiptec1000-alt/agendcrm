@@ -513,6 +513,14 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     text = data.get("message") or ""
     msg_id = data.get("message_id")
     ts_raw = data.get("timestamp")
+    # When the original WhatsApp JID was @lid, the microservice sends the
+    # raw `XXX@lid` here so the backend can:
+    #   (a) save it on the ticket → the operator's outbound messages will
+    #       be sent via the LID JID directly (the only thing WA accepts for
+    #       hidden-privacy first contacts), and
+    #   (b) auto-merge later when /webhook/lid-resolved arrives with the
+    #       real phone for the same LID.
+    lid_jid = (data.get("lid_jid") or "").strip() or None
     logger.info(f"[webhook/message] {company_id[:8]} phone={phone} mid={msg_id} text='{text[:40]}'")
 
     # Filter out messages older than the moment this channel was connected.
@@ -645,6 +653,7 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         ticket_id = str(uuid.uuid4())
         ticket_number = await next_ticket_number(db, company_id)
         client_id = await find_or_create_client_by_phone(db, company_id, phone, name=name)
+        is_lid = _looks_like_lid(phone)
         ticket = {
             "id": ticket_id,
             "ticket_number": ticket_number,
@@ -660,9 +669,17 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "description": text[:140] if text else None,
             "assigned_to": None,
             "messages": [new_message],
-            "tags": [],
+            # Auto-tag hidden-number contacts so the operator immediately sees
+            # the situation in the conversation list. The tag is plain string
+            # (matching the existing tag system; resolver clears it).
+            "tags": ["Numero Oculto"] if is_lid else [],
             "value": 0.0,
-            "pending_lid_resolution": _looks_like_lid(phone),
+            "pending_lid_resolution": is_lid,
+            # Original `XXX@lid` JID — used by the outbound send path so the
+            # operator can reply via the LID JID directly while we wait for
+            # WhatsApp to expose the real phone (only happens after the
+            # contact has interacted with us at least once).
+            "lid_jid": lid_jid if is_lid else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -679,6 +696,110 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         )
 
     return {"ok": True}
+
+
+# === LID resolution webhook & manual API ===
+#
+# Hidden-number contacts (WhatsApp's privacy mode for new contacts) deliver
+# their first messages with a `XXX@lid` JID that does NOT match the real
+# phone. We provisionally create a ticket using the LID as `customer_phone`
+# and tag it "Numero Oculto". When the contact interacts again (or the
+# operator sends a message that gets a response with `senderPn` populated),
+# the microservice fires `/webhook/lid-resolved` so we can:
+#   1. Update the pending ticket with the real phone (and clean up tag/flag)
+#   2. If another ticket already existed for the real phone, merge messages
+#      into the older ticket and DELETE the LID-only one. The merge is
+#      idempotent (deduplicated by wa_message_id).
+#
+# The manual `POST /tickets/{id}/resolve-lid` endpoint is the UX fallback:
+# operator sees the "Numero Oculto" banner in the chat header, types the
+# real phone he/she got via voice/email/business card, hits Resolve. Same
+# server-side logic runs.
+
+class LidResolvedWebhook(BaseModel):
+    instance_id: str
+    lid_jid: str
+    phone: str
+    source: Optional[str] = None
+
+
+async def _apply_lid_resolution(db, company_id: str, lid_jid: str, real_phone: str) -> dict:
+    """Promote the pending LID ticket to use `real_phone`. Merges into an
+    existing ticket for the real phone if one is already open."""
+    if not lid_jid or not real_phone:
+        return {"updated": False, "reason": "missing_input"}
+    real_phone = re.sub(r"\D", "", real_phone)
+    if len(real_phone) < 8:
+        return {"updated": False, "reason": "invalid_phone"}
+
+    pending = await db.tickets.find_one(
+        {"company_id": company_id, "lid_jid": lid_jid, "status": {"$nin": ["fechado"]}},
+        sort=[("created_at", -1)],
+    )
+    if not pending:
+        return {"updated": False, "reason": "no_pending_ticket"}
+
+    # Is there already an open ticket for this real phone? If so, merge.
+    existing = await db.tickets.find_one(
+        {"company_id": company_id, "customer_phone": real_phone, "status": {"$nin": ["fechado"]},
+         "id": {"$ne": pending["id"]}},
+        sort=[("created_at", 1)],
+    )
+    if existing:
+        # Merge messages dedup'd by wa_message_id, union tags (minus the
+        # Numero Oculto tag), and DELETE the LID ticket.
+        existing_msgs = existing.get("messages") or []
+        existing_msg_ids = {m.get("wa_message_id") for m in existing_msgs if m.get("wa_message_id")}
+        new_msgs = [m for m in (pending.get("messages") or []) if m.get("wa_message_id") not in existing_msg_ids]
+        merged_tags = list({*(existing.get("tags") or []), *[t for t in (pending.get("tags") or []) if t != "Numero Oculto"]})
+        await db.tickets.update_one(
+            {"id": existing["id"]},
+            {"$push": {"messages": {"$each": new_msgs}},
+             "$set": {"tags": merged_tags, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        # Re-point quotes to the surviving ticket
+        await db.quotes.update_many(
+            {"company_id": company_id, "ticket_id": pending["id"]},
+            {"$set": {"ticket_id": existing["id"]}},
+        )
+        await db.tickets.delete_one({"id": pending["id"]})
+        logger.info(
+            f"[lid-resolved][merge] LID {lid_jid} -> phone {real_phone}; "
+            f"merged ticket #{pending.get('ticket_number')} into #{existing.get('ticket_number')}"
+        )
+        return {"updated": True, "merged_into": existing["id"], "deleted": pending["id"]}
+
+    # No existing ticket → just promote the pending one.
+    new_tags = [t for t in (pending.get("tags") or []) if t != "Numero Oculto"]
+    new_client_id = await find_or_create_client_by_phone(
+        db, company_id, real_phone, name=pending.get("customer_name") or real_phone
+    )
+    await db.tickets.update_one(
+        {"id": pending["id"]},
+        {"$set": {
+            "customer_phone": real_phone,
+            "client_id": new_client_id,
+            "tags": new_tags,
+            "pending_lid_resolution": False,
+            "lid_jid": None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    logger.info(f"[lid-resolved][promote] ticket #{pending.get('ticket_number')} LID {lid_jid} -> {real_phone}")
+    return {"updated": True, "promoted": pending["id"]}
+
+
+@router.post("/webhook/lid-resolved")
+async def webhook_lid_resolved(body: LidResolvedWebhook, db: AsyncIOMotorDatabase = Depends(get_database)):
+    """Called by the microservice when it discovers the real phone behind a
+    previously unresolved `@lid` (via `key.senderPn`, store contacts, etc).
+    Promotes / merges the pending ticket so the conversation continues on
+    the real number."""
+    conn = await db.channel_connections.find_one({"id": body.instance_id})
+    if not conn:
+        return {"ok": False, "error": "instance_not_found"}
+    result = await _apply_lid_resolution(db, conn["company_id"], body.lid_jid, body.phone)
+    return {"ok": True, **result}
 
 
 @router.put("/connections/{conn_id}")

@@ -657,6 +657,40 @@ const AtendimentosPage = () => {
             </div>
           </div>
 
+          {/* LID Pending Resolution Banner — shown when WhatsApp delivered the
+              first message via a hidden @lid (privacy mode for new contacts).
+              Operator types the real phone (e.g. via voice) and resolves it,
+              triggering server-side merge with any existing ticket. */}
+          {selectedTicket.pending_lid_resolution && (
+            <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center justify-between gap-3" data-testid="lid-pending-banner">
+              <div className="flex items-start gap-2 min-w-0">
+                <span className="text-amber-600 text-base leading-none mt-0.5">⚠</span>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-amber-900">Numero do contato oculto pelo WhatsApp</p>
+                  <p className="text-[11px] text-amber-700 truncate">As respostas chegam via ID interno. Informe o telefone real para mesclar e usar normalmente.</p>
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  const real = window.prompt('Digite o telefone real do contato (com DDD, ex: 5562999999999):');
+                  if (!real) return;
+                  try {
+                    await crmAPI.resolveTicketLid(selectedTicket.id, real);
+                    toast.success('Numero atualizado! Mesclando atendimento...');
+                    loadData();
+                    setSelectedTicket(null);
+                  } catch (e) {
+                    toast.error(e?.response?.data?.detail || 'Falha ao resolver numero');
+                  }
+                }}
+                className="text-xs px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-md font-semibold whitespace-nowrap"
+                data-testid="resolve-lid-btn"
+              >
+                Informar telefone
+              </button>
+            </div>
+          )}
+
           {/* Tags Bar */}
           <div className="bg-white/80 px-4 py-2 border-b border-slate-200 flex items-center gap-1.5 flex-wrap">
             <Tag className="w-3 h-3 text-slate-400" />
