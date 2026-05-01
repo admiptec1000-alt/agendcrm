@@ -142,14 +142,87 @@ def _format_brl(v):
         return "R$ 0,00"
 
 
+def _auto_wrap_loops(html: str) -> str:
+    """Blindagem em tempo de render: se o template tiver {{description}} +
+    {{quantity}} (ou {{unit_price}}) DENTRO de um <tr> SEM estar envolto por
+    {{#items}}...{{/items}}, envelopa automaticamente essa linha — e remove
+    as linhas irmas duplicadas. Mesma logica para fretes ({{km_total}} +
+    {{price_per_km}}).
+
+    Isso faz com que templates uploadados ANTES da logica de fold (Fase 9)
+    funcionem corretamente sem precisar do user rodar 'Reconverter'.
+    """
+    if "{{#items}}" in html or "{{#freights}}" in html:
+        # Se ja tem pelo menos um wrapper, assumimos que o template esta OK.
+        # (auto-wrap eh fallback, nao sobrescreve intencao explicita)
+        return html
+
+    tr_re = re.compile(r"<tr[\s\S]*?</tr>", re.IGNORECASE)
+    trs = list(tr_re.finditer(html))
+    if not trs:
+        return html
+
+    def _wrap(label_marker_tokens, sibling_marker_tokens, wrap_open, wrap_close):
+        nonlocal html
+        trs_local = list(tr_re.finditer(html))
+        first_idx = None
+        rows_to_remove = []
+        for i, m in enumerate(trs_local):
+            content = m.group(0)
+            if any(tok in content for tok in label_marker_tokens):
+                first_idx = i
+                break
+        if first_idx is None:
+            return
+        # Row siblings are considered duplicates if they also contain the
+        # sibling_marker_tokens (tipically the same loop tokens); we delete
+        # them so only the wrapped first row survives.
+        for i, m in enumerate(trs_local):
+            if i <= first_idx:
+                continue
+            if any(tok in m.group(0) for tok in sibling_marker_tokens):
+                rows_to_remove.append(i)
+            else:
+                break  # stop as soon as a non-matching sibling appears
+        first_tr = trs_local[first_idx]
+        # Build replacement edits from right-to-left
+        edits = [(first_tr.start(), first_tr.end(), wrap_open + first_tr.group(0) + wrap_close)]
+        for i in rows_to_remove:
+            edits.append((trs_local[i].start(), trs_local[i].end(), ""))
+        out = list(html)
+        for start, end, new in sorted(edits, key=lambda x: -x[0]):
+            out[start:end] = list(new)
+        html = "".join(out)
+
+    # Items: first <tr> containing {{description}} AND ({{quantity}} OR {{unit_price}})
+    _wrap(
+        label_marker_tokens=["{{description}}"],
+        sibling_marker_tokens=["{{description}}", "{{quantity}}", "{{unit_price}}"],
+        wrap_open="{{#items}}",
+        wrap_close="{{/items}}",
+    )
+    # Freights: first <tr> containing {{km_total}} OR {{price_per_km}}
+    _wrap(
+        label_marker_tokens=["{{km_total}}", "{{price_per_km}}"],
+        sibling_marker_tokens=["{{km_total}}", "{{price_per_km}}"],
+        wrap_open="{{#freights}}",
+        wrap_close="{{/freights}}",
+    )
+    return html
+
+
 def _render_template(template_html: str, ctx: dict) -> str:
     """Substitutes {{placeholders}} in the template with ctx values.
 
     Supports two list-aware blocks:
         {{#items}}...{{description}}...{{total}}...{{/items}}
         {{#freights}}...{{description}}...{{total}}...{{/freights}}
+
+    Legacy templates (without loop wrappers) are auto-wrapped via
+    _auto_wrap_loops BEFORE substitution, so {{description}} etc always
+    iterate the correct collection.
     """
-    html = template_html or ""
+    html = _auto_wrap_loops(template_html or "")
 
     def _expand_loop(block_name: str, rows: list, body: str) -> str:
         out = []
@@ -880,12 +953,43 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
     base_url = os.environ.get("PUBLIC_BACKEND_URL") or os.environ.get("FASTAPI_URL") or None
     css_prefix = """
     <style>
-      @page { size: A4; margin: 15mm 12mm; }
-      body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 10pt; color: #111; }
-      table { width: 100%; border-collapse: collapse; table-layout: fixed; word-wrap: break-word; }
-      td, th { padding: 4px 6px; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
+      @page { size: A4; margin: 14mm 12mm; }
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 1.45;
+        color: #111827;
+      }
+      h1 { font-size: 18pt; margin: 6pt 0; color: #0f172a; }
+      h2 { font-size: 13pt; margin: 10pt 0 4pt; color: #0f172a; }
+      h3 { font-size: 11pt; margin: 8pt 0 3pt; color: #0f172a; }
+      p { margin: 3pt 0; }
+      strong { color: #0f172a; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        word-wrap: break-word;
+        margin: 6pt 0;
+      }
+      td, th {
+        padding: 5pt 7pt;
+        vertical-align: top;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        border: 0.5pt solid #e2e8f0;
+      }
+      th {
+        background: #f1f5f9;
+        font-weight: 600;
+        text-align: left;
+        color: #1e293b;
+        font-size: 9.5pt;
+      }
+      tr:nth-child(even) td { background: #fafbfc; }
       img { max-width: 100%; height: auto; }
-      p { margin: 4px 0; }
+      /* Numbered columns aligned right for readability */
+      td[data-align="right"], th[data-align="right"] { text-align: right; }
     </style>
     """
     # Inject the CSS at the top so it cascades over any inline rules in

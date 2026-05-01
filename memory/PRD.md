@@ -11,6 +11,32 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 11: Auto-wrap em tempo de render + CSS moderno
+**Problema persistente**: mesmo apos Fase 10, o user reportou que `{{description}}`, `{{quantity}}`, `{{km_total}}`, `{{price_per_km}}` continuavam raw no PDF. Causa: o template no banco nao tinha wrapper `{{#items}}/{{/items}}` (produto foi uploadado ANTES do Fase 9, e user nao clicou Reconverter).
+
+**Fix definitivo — auto-wrap no render**:
+- `_auto_wrap_loops(html)` detecta automaticamente em tempo de render:
+  - Primeira `<tr>` com `{{description}}` → envelopa com `{{#items}}...{{/items}}`, remove linhas irmas que tambem tem `{{description}}` / `{{quantity}}` / `{{unit_price}}`
+  - Primeira `<tr>` com `{{km_total}}` ou `{{price_per_km}}` → envelopa com `{{#freights}}...{{/freights}}`, idem para irmas
+- So atua se `{{#items}}` / `{{#freights}}` NAO existir no HTML — respeita templates que ja tem wrapper explicito
+- `_render_template` agora chama `_auto_wrap_loops` antes da substituicao
+- **Templates antigos (sem reconverter) funcionam out-of-the-box** agora
+
+**CSS modernizado** no `_generate_pdf_bytes`:
+- Fonte: `Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif`
+- Headers `h1` 18pt / `h2` 13pt / `h3` 11pt com cor slate-900
+- Tabelas com borders sutis (slate-200) + zebra striping (fafbfc) + th bg slate-100
+- Padding generoso (5pt 7pt), line-height 1.45, letra legivel 10pt base
+- `table-layout: fixed` + `word-wrap: break-word` (nunca mais estoura a pagina)
+- Margem A4 ajustada pra 14mm x 12mm
+
+**Validacao**:
+- Unit test local com template sem wrapper: `{{description}}` e `{{km_total}}` substituidos por valores corretos ("Coleta", "Goiania", "R$ 12,50", "R$ 280,00")
+- Regressao 31/31 backend tests passing
+
+**Acao do user**:
+Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar .docx**. O auto-wrap acontece automaticamente em toda renderizacao.
+
 ### 2026-04-30 — Fase 10: Fix PDF desfigurado — CSS A4 + Reconvert templates antigos
 **Analise do orcamento-1016.3.pdf do user**:
 - Placeholders `{{description}}`, `{{quantity}}`, `{{unit}}`, `{{total}}`, `{{km_total}}`, `{{price_per_km}}` aparecendo VERBATIM no PDF → template antigo foi convertido ANTES do `_fold_rows` ser deployed → nao tem wrapper `{{#items}}/{{/items}}` → `_render_template` nao expandiu.
