@@ -11,6 +11,32 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-01 — Fix DEFINITIVO PDF Orcamento + Bug @lid Novo Contato
+**Reproducao confirmada com producao** (acesso fornecido pelo user em agentcrm.8ip.com.br/incinera adm@incinera.com): baixei via script Python o HTML real do template "INCINERA - Orcamento Padao" e descobri que ele continha `<p>{{#items}}{{/items}}</p>` (par VAZIO de marcadores) ANTES da tabela, com a `<tr>` real (contendo `{{description}}`, `{{quantity}}`, etc) DESEMBRULHADA. O `_auto_wrap_loops` antigo fazia early-return ao detectar `{{#items}}` em qualquer lugar, e o `_render_template` substituia o par vazio por nada, deixando os placeholders reais vazarem para o PDF.
+
+**Fix 1: PDF Engine** (`quotes_routes.py`):
+- Reescrito `_auto_wrap_loops` com **BeautifulSoup4** (parser HTML real). Estrategia: STRIP-AND-REWRAP — primeiro remove todos os marcadores `{{#items}}/{{/items}}/{{#freights}}/{{/freights}}` existentes, depois localiza a primeira `<tr>` que contem o token-marcador (`{{description}}` para items, `{{km_total}}`/`{{price_per_km}}` para freights) e injeta novos marcadores como NavigableString ANTES e DEPOIS da `<tr>`. Linhas irmas duplicadas com mesmos placeholders sao removidas via `.decompose()`.
+- Resiliente a: marcadores aninhados em `<p>`, tags inline `<strong>/<em>/<span>` dentro das celulas, `<td data-row="..">` annotations do Word, multiplas tabelas no mesmo template.
+- **Validado contra o template REAL da Incinera**: 0 placeholders vazando no render, PDF de 50KB com header `%PDF-1.7` valido, items+fretes corretamente expandidos.
+
+**Fix 2: @lid Novo Contato** (microserviço + backend + frontend):
+- **Microservico Node.js (`whatsapp-service/index.js v2.1.3`)**:
+  - Webhook `/webhook/message` agora carrega novo campo `lid_jid` no payload (preserva o `XXX@lid` original quando o LID nao foi resolvido)
+  - Novo: quando o microservico CONSEGUE resolver um LID via Baileys (senderPn/store/persistent_map), ele dispara fire-and-forget `POST /api/channels/webhook/lid-resolved` com `{instance_id, lid_jid, phone, source}` — o backend faz auto-merge.
+- **Backend (`channels_routes.py`)**:
+  - Tickets criados com `_looks_like_lid(phone)=True` agora salvam `lid_jid="XXX@lid"`, `pending_lid_resolution=True` e tag automatica `"Numero Oculto"`.
+  - Novo endpoint `POST /api/channels/webhook/lid-resolved` chamado pelo microservico → `_apply_lid_resolution(...)` faz merge automatico (se ja existe outro ticket aberto com o phone real) ou promote (atualiza customer_phone in-place + limpa tag/flags + religa client_id).
+- **Backend (`crm_routes.py`)**:
+  - Novo endpoint `POST /api/crm/tickets/{id}/resolve-lid` (UX manual) — operador digita o phone real e a mesma logica de merge/promote roda.
+  - Envio outgoing via `POST /api/crm/tickets/{id}/messages`: se o ticket tem `pending_lid_resolution=True`, usa `lid_jid` como `phone` no payload pro microservico (a UNICA forma do WhatsApp aceitar para contatos com privacidade ativa).
+- **Frontend (`AtendimentosPage.js`)**: banner amarelo `data-testid="lid-pending-banner"` no header do chat quando `selectedTicket.pending_lid_resolution=True`. Botao `data-testid="resolve-lid-btn"` abre `window.prompt` → chama `crmAPI.resolveTicketLid(id, real_phone)` → toast + reload.
+
+**Validacao** (testing agent iter46): 14/14 backend + UI confirmada. PDF gerado com 0 leaks usando o template REAL quebrado da producao. Fluxo @lid completo (webhook -> banner -> resolve-lid -> merge automatico) funcionando. Ver `/app/test_reports/iteration_46.json`.
+
+**Acao do user**:
+1. Deploy backend (Save to GitHub → Render auto-deploy) — PDF fica funcional imediatamente.
+2. Deploy microservico (recomendado, nao mandatorio) — habilita auto-resolve do @lid quando o Baileys descobre o phone real (fallback manual via banner sempre funciona).
+
 ### 2026-04-30 — Fase 11: Auto-wrap em tempo de render + CSS moderno
 **Problema persistente**: mesmo apos Fase 10, o user reportou que `{{description}}`, `{{quantity}}`, `{{km_total}}`, `{{price_per_km}}` continuavam raw no PDF. Causa: o template no banco nao tinha wrapper `{{#items}}/{{/items}}` (produto foi uploadado ANTES do Fase 9, e user nao clicou Reconverter).
 
