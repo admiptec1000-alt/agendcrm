@@ -458,17 +458,29 @@ def _normalize_docx_placeholders(html: str) -> str:
     user-friendly Word tokens like { ITEM_1 } or {{NOME}} into the canonical
     {{placeholder}} format the renderer understands.
 
-    Rules applied:
-      - Single-brace tokens "{ TOKEN }" -> "{{TOKEN}}"
-      - Trim spaces inside double braces: "{{ TOKEN }}" -> "{{TOKEN}}"
-      - Lowercase + collapse the most common Incinera-style tokens
-        (RAZAO_SOCIAL, CNPJ_CPF, NOME, NUMERO, EMAIL, ENDERECO, CIDADE,
-         ESTADO, ITEM_N, UNIDADE_N, VALOR_UNI_N, QTDE_N, VALOR_TOTAL_N_SOMA,
-         ITEM_FRETE_N, QTDE_FRETE_N, VALOR_UNI_FRETE_N, VALOR_TOTAL_FRETE_N,
-         SOMA_TOTAL_ITENS, Faturamento_minimo_em_kg, Prazo_de_pagamento,
-         Forma_de_pagamento) so existing INCINERA-style models render with
-        the canonical context produced by /render.
+    The converter is aware of common Brazilian quote templates (INCINERA
+    style) and can fold numbered tokens (ITEM_1..ITEM_N + QTDE_N +
+    VALOR_UNI_N + VALOR_TOTAL_N_SOMA) inside the FIRST TR that references
+    them into a single {{#items}}...{{/items}} loop, and the equivalent
+    freight tokens into {{#freights}}...{{/freights}}. The resulting
+    template renders correctly regardless of how many items the operator
+    later adds to the quote.
     """
+    # Word frequently splits a placeholder across runs, producing HTML like
+    # "{<strong>Token</strong>}" or "{<em>Token}</em>". Collapse that pattern
+    # by temporarily stripping inline tags inside any { ... } region so the
+    # placeholder regex below can catch it, then restoring.
+    def _flatten_inline_brace_tags(s: str) -> str:
+        # Replace patterns like "{<...>WORD<...>}" or "{WORD}<...>" with the
+        # clean "{WORD}". This is safe because legitimate templates should
+        # not contain HTML tags INSIDE placeholder tokens.
+        brace_re = re.compile(r"\{(?!\{)([^{}]{0,120})\}")
+        def _clean(match):
+            inner = re.sub(r"<[^>]+>", "", match.group(1))
+            return "{" + inner + "}"
+        return brace_re.sub(_clean, s)
+    html = _flatten_inline_brace_tags(html)
+
     # First convert "{ X }" single-brace to "{{X}}" (Word artifact)
     html = re.sub(r"\{\s*([A-Za-z0-9_\u00C0-\u017F /\-]+?)\s*\}", lambda m: "{{" + m.group(1).strip().replace(" ", "_") + "}}", html)
     # Trim inside double braces
@@ -499,7 +511,6 @@ def _normalize_docx_placeholders(html: str) -> str:
     }
     def _replace(match):
         token = match.group(1).strip()
-        # Normalize: uppercase, replace spaces with underscore, strip accents
         import unicodedata
         upper = unicodedata.normalize("NFKD", token).encode("ASCII", "ignore").decode("ASCII")
         upper = upper.upper().replace(" ", "_")
@@ -508,6 +519,84 @@ def _normalize_docx_placeholders(html: str) -> str:
             return "{{" + canonical + "}}"
         return match.group(0)
     html = re.sub(r"\{\{([^{}]+?)\}\}", _replace, html)
+
+    # ─── Fold numbered item/freight tokens into loops ───────────────────
+    # Heuristic: for each <tr> containing ITEM_1 + QTDE_1 (or VALOR_UNI_1),
+    # replace the NUMBERED tokens inside with their loop equivalents
+    # (description/quantity/unit_price/total) and wrap the <tr> with
+    # {{#items}}...{{/items}}. Delete any sibling <tr>s that reference
+    # ITEM_2..N (they were duplicates of the first row in the Word doc).
+    def _fold_rows(html_in: str, idx_label: str, canonical: dict, wrap_open: str, wrap_close: str) -> str:
+        # Find every <tr>...</tr> that contains the FIRST-row marker.
+        # First-row marker can be either the unsuffixed token ({{ITEM_FRETE}})
+        # or the explicitly numbered ({{ITEM_1}}); operators frequently use
+        # the former in Word.
+        tr_re = re.compile(r"<tr[\s\S]*?</tr>", re.IGNORECASE)
+        trs = list(tr_re.finditer(html_in))
+        if not trs:
+            return html_in
+        first_markers = ["{{" + idx_label + "}}", "{{" + idx_label + "_1}}"]
+        dup_marker_re = re.compile(r"\{\{" + re.escape(idx_label) + r"_([2-9]|1[0-9])\}\}")
+        first_idx = None
+        rows_to_remove = []
+        for i, m in enumerate(trs):
+            content = m.group(0)
+            if any(mk in content for mk in first_markers) and first_idx is None:
+                first_idx = i
+            elif first_idx is not None and dup_marker_re.search(content):
+                rows_to_remove.append(i)
+        if first_idx is None:
+            return html_in
+        first_tr = trs[first_idx].group(0)
+        replaced_tr = first_tr
+        for num_token, loop_token in canonical.items():
+            replaced_tr = re.sub(r"\{\{" + re.escape(num_token) + r"\}\}", "{{" + loop_token + "}}", replaced_tr)
+        wrapped = wrap_open + replaced_tr + wrap_close
+
+        # Stitch back: keep everything else, replace the first row with the
+        # wrapped loop, and DROP rows_to_remove. Operate right-to-left on
+        # positions so indices stay valid.
+        pieces = []
+        last_end = 0
+        for i, m in enumerate(trs):
+            if i < first_idx:
+                continue  # leave original
+            if i == first_idx:
+                pieces.append((m.start(), m.end(), wrapped))
+            elif i in rows_to_remove:
+                pieces.append((m.start(), m.end(), ""))
+            else:
+                # keep as-is
+                pass
+        out = list(html_in)
+        for start, end, new in sorted(pieces, key=lambda x: -x[0]):
+            out[start:end] = list(new)
+        return "".join(out)
+
+    html = _fold_rows(
+        html, "ITEM", {
+            "ITEM_1": "description",
+            "UNIDADE_1": "unit",
+            "QTDE_1": "quantity",
+            "VALOR_UNI_1": "unit_price",
+            "VALOR_TOTAL_1_SOMA": "total",
+        },
+        "{{#items}}", "{{/items}}",
+    )
+    html = _fold_rows(
+        html, "ITEM_FRETE", {
+            "ITEM_FRETE_1": "description",
+            "ITEM_FRETE": "description",
+            "QTDE_FRETE_1": "km_total",
+            "QTDE_FRETE": "km_total",
+            "VALOR_UNI_FRETE_1": "price_per_km",
+            "VALOR_UNI_FRETE": "price_per_km",
+            "VALOR_TOTAL_FRETE_1": "total",
+            "VALOR_TOTAL_FRETE": "total",
+        },
+        "{{#freights}}", "{{/freights}}",
+    )
+
     return html
 
 
@@ -533,7 +622,18 @@ async def upload_docx_template(
         raise HTTPException(400, "Arquivo muito grande (limite 10MB)")
     try:
         from io import BytesIO
-        result = mammoth.convert_to_html(BytesIO(raw))
+        # Inline image handler: convert each embedded image to a data URI so
+        # WeasyPrint can render it without any external fetch. Keeps the
+        # template self-contained (great for letterhead logos/headers).
+        def _image_handler(image):
+            with image.open() as src:
+                data = src.read()
+            b64 = base64.b64encode(data).decode("ascii")
+            return {"src": f"data:{image.content_type or 'image/png'};base64,{b64}"}
+        result = mammoth.convert_to_html(
+            BytesIO(raw),
+            convert_image=mammoth.images.img_element(_image_handler),
+        )
         html = result.value or ""
     except Exception as e:
         logger.warning("mammoth failed for %s: %s", file.filename, e)

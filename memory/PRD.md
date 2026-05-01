@@ -11,6 +11,14 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 9: Conversao .docx super robusta (imagens + loops automaticos)
+- **Imagens embedded**: upload .docx agora converte imagens (logos/cabecalho/rodape) em data URIs base64 inline no HTML via `mammoth.images.img_element`. Templates viram self-contained — WeasyPrint renderiza sem fetch externo.
+- **Auto-fold de linhas numeradas → loops**: detecta tokens numerados (`ITEM_1/ITEM_2/...`, `QTDE_1/QTDE_2/...`, `VALOR_UNI_1/VALOR_UNI_2/...`) e converte automaticamente a PRIMEIRA `<tr>` do docx em `{{#items}}...{{/items}}`, removendo as demais linhas que eram duplicatas. Mesma logica para fretes.
+- **Marcador de primeira linha flexivel**: aceita tanto `{{ITEM_1}}` quanto `{{ITEM_FRETE}}` (sem sufixo numerico) como abertura do loop — template da Incinera ja funciona out-of-the-box.
+- **Fix placeholder partido em runs**: tokens como `{<strong>Faturamento_minimo_em_kg</strong>}` (Word quebrou o placeholder entre tags HTML) sao colapsados antes da conversao via `_flatten_inline_brace_tags`.
+- **Validacao completa** com o `.docx` real da Incinera: 23 tokens agora 100% canonicalizados, 2 loops (items + freights) detectados, `minimum_billing_kg` resolvido, render HTML OK, PDF 14.5KB com header `%PDF-1.7`.
+- **Regressao**: 31/31 backend tests passing.
+
 ### 2026-04-30 — Fase 8: Placeholders com descricao amigavel + confirmacao que Fase 7 esta live
 - **Lista de placeholders melhorada**: agora agrupada em 7 categorias (ORCAMENTO, CLIENTE, VALORES, CONDICOES, VENDEDOR, OBSERVACOES, BLOCOS) com **descricao em linguagem humana** ao lado de cada token (ex: `{{razao_social}}` — "Razao social / Nome fantasia"). Click copia o token pra clipboard + toast de confirmacao.
 - **Validacao E2E** no preview Emergent: 14/14 checks PASSED pelo testing agent. Confirmado que:
