@@ -266,6 +266,7 @@ export const channelsAPI = {
   getContactPresence: () => api.get('/channels/contact-presence'),
   getWaContacts: (connId) => api.get(`/channels/connections/${connId}/wa-contacts`),
   importWaContacts: (connId, data) => api.post(`/channels/connections/${connId}/import-contacts`, data),
+  probeLid: (instanceId, lidJid) => api.post(`/channels/instances/${instanceId}/probe-lid`, { lid_jid: lidJid }),
 };
 
 // Reports API

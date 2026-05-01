@@ -802,6 +802,31 @@ async def webhook_lid_resolved(body: LidResolvedWebhook, db: AsyncIOMotorDatabas
     return {"ok": True, **result}
 
 
+@router.post("/instances/{instance_id}/probe-lid")
+async def probe_lid_now(
+    instance_id: str,
+    body: dict,
+    user: dict = Depends(get_current_user),
+):
+    """Triggers the microservice to actively probe a specific @lid JID using
+    `onWhatsApp` + `signalRepository.lidMapping` + cached store. If WhatsApp
+    is willing to expose the real phone NOW, the microservice fires the
+    /webhook/lid-resolved (auto-merge). UI uses this for the
+    "Tentar resolver agora" button on the LID-pending banner."""
+    lid_jid = (body or {}).get("lid_jid") or ""
+    if not lid_jid:
+        raise HTTPException(400, "lid_jid obrigatorio")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(f"{WA_SERVICE_URL}/instances/{instance_id}/resolve-lid", json={"lid_jid": lid_jid})
+            try:
+                return r.json()
+            except Exception:
+                return {"resolved": False, "error": f"Microservico retornou resposta invalida (HTTP {r.status_code})"}
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Microservico indisponivel: {e}")
+
+
 @router.put("/connections/{conn_id}")
 async def update_connection(
     conn_id: str,

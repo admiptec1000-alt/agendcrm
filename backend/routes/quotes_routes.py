@@ -953,52 +953,105 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
 def _generate_pdf_bytes(html_content: str) -> bytes:
     """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms).
 
-    - base_url lets WeasyPrint resolve relative <img src="/api/upload/..."> paths
-      against the public backend URL so letterhead images work.
-    - Injects an A4 @page rule AND table-layout:fixed + word-wrap so cells
-      never overflow off the page width (common with .docx templates that
-      measured widths in tenths of points).
+    Layout strategy:
+      - Force every block element down to `max-width: 100%` so docx inline
+        widths (Word measures in twentieths of a point and frequently exceeds
+        the printable area) cannot overflow the page.
+      - `box-sizing: border-box` everywhere makes padding/border subtract
+        from the declared width instead of adding to it.
+      - `table-layout: fixed` + `word-break: normal` + `overflow-wrap: anywhere`
+        + `hyphens: auto` prevents the mid-word "Descrição d / os Serviços"
+        breaks the user reported, while still allowing super-long words
+        to wrap when they would otherwise overflow.
+      - Subtle modern palette (slate borders, brand-blue accents, generous
+        padding, soft zebra striping). Designed for an A4 commercial proposal.
     """
     base_url = os.environ.get("PUBLIC_BACKEND_URL") or os.environ.get("FASTAPI_URL") or None
     css_prefix = """
     <style>
-      @page { size: A4; margin: 14mm 12mm; }
-      body {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-        font-size: 10pt;
-        line-height: 1.45;
-        color: #111827;
+      @page {
+        size: A4;
+        margin: 16mm 14mm;
       }
-      h1 { font-size: 18pt; margin: 6pt 0; color: #0f172a; }
-      h2 { font-size: 13pt; margin: 10pt 0 4pt; color: #0f172a; }
-      h3 { font-size: 11pt; margin: 8pt 0 3pt; color: #0f172a; }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+        font-size: 9.8pt;
+        line-height: 1.5;
+        color: #0f172a;
+        background: #fff;
+      }
+      /* docx imports often hard-code widths > page width — neutralise them */
+      table, p, div, section, header, footer, ul, ol, blockquote, img {
+        max-width: 100% !important;
+      }
+      h1 {
+        font-size: 17pt;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        margin: 0 0 8pt;
+        color: #0a4a6f;
+      }
+      h2 {
+        font-size: 11.5pt;
+        font-weight: 700;
+        margin: 14pt 0 6pt;
+        color: #0a4a6f;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 6pt 8pt;
+        background: linear-gradient(90deg, #e0f2fe 0%, #f0f9ff 100%);
+        border-left: 3pt solid #0a4a6f;
+      }
+      h3 {
+        font-size: 10.5pt;
+        font-weight: 600;
+        margin: 8pt 0 3pt;
+        color: #0f172a;
+      }
       p { margin: 3pt 0; }
-      strong { color: #0f172a; }
+      strong { color: #0a4a6f; font-weight: 600; }
       table {
         width: 100%;
         border-collapse: collapse;
         table-layout: fixed;
-        word-wrap: break-word;
-        margin: 6pt 0;
+        margin: 4pt 0 8pt;
+        border: 0.5pt solid #cbd5e1;
+        border-radius: 2pt;
       }
       td, th {
-        padding: 5pt 7pt;
-        vertical-align: top;
-        word-wrap: break-word;
-        overflow-wrap: break-word;
-        border: 0.5pt solid #e2e8f0;
-      }
-      th {
-        background: #f1f5f9;
-        font-weight: 600;
+        padding: 6pt 8pt;
+        vertical-align: middle;
         text-align: left;
-        color: #1e293b;
+        word-break: normal;
+        overflow-wrap: anywhere;
+        hyphens: auto;
+        border: 0.5pt solid #e2e8f0;
         font-size: 9.5pt;
       }
-      tr:nth-child(even) td { background: #fafbfc; }
-      img { max-width: 100%; height: auto; }
-      /* Numbered columns aligned right for readability */
+      th {
+        background: #0a4a6f;
+        font-weight: 600;
+        color: #fff;
+        font-size: 9pt;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        border-color: #0a4a6f;
+        white-space: normal;
+      }
+      tbody tr:nth-child(even) td { background: #f8fafc; }
+      tbody tr td { line-height: 1.4; }
+      img {
+        max-width: 100% !important;
+        height: auto !important;
+      }
+      /* Right-aligned monetary cells when authors mark them with data-align */
       td[data-align="right"], th[data-align="right"] { text-align: right; }
+      /* Helps WeasyPrint avoid orphan rows */
+      tr { page-break-inside: avoid; }
+      h2 + table { margin-top: 6pt; }
     </style>
     """
     # Inject the CSS at the top so it cascades over any inline rules in

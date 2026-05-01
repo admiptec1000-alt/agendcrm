@@ -114,6 +114,120 @@ function lookupPhoneForLid(instanceId, lid) {
   return m[lidKey] || null;
 }
 
+// ----------------------------------------------------------------------
+// Pending LID queue + periodic background resolver.
+//
+// When a brand-new contact (privacy-on) sends the first message, NONE of
+// the synchronous resolution sources work — Baileys hasn't synced the
+// contact yet. We register the LID in `pendingLids` and a background job
+// retries every 30s, calling `sock.onWhatsApp(lidJid)` and
+// `signalRepository.lidMapping.getPNForLID(lidJid)`. The moment it
+// resolves, we fire `/api/channels/webhook/lid-resolved` which auto-
+// promotes/merges the ticket on the backend side. Removes the manual
+// "Informar telefone" friction reported by the user.
+//
+// pendingLids[instanceId] = { 'XXX@lid': { addedAt, attempts, lastAttempt } }
+// ----------------------------------------------------------------------
+const pendingLids = {};
+function queueLid(instanceId, lidJid) {
+  if (!instanceId || !lidJid || !lidJid.endsWith('@lid')) return;
+  if (!pendingLids[instanceId]) pendingLids[instanceId] = {};
+  if (pendingLids[instanceId][lidJid]) return;
+  pendingLids[instanceId][lidJid] = { addedAt: Date.now(), attempts: 0, lastAttempt: 0 };
+}
+function unqueueLid(instanceId, lidJid) {
+  if (pendingLids[instanceId]) delete pendingLids[instanceId][lidJid];
+}
+
+async function tryResolveLid(instance, instanceId, lidJid) {
+  // Run all resolution strategies in order — return real-phone digits or null.
+  const sock = instance?.sock;
+  if (!sock || instance.status !== 'connected') return null;
+
+  // 1. Cached map (operator already sent a message that mapped LID -> phone)
+  let resolved = lookupPhoneForLid(instanceId, lidJid);
+  if (resolved) return { phone: resolved, source: 'persistent_map' };
+
+  // 2. signalRepository.lidMapping.getPNForLID  (Baileys 6.7+ async API)
+  try {
+    const map = sock.signalRepository?.lidMapping;
+    if (map?.getPNForLID) {
+      const pnJid = await map.getPNForLID(lidJid);
+      if (pnJid && typeof pnJid === 'string') {
+        const digits = pnJid.replace(/@(s\.whatsapp\.net|lid|c\.us)$/, '');
+        if (digits && digits !== lidJid.replace('@lid','')) {
+          rememberLidForPhone(instanceId, lidJid, digits);
+          return { phone: digits, source: 'signal_repository' };
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 3. onWhatsApp probe — asks the WA server directly. Sometimes returns
+  //    a `jid` field with the @s.whatsapp.net address even for opaque LIDs.
+  try {
+    const result = await sock.onWhatsApp(lidJid);
+    if (Array.isArray(result)) {
+      for (const r of result) {
+        const candidateJid = r?.jid || r?.lid;
+        if (candidateJid && candidateJid.endsWith('@s.whatsapp.net')) {
+          const digits = candidateJid.replace('@s.whatsapp.net', '');
+          rememberLidForPhone(instanceId, lidJid, digits);
+          return { phone: digits, source: 'onWhatsApp_probe' };
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 4. store.contacts cross-reference
+  try {
+    const contacts = sock.contacts || sock.store?.contacts || {};
+    for (const [jid, c] of Object.entries(contacts)) {
+      if (jid.endsWith('@s.whatsapp.net') && (c?.lid === lidJid || c?.id === lidJid)) {
+        const digits = jid.replace('@s.whatsapp.net', '');
+        rememberLidForPhone(instanceId, lidJid, digits);
+        return { phone: digits, source: 'store_contacts' };
+      }
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+async function notifyBackendLidResolved(instanceId, lidJid, phone, source) {
+  try {
+    await axios.post(`${FASTAPI_URL}/api/channels/webhook/lid-resolved`, {
+      instance_id: instanceId,
+      lid_jid: lidJid,
+      phone,
+      source,
+    }, { timeout: 5000 });
+    console.log(`[${instanceId}] LID ${lidJid} -> ${phone} (via ${source}) - backend notified`);
+  } catch (e) {
+    console.warn(`[${instanceId}] notify backend lid-resolved failed: ${e.message}`);
+  }
+}
+
+// Background sweep: every 30s, retry pending LIDs on each connected instance.
+// Stop trying after 30 attempts (~15min) to avoid forever-pending entries
+// for LIDs that WhatsApp will never expose.
+setInterval(async () => {
+  for (const [instanceId, pending] of Object.entries(pendingLids)) {
+    const inst = connections[instanceId];
+    if (!inst || inst.status !== 'connected') continue;
+    for (const [lidJid, meta] of Object.entries(pending)) {
+      meta.attempts += 1;
+      meta.lastAttempt = Date.now();
+      if (meta.attempts > 30) { delete pending[lidJid]; continue; }
+      const result = await tryResolveLid(inst, instanceId, lidJid);
+      if (result?.phone) {
+        unqueueLid(instanceId, lidJid);
+        notifyBackendLidResolved(instanceId, lidJid, result.phone, `bg_retry_${result.source}`);
+      }
+    }
+  }
+}, 30000);
+
 // Ensure auth directory
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
@@ -272,50 +386,31 @@ async function createConnection(instanceId) {
       //   5) onWhatsApp lookup using stripped LID (asks server)
       //   6) strip @lid as last resort (will still create duplicate)
       let realJid = remoteJid;
-      let lidResolvedSource = null;  // for telemetry + auto-merge webhook
+      let lidResolvedSource = null;
       if (remoteJid.endsWith('@lid')) {
+        // Try Baileys' built-in fields first (these are SYNCHRONOUS / free)
         realJid = msg.key.senderPn
                || msg.key.participantPn
                || msg.key.remoteJidAlt
                || msg.key.participant
                || null;
         if (realJid) lidResolvedSource = 'baileys_key_field';
+        // Fall back to the multi-strategy resolver (cache, signal_repository,
+        // onWhatsApp probe, store contacts). Returns null if NOTHING worked.
         if (!realJid) {
-          try {
-            const map = instance.sock?.signalRepository?.lidMapping;
-            if (map?.getPNForLID) {
-              realJid = await map.getPNForLID(remoteJid);
-              if (realJid) lidResolvedSource = 'signal_repository';
-            }
-          } catch (_) {}
-        }
-        // Try store contacts (Baileys keeps a contact map populated by chat sync)
-        if (!realJid) {
-          try {
-            const store = instance.sock?.store;
-            const contacts = store?.contacts || {};
-            const lidId = remoteJid.replace('@lid', '');
-            for (const [jid, c] of Object.entries(contacts)) {
-              if (c?.lid === remoteJid || c?.lid === lidId) { realJid = jid; lidResolvedSource = 'store_contacts'; break; }
-            }
-          } catch (_) {}
-        }
-        // Last-ditch resolution: our own persisted LID->phone map populated
-        // every time the operator sent a message. Survives restarts and
-        // doesn't depend on Baileys exposing the right field. Single most
-        // reliable source for this user's setup.
-        if (!realJid) {
-          const phoneFromMap = lookupPhoneForLid(instanceId, remoteJid);
-          if (phoneFromMap) {
-            realJid = `${phoneFromMap}@s.whatsapp.net`;
-            lidResolvedSource = 'persistent_map';
-            console.log(`[${instanceId}] LID resolved via persistent map: ${remoteJid} -> ${phoneFromMap}`);
+          const r = await tryResolveLid(instance, instanceId, remoteJid);
+          if (r?.phone) {
+            realJid = `${r.phone}@s.whatsapp.net`;
+            lidResolvedSource = r.source;
           }
         }
         if (!realJid) {
-          // Detailed log so operator can inspect the payload format and
-          // post the JSON in support if the LID still does not resolve.
-          // Stripped to a single line for friendliness with Render log UI.
+          // STILL unresolved on first arrival — register the LID for the
+          // background retry loop. Many LIDs only resolve after a few
+          // exchanges (Baileys lazily syncs the contact record). We'll keep
+          // probing every 30s and notify the backend the moment WA exposes
+          // the real PN.
+          queueLid(instanceId, remoteJid);
           try {
             const dbg = {
               remoteJid,
@@ -327,9 +422,9 @@ async function createConnection(instanceId) {
               fromMe: msg.key?.fromMe,
               pushName: msg.pushName,
             };
-            console.warn(`[${instanceId}] UNRESOLVED_LID payload=${JSON.stringify(dbg)}`);
+            console.warn(`[${instanceId}] UNRESOLVED_LID payload=${JSON.stringify(dbg)} — queued for bg retry`);
           } catch (_) {
-            console.warn(`[${instanceId}] unresolved @lid: ${remoteJid}`);
+            console.warn(`[${instanceId}] unresolved @lid: ${remoteJid} — queued for bg retry`);
           }
           realJid = remoteJid;
         }
@@ -642,6 +737,32 @@ app.post('/instances/:id/send-media', async (req, res) => {
 
 
 
+// On-demand LID resolution probe. Called by the backend (typically from the
+// "Tentar resolver agora" button on the LID-pending banner) when the
+// operator wants to force one more attempt without waiting for the 30s
+// background sweep. Returns {resolved: bool, phone, source} so the UI can
+// show a useful toast.
+app.post('/instances/:id/resolve-lid', async (req, res) => {
+  const instance = connections[req.params.id];
+  if (!instance?.sock || instance.status !== 'connected') {
+    return res.status(400).json({ resolved: false, error: 'Not connected' });
+  }
+  let { lid_jid } = req.body || {};
+  if (!lid_jid) return res.status(400).json({ resolved: false, error: 'lid_jid required' });
+  if (!lid_jid.endsWith('@lid')) lid_jid = lid_jid + '@lid';
+  try {
+    const r = await tryResolveLid(instance, req.params.id, lid_jid);
+    if (r?.phone) {
+      // Notify backend so the ticket auto-merges using existing logic
+      notifyBackendLidResolved(req.params.id, lid_jid, r.phone, `manual_probe_${r.source}`);
+      return res.json({ resolved: true, phone: r.phone, source: r.source });
+    }
+    return res.json({ resolved: false, error: 'WhatsApp ainda nao expoe o numero real desse contato. Tente novamente apos uma resposta dele.' });
+  } catch (e) {
+    res.status(500).json({ resolved: false, error: e.message });
+  }
+});
+
 app.post('/instances/:id/disconnect', async (req, res) => {
   const instance = connections[req.params.id];
   if (!instance?.sock) return res.json({ status: 'already_disconnected' });
@@ -669,15 +790,15 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.3',
+    version: 'v2.1.4',
   });
 });
 
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.3',
-    built_at: '2026-04-30',
+    version: 'v2.1.4',
+    built_at: '2026-05-01',
     features: {
       sent_message_store: true,       // anti blank message fix
       multi_message_types: true,      // captions, buttons, lists
@@ -693,6 +814,9 @@ app.get('/version', (req, res) => {
       phone_shadow_fix: true,         // removed duplicate `const phone` that reverted realJid (v2.1.2)
       lid_jid_passthrough: true,      // pass original @lid JID in webhook for new-contact UX (v2.1.3)
       lid_resolved_webhook: true,     // notify backend when LID is resolved so tickets can auto-merge (v2.1.3)
+      lid_active_resolver: true,      // onWhatsApp probe + signalRepository for first-message LIDs (v2.1.4)
+      lid_background_retry: true,     // 30s sweep retries pending LIDs until WA exposes the real PN (v2.1.4)
+      lid_manual_probe_endpoint: true,// POST /instances/:id/resolve-lid for on-demand UI button (v2.1.4)
     },
     fastapi_url: FASTAPI_URL,
   });
