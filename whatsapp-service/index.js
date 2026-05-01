@@ -141,6 +141,7 @@ function unqueueLid(instanceId, lidJid) {
 
 async function tryResolveLid(instance, instanceId, lidJid) {
   // Run all resolution strategies in order — return real-phone digits or null.
+  // Order is from CHEAPEST (cache) to MOST EXPENSIVE (server roundtrips).
   const sock = instance?.sock;
   if (!sock || instance.status !== 'connected') return null;
 
@@ -179,7 +180,35 @@ async function tryResolveLid(instance, instanceId, lidJid) {
     }
   } catch (_) {}
 
-  // 4. store.contacts cross-reference
+  // 4. profilePictureUrl probe — touching the contact often forces the
+  //    WhatsApp server to push a roster sync (which populates senderPn on
+  //    the next incoming) and may leak the real JID via a redirect.
+  try {
+    await sock.profilePictureUrl(lidJid, 'image').catch(() => null);
+  } catch (_) {}
+
+  // 5. fetchStatus probe — same effect as profilePictureUrl: triggers a
+  //    contact resolution roundtrip on the server side.
+  try {
+    await sock.fetchStatus(lidJid).catch(() => null);
+  } catch (_) {}
+
+  // 6. getBusinessProfile — for business accounts the response carries
+  //    the verified phone number even when the standard JID is opaque.
+  try {
+    const profile = await sock.getBusinessProfile?.(lidJid);
+    if (profile && (profile.wid || profile.jid)) {
+      const candidate = (profile.wid || profile.jid).toString();
+      if (candidate.endsWith('@s.whatsapp.net')) {
+        const digits = candidate.replace('@s.whatsapp.net', '');
+        rememberLidForPhone(instanceId, lidJid, digits);
+        return { phone: digits, source: 'business_profile' };
+      }
+    }
+  } catch (_) {}
+
+  // 7. store.contacts cross-reference (after the probes above, the store
+  //    may have been populated with the new contact)
   try {
     const contacts = sock.contacts || sock.store?.contacts || {};
     for (const [jid, c] of Object.entries(contacts)) {
@@ -187,6 +216,22 @@ async function tryResolveLid(instance, instanceId, lidJid) {
         const digits = jid.replace('@s.whatsapp.net', '');
         rememberLidForPhone(instanceId, lidJid, digits);
         return { phone: digits, source: 'store_contacts' };
+      }
+    }
+  } catch (_) {}
+
+  // 8. Last try: signalRepository.lidMapping AGAIN after the probes —
+  //    often the cache was populated by the side effects above.
+  try {
+    const map = sock.signalRepository?.lidMapping;
+    if (map?.getPNForLID) {
+      const pnJid = await map.getPNForLID(lidJid);
+      if (pnJid && typeof pnJid === 'string') {
+        const digits = pnJid.replace(/@(s\.whatsapp\.net|lid|c\.us)$/, '');
+        if (digits && digits !== lidJid.replace('@lid','')) {
+          rememberLidForPhone(instanceId, lidJid, digits);
+          return { phone: digits, source: 'signal_repository_after_probe' };
+        }
       }
     }
   } catch (_) {}
@@ -790,14 +835,14 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.4',
+    version: 'v2.1.5',
   });
 });
 
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.4',
+    version: 'v2.1.5',
     built_at: '2026-05-01',
     features: {
       sent_message_store: true,       // anti blank message fix
@@ -808,15 +853,18 @@ app.get('/version', (req, res) => {
       notify_and_append: true,        // both upsert types
       long_ts_coercion: true,         // Long -> Number
       jid_normalization: true,        // @s.whatsapp.net vs @lid
-      crash_guard: true,              // uncaughtException handler (v2.1.1)
-      conflict_backoff: true,         // slow retry on stream:error conflict (v2.1.1)
-      lid_senderpn_resolver: true,    // resolve @lid via senderPn/participantPn/remoteJidAlt/lidMapping (v2.1.2)
-      phone_shadow_fix: true,         // removed duplicate `const phone` that reverted realJid (v2.1.2)
-      lid_jid_passthrough: true,      // pass original @lid JID in webhook for new-contact UX (v2.1.3)
-      lid_resolved_webhook: true,     // notify backend when LID is resolved so tickets can auto-merge (v2.1.3)
-      lid_active_resolver: true,      // onWhatsApp probe + signalRepository for first-message LIDs (v2.1.4)
-      lid_background_retry: true,     // 30s sweep retries pending LIDs until WA exposes the real PN (v2.1.4)
-      lid_manual_probe_endpoint: true,// POST /instances/:id/resolve-lid for on-demand UI button (v2.1.4)
+      crash_guard: true,
+      conflict_backoff: true,
+      lid_senderpn_resolver: true,
+      phone_shadow_fix: true,
+      lid_jid_passthrough: true,
+      lid_resolved_webhook: true,
+      lid_active_resolver: true,
+      lid_background_retry: true,
+      lid_manual_probe_endpoint: true,
+      lid_baileys_upgrade_6_7_21: true,        // upgraded from 6.7.16 (v2.1.5)
+      lid_extra_probes_business_status: true,  // fetchStatus + getBusinessProfile + profilePictureUrl probes (v2.1.5)
+      lid_double_signal_lookup: true,          // re-check signalRepository AFTER probes (v2.1.5)
     },
     fastapi_url: FASTAPI_URL,
   });

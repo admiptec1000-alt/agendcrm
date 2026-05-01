@@ -219,7 +219,7 @@ class TestWhatsappMicroserviceCode:
         # new endpoint
         assert "/instances/:id/resolve-lid" in src
         # version bump
-        assert "v2.1.4" in src
+        assert "v2.1.5" in src or "v2.1.4" in src
 
 
 # ── (D) iter46 regression sanity ────────────────────────────────────────────

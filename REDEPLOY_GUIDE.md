@@ -1,94 +1,70 @@
-# Guia de Redeploy — 2026-05-01 v2 (PDF Moderno + @lid Auto-Resolve)
+# Guia de Redeploy — 2026-05-01 v3 (PDF td-as-header + Baileys upgrade)
 
-Esta release fecha as **2 reclamacoes follow-up** apos a release anterior:
+## Status atual da producao (verificado agora)
 
-| Bug reportado | Sintoma | Status |
-|---------------|---------|--------|
-| PDF ainda estourava margem A4 + cabecalhos quebravam mid-word ("Descricao d / os Servicos") | layout dated, nao moderno | ✅ CSS reescrito no backend |
-| @lid em **NOVO contato** continuava gerando numero estranho | Operador nao tem como digitar manualmente porque NUNCA salvou | ✅ Resolucao proativa no microservico |
+| Item | Producao agora | Esperado | Status |
+|------|----------------|----------|--------|
+| Backend (FastAPI) | Ja deployed com endpoint probe-lid + resolve-lid | OK | ✅ Deployed |
+| Backend CSS PDF | LOOK ANTIGO ainda | DEVE estar com look novo | ⚠️ Cache ou BUG do CSS — fix v3 nesta release |
+| Microservico (Render) | **v2.1.3** | v2.1.5 (Baileys upgrade + probes extras) | ❌ NAO DEPLOYED |
 
----
+## Por que o PDF ainda parecia antigo
 
-## 1️⃣ Backend (FastAPI) — DEPLOY OBRIGATORIO
+O template `.docx` da Incinera **NAO usa `<th>` (tag de header)** — ele coloca os titulos das colunas na PRIMEIRA `<tr>` usando `<td>` com `<strong><em>`. Meu CSS antigo so estilizava `<th>`, portanto o estilo "azul-marinho moderno" nao era aplicado.
 
-**Mudancas em `quotes_routes.py` `_generate_pdf_bytes`**:
-- CSS reescrito com paleta moderna (slate + brand-blue)
-- Cabecalhos `<h2>` agora tem **gradiente claro azul + borda lateral** + texto uppercase
-- Headers de tabela `<th>` agora sao **fundo azul-marinho com texto branco** (uppercase)
-- Word-break corrigido: `word-break: normal; overflow-wrap: anywhere; hyphens: auto` — nao quebra mais no meio das palavras (ex: "Descricao dos Servicos" agora fica numa linha so OU quebra entre "Descricao" e "dos")
-- `box-sizing: border-box` + `max-width: 100% !important` em **todos** os elementos: anula widths inline do `.docx` que causavam overflow
-- Margem A4 maior: `16mm 14mm`
+**Fix nesta release (v3)**: nova regra CSS que estiliza tambem `table > tbody > tr:first-child > td` (a primeira linha de qualquer tabela) com fundo brand-blue + texto branco uppercase + bordas modernas, **mesmo quando o template nao usa `<th>`**. Validado com diag PDF.
 
-**Mudancas em `channels_routes.py`**:
-- Novo endpoint `POST /api/channels/instances/{instance_id}/probe-lid` — proxy para o microservico tentar resolver um LID sob demanda. Sempre retorna 200 (graceful), mesmo se microservico esta down.
+## Por que o @lid continua "estourando" mesmo apos minha v2.1.4
 
-### Como deployar
+A v2.1.4 NAO foi deployed ainda — o microservico ainda esta em **v2.1.3**. Mas mesmo depois de deployed, **Baileys 6.7.16 tem um bug conhecido** com LIDs de novos contatos: `senderPn` chega vazio na primeira mensagem.
+
+**Fix nesta release (v2.1.5)**:
+1. **Upgrade Baileys 6.7.16 -> 6.7.21** (5 patches a frente, todos com fixes de LID e session reliability — release notes oficiais [whiskeysockets/Baileys releases](https://github.com/WhiskeySockets/Baileys/releases))
+2. **Estrategias adicionais no `tryResolveLid`**:
+   - `sock.profilePictureUrl(lidJid)` — toca no contato e forca um roster sync no servidor
+   - `sock.fetchStatus(lidJid)` — mesma coisa, side effect resolve o roster
+   - `sock.getBusinessProfile(lidJid)` — para contas Business, retorna o JID real verificado
+   - **Re-check do signalRepository.lidMapping APOS as 3 sondas acima** — frequentemente o cache foi populado pelos side effects
+3. **Tudo isso roda automaticamente**:
+   - Na primeira mensagem com @lid
+   - No background-retry a cada 30s
+   - Quando o operador clica "Tentar agora" na UI
+
+Quando QUALQUER uma dessas estrategias resolve o numero, dispara `/api/channels/webhook/lid-resolved` e o ticket eh **auto-mesclado** no ticket real (ou promovido in-place).
+
+## ORDEM DE DEPLOY
+
+### 1. Backend (mandatorio para o PDF moderno aparecer)
 ```bash
-# Save to GitHub (preferido)
-git add backend/
-git commit -m "feat: PDF moderno + probe-lid endpoint"
+git push  # ou via "Save to Github"
+```
+Render auto-deploy. Verifique em pos-deploy:
+- Login na Incinera, gere um orcamento, baixe PDF
+- Cabecalhos das tabelas (Item / Descricao / Unid / Valor) DEVEM estar com **fundo azul escuro e texto branco uppercase**
+
+### 2. Microservico (mandatorio para o @lid auto-resolver)
+```bash
+cd whatsapp-service
 git push
 # Render auto-deploy
 ```
+Verifique:
+- `GET https://agendcrm.onrender.com/version` → `"version": "v2.1.5"`
+- Features esperadas: `lid_baileys_upgrade_6_7_21: true`, `lid_extra_probes_business_status: true`, `lid_double_signal_lookup: true`
 
-### Verificacao pos-deploy
-1. Login na Incinera, abre **Orcamentos** → gera quote com 2-3 itens + 1 frete → clique "Imprimir / Salvar PDF"
-2. PDF deve sair em A4 com:
-   - Cabecalhos azul-marinho com texto branco
-   - Tabelas DENTRO da margem direita (>=14mm de respiro)
-   - Palavras NAO quebradas mid-character
-   - Sem placeholders `{{...}}` vazando
+### ⚠️ ATENCAO — Risco do upgrade Baileys
 
----
+Upgrade 6.7.16 → 6.7.21 eh **patch level** (mesma major+minor). API externa identica, sem breaking changes. **NAO** quebra conexoes existentes — o disco persistente (`AUTH_DIR`) sera lido normalmente.
 
-## 2️⃣ Microservico Node.js Baileys — **DEPLOY MANDATORIO** (resolve o @lid automatico)
-
-Sem este deploy, o sintoma do @lid continua. O backend ja tem o fallback manual ("Informar telefone"), mas o **AUTO-RESOLVE** so funciona com este redeploy.
-
-### Mudancas (`whatsapp-service/index.js` v2.1.4)
-1. **`tryResolveLid()` central**: 4 estrategias em cascata (cache persistente, `signalRepository.lidMapping.getPNForLID`, `sock.onWhatsApp` probe, `store.contacts`).
-2. **Background sweep a cada 30s**: para cada LID em fila pendente, retenta resolucao. Para apos 30 tentativas (~15min) ou na 1a vez que resolver. Quando resolver, dispara webhook para o backend → ticket auto-promovido/mesclado.
-3. **Endpoint `POST /instances/:id/resolve-lid`**: probe sob demanda (UI tem botao "Tentar agora").
-
-### Como deployar
-```bash
-git add whatsapp-service/
-git commit -m "feat: lid auto-resolve com bg retry e probe endpoint v2.1.4"
-git push
-# Render auto-deploy do servico whatsapp-service
-```
-
-### Verificacao
-- `GET https://seumicroservico.onrender.com/version` deve retornar `"version": "v2.1.4"` com `lid_active_resolver: true`, `lid_background_retry: true`, `lid_manual_probe_endpoint: true`
-- Logs durante uso: `[ID] LID 23173... -> 5562999... (via bg_retry_signal_repository) - backend notified`
+Se ainda assim o @lid persistir apos v2.1.5 com 3 contatos novos diferentes, **a unica solucao restante eh upgrade pra Baileys 7.0.0-rc.9** que tem "Full LID Support" oficial. Eh release candidate, com breaking changes — exige autorizacao explicita.
 
 ---
 
-## 3️⃣ Como funciona agora (UX final)
+## Como funciona o fluxo completo apos v3 deployed
 
-Quando um contato novo (privacidade ativada) manda 1a mensagem:
-
-1. ⏱️ **Imediato**: ticket criado com banner amarelo "Numero do contato oculto pelo WhatsApp" + tag "Numero Oculto"
-2. 🔄 **Em segundo plano**: a cada 30s o microservico tenta resolver o LID. **Quando o WhatsApp finalmente expoe o numero real** (geralmente apos voce mandar 1 mensagem ou apos algumas trocas), o backend recebe webhook e:
-   - Se ja existe outro ticket com o numero real → MERGE automatico das mensagens, ticket LID deletado
-   - Se nao existe → PROMOTE in-place: customer_phone trocado pra real, tag/flag limpas
-3. 🆘 **Fallback manual no banner**: 2 botoes
-   - **"Tentar agora"** — forca o probe imediatamente (chama o microservico)
-   - **"Informar telefone"** — operador digita o numero (recurso ultimo se o WA nunca expor)
-
-### Limpeza de tickets duplicados antigos
-1. Abre o ticket DUPLICADO (com numero estranho)
-2. **Mais (3 pontinhos)** → **Mesclar com outro atendimento**
-3. Escolhe o ticket REAL → confirma
-
----
-
-## Resumo de versoes
-
-| Componente | Versao | Mudou? |
-|------------|--------|--------|
-| Backend FastAPI | (sem versao explicita) | SIM — _generate_pdf_bytes + probe-lid endpoint |
-| Microservico Baileys | **v2.1.4** | SIM — auto-resolve do @lid |
-| Frontend React | hot-reload | SIM — banner com 2 botoes |
-
-**Apos os 2 deploys**, o usuario nao precisa fazer NADA na app dele — tudo eh automatico.
+1. Contato novo manda primeira mensagem → microservico tenta 8 estrategias de resolucao em sequencia
+2. Se resolver → ticket criado direto com phone real
+3. Se NAO resolver → ticket criado com banner amarelo + tag "Numero Oculto"
+4. Background-retry ativa a cada 30s ate 15min, repetindo as 8 estrategias
+5. UI tem 2 botoes: "Tentar agora" (probe imediato) + "Informar telefone" (manual)
+6. Quando QUALQUER estrategia resolve → backend faz auto-merge ou promote do ticket

@@ -1016,13 +1016,15 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
       table {
         width: 100%;
         border-collapse: collapse;
-        table-layout: fixed;
+        /* `auto` lets columns size to their content (so "Item" stays narrow,
+           "Descricao" gets the lion's share). The `max-width` rule above
+           keeps the WHOLE table inside the printable area. */
+        table-layout: auto;
         margin: 4pt 0 8pt;
         border: 0.5pt solid #cbd5e1;
-        border-radius: 2pt;
       }
       td, th {
-        padding: 6pt 8pt;
+        padding: 7pt 9pt;
         vertical-align: middle;
         text-align: left;
         word-break: normal;
@@ -1041,7 +1043,32 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
         border-color: #0a4a6f;
         white-space: normal;
       }
-      tbody tr:nth-child(even) td { background: #f8fafc; }
+      /* The .docx files exported by Word/Quill don't emit <th> — instead
+         they put the header row as the first <tr> with bold text in <td>.
+         Style the FIRST row of every <tbody> (or table without thead) the
+         same way <th> would render: dark brand header with white text. */
+      table > tbody > tr:first-child > td,
+      table > tr:first-child > td {
+        background: #0a4a6f !important;
+        color: #fff !important;
+        font-weight: 700 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        font-size: 9pt;
+        border-color: #0a4a6f !important;
+      }
+      /* Text colors INSIDE the styled header cells must also be white,
+         since docx wraps headings in <strong><em> with default dark color. */
+      table > tbody > tr:first-child > td *,
+      table > tr:first-child > td * {
+        color: #fff !important;
+      }
+      /* Inline `text-align: justify` from Quill (`ql-align-justify`) makes
+         data rows look ragged; force-left for table cells. Override only
+         if the operator did not explicitly center/right-align via class. */
+      td.ql-align-justify { text-align: left; }
+      th.ql-align-justify { text-align: left; }
+      tbody tr:nth-child(even):not(:first-child) td { background: #f8fafc; }
       tbody tr td { line-height: 1.4; }
       img {
         max-width: 100% !important;
