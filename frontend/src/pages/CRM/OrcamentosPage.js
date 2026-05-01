@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { quotesAPI, schedulingAPI, channelsAPI } from '../../services/api';
 import api from '../../services/api';
 import { toast } from 'sonner';
-import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy, Upload, Send, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy, Upload, Send, Loader2, RefreshCw } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 
@@ -321,6 +321,17 @@ const TemplatesTab = () => {
     await load();
   };
 
+  const handleReconvert = async (t) => {
+    if (!window.confirm(`Reconverter placeholders do template "${t.name}"?\n\nIsto transforma tokens numerados (ITEM_1, QTDE_1...) em loops {{#items}} e corrige placeholders quebrados pelo Word. Util para templates antigos.`)) return;
+    try {
+      const { data } = await quotesAPI.reconvertTemplate(t.id);
+      toast.success(data.had_loops ? 'Template reconvertido com loops (items/freights)' : 'Template reconvertido (sem loops detectados)');
+      await load();
+    } catch (e) {
+      toast.error('Erro: ' + (e?.response?.data?.detail || e.message));
+    }
+  };
+
   const handleDelete = async (id) => {
     if (!window.confirm('Excluir este template?')) return;
     await quotesAPI.deleteTemplate(id);
@@ -389,6 +400,7 @@ const TemplatesTab = () => {
                 {t.is_default && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">Padrao</span>}
               </div>
               <div className="flex gap-1">
+                <button onClick={() => handleReconvert(t)} className="p-1 text-slate-500 hover:text-amber-600" title="Reconverter placeholders (templates antigos)" data-testid={`reconvert-template-${t.id}`}><RefreshCw className="w-4 h-4" /></button>
                 <button onClick={() => handleDuplicate(t)} className="p-1 text-slate-500 hover:text-blue-600" title="Duplicar"><Copy className="w-4 h-4" /></button>
                 <button onClick={() => setEditing(t)} className="p-1 text-slate-500 hover:text-emerald-600" data-testid={`edit-template-${t.id}`}><Edit2 className="w-4 h-4" /></button>
                 <button onClick={() => handleDelete(t.id)} className="p-1 text-slate-500 hover:text-red-600" data-testid={`delete-template-${t.id}`}><Trash2 className="w-4 h-4" /></button>

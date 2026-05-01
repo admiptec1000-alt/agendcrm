@@ -320,6 +320,7 @@ export const quotesAPI = {
   updateTemplate: (id, data) => api.put(`/quotes/templates/${id}`, data),
   deleteTemplate: (id) => api.delete(`/quotes/templates/${id}`),
   uploadTemplateDocx: (formData) => api.post('/quotes/templates/upload-docx', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  reconvertTemplate: (id) => api.post(`/quotes/templates/${id}/reconvert-placeholders`),
   // Quotes
   list: (params) => api.get('/quotes', { params }),
   get: (id) => api.get(`/quotes/${id}`),

@@ -11,6 +11,22 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-04-30 — Fase 10: Fix PDF desfigurado — CSS A4 + Reconvert templates antigos
+**Analise do orcamento-1016.3.pdf do user**:
+- Placeholders `{{description}}`, `{{quantity}}`, `{{unit}}`, `{{total}}`, `{{km_total}}`, `{{price_per_km}}` aparecendo VERBATIM no PDF → template antigo foi convertido ANTES do `_fold_rows` ser deployed → nao tem wrapper `{{#items}}/{{/items}}` → `_render_template` nao expandiu.
+- Tabelas espremidas, texto truncado mid-word ("ativid", "mer") → falta de `@page size: A4` + `table-layout: fixed` no HTML.
+
+**Fixes**:
+- **`_generate_pdf_bytes` agora injeta CSS prefixo automatico**: `@page { size: A4; margin: 15mm 12mm }`, `table { width:100%; table-layout: fixed; word-wrap: break-word }`, `img { max-width: 100%; height: auto }`, `td/th { padding, vertical-align, overflow-wrap: break-word }`. Todo PDF sai A4 com layout consistente.
+- **Novo endpoint `POST /api/quotes/templates/{tid}/reconvert-placeholders`**: aplica `_normalize_docx_placeholders` sobre o HTML armazenado, consertando templates antigos sem precisar re-upload do .docx. Retorna `{updated, had_loops}`.
+- **Botao UI "Reconverter placeholders"** (icone RefreshCw) em cada card de template na aba Templates. Dica aparece ao hover. Toast confirma se loops foram detectados.
+- **Regressao**: 31/31 tests passing.
+
+**Acao do user**:
+1. Fazer Save to GitHub + redeploy do BACKEND (traz o CSS A4 + endpoint reconvert).
+2. Na producao, Orcamentos → Templates → icone **"Reconverter"** (circulo com flecha) no template "Incinera Padrao" → confirma.
+3. Gerar novo orcamento → PDF agora sai em A4 com items expandidos corretamente.
+
 ### 2026-04-30 — Fase 9: Conversao .docx super robusta (imagens + loops automaticos)
 - **Imagens embedded**: upload .docx agora converte imagens (logos/cabecalho/rodape) em data URIs base64 inline no HTML via `mammoth.images.img_element`. Templates viram self-contained — WeasyPrint renderiza sem fetch externo.
 - **Auto-fold de linhas numeradas → loops**: detecta tokens numerados (`ITEM_1/ITEM_2/...`, `QTDE_1/QTDE_2/...`, `VALOR_UNI_1/VALOR_UNI_2/...`) e converte automaticamente a PRIMEIRA `<tr>` do docx em `{{#items}}...{{/items}}`, removendo as demais linhas que eram duplicatas. Mesma logica para fretes.

@@ -445,6 +445,31 @@ async def update_quote_template(tid: str, data: QuoteTemplateUpdate, user=Depend
     return await db.quote_templates.find_one({"id": tid}, {"_id": 0})
 
 
+@router.post("/templates/{tid}/reconvert-placeholders")
+async def reconvert_template_placeholders(
+    tid: str,
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Re-runs the placeholder normalizer over an existing template.
+
+    Used when an operator uploaded a .docx BEFORE the loop-folding logic was
+    deployed — the stored HTML has {{description}}/{{quantity}} inside a
+    <tr> but without a wrapping {{#items}}...{{/items}}, so _render_template
+    cannot iterate and the raw tokens leak into the PDF. Running this
+    endpoint repairs the template in place without re-uploading the .docx.
+    """
+    tpl = await db.quote_templates.find_one({"id": tid, "company_id": user["company_id"]}, {"_id": 0})
+    if not tpl:
+        raise HTTPException(404, "Template nao encontrado")
+    new_html = _normalize_docx_placeholders(tpl.get("content") or "")
+    await db.quote_templates.update_one(
+        {"id": tid, "company_id": user["company_id"]},
+        {"$set": {"content": new_html, "last_normalized_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"updated": True, "had_loops": "{{#items}}" in new_html or "{{#freights}}" in new_html}
+
+
 @router.delete("/templates/{tid}")
 async def delete_quote_template(tid: str, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
     r = await db.quote_templates.delete_one({"id": tid, "company_id": user["company_id"]})
@@ -846,12 +871,27 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
 def _generate_pdf_bytes(html_content: str) -> bytes:
     """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms).
 
-    base_url lets WeasyPrint resolve relative <img src="/api/upload/..."> paths
-    against the public backend URL so company letterhead images uploaded via
-    the template editor appear in the PDF.
+    - base_url lets WeasyPrint resolve relative <img src="/api/upload/..."> paths
+      against the public backend URL so letterhead images work.
+    - Injects an A4 @page rule AND table-layout:fixed + word-wrap so cells
+      never overflow off the page width (common with .docx templates that
+      measured widths in tenths of points).
     """
     base_url = os.environ.get("PUBLIC_BACKEND_URL") or os.environ.get("FASTAPI_URL") or None
-    return HTML(string=html_content, base_url=base_url).write_pdf()
+    css_prefix = """
+    <style>
+      @page { size: A4; margin: 15mm 12mm; }
+      body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 10pt; color: #111; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; word-wrap: break-word; }
+      td, th { padding: 4px 6px; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
+      img { max-width: 100%; height: auto; }
+      p { margin: 4px 0; }
+    </style>
+    """
+    # Inject the CSS at the top so it cascades over any inline rules in
+    # mammoth-converted HTML (which sometimes has hard-coded widths).
+    html_with_css = css_prefix + (html_content or "")
+    return HTML(string=html_with_css, base_url=base_url).write_pdf()
 
 
 @router.get("/{qid}/pdf")
