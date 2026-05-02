@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { quotesAPI, schedulingAPI, channelsAPI } from '../../services/api';
 import api from '../../services/api';
@@ -339,8 +339,25 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
     footer: 'footer_html',
   };
   const heights = { content: 320, header: 140, footer: 140 };
-  const minHeight = `${heights[tab]}px`;
-  const value = editing?.[fields[tab]] || '';
+
+  // IMPORTANT: render the 3 Quill instances in parallel and toggle visibility
+  // via CSS. Swapping a single Quill's `value` prop on tab switch causes
+  // `text-change` events to fire with stale closures, leaking content between
+  // tabs (e.g. the main body getting saved into header_html).
+  const quillModules = useMemo(() => ({
+    toolbar: {
+      container: [
+        [{ header: [1, 2, 3, false] }],
+        ['bold', 'italic', 'underline', 'strike'],
+        [{ color: [] }, { background: [] }],
+        [{ list: 'ordered' }, { list: 'bullet' }],
+        [{ align: [] }],
+        ['link', 'image'],
+        ['clean'],
+      ],
+      handlers: { image: buildQuillImageHandler() },
+    },
+  }), []);
 
   return (
     <div data-testid="template-multi-tab-editor">
@@ -363,28 +380,27 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
           );
         })}
       </div>
-      <div className="border rounded bg-white" data-testid={`template-${tab}-quill`}>
-        <ReactQuill
-          theme="snow"
-          value={value}
-          onChange={(html) => setEditing({ ...editing, [fields[tab]]: html })}
-          modules={{
-            toolbar: {
-              container: [
-                [{ header: [1, 2, 3, false] }],
-                ['bold', 'italic', 'underline', 'strike'],
-                [{ color: [] }, { background: [] }],
-                [{ list: 'ordered' }, { list: 'bullet' }],
-                [{ align: [] }],
-                ['link', 'image'],
-                ['clean'],
-              ],
-              handlers: { image: buildQuillImageHandler() },
-            },
-          }}
-          style={{ minHeight }}
-        />
-      </div>
+      {TEMPLATE_TABS.map(t => {
+        const field = fields[t.key];
+        const isActive = tab === t.key;
+        return (
+          <div
+            key={t.key}
+            // Keep DOM mounted so Quill state persists; just hide inactive tabs.
+            style={{ display: isActive ? 'block' : 'none' }}
+            className="border rounded bg-white"
+            data-testid={`template-${t.key}-quill`}
+          >
+            <ReactQuill
+              theme="snow"
+              value={editing?.[field] || ''}
+              onChange={(html) => setEditing(prev => ({ ...prev, [field]: html }))}
+              modules={quillModules}
+              style={{ minHeight: `${heights[t.key]}px` }}
+            />
+          </div>
+        );
+      })}
       <p className="text-xs text-slate-500 mt-1">
         {tab === 'content' && (<>Placeholders disponiveis abaixo. Loop de itens: <code className="bg-slate-100 px-1">{'{{#items}}...{{/items}}'}</code>.</>)}
         {tab === 'header' && 'Aparece no TOPO de TODAS as paginas do PDF. Placeholders funcionam aqui tambem.'}

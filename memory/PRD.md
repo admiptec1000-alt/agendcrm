@@ -11,6 +11,12 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-02 — Fix: Editor de template (conteúdo sumia ao trocar de aba)
+- **Bug**: ao alternar entre abas Conteúdo / Cabeçalho / Rodapé do editor de templates, o conteúdo digitado em uma aba sumia ou vazava para outra.
+- **Causa raiz**: um único `ReactQuill` com `value` controlado — ao mudar de aba, o `setContents` interno disparava `text-change` com a closure nova, gravando o HTML da aba anterior no campo da nova aba.
+- **Fix**: renderizar **3 instâncias** de `ReactQuill` em paralelo (uma por aba) e alternar via `display:none`. Cada editor mantém seu próprio value + onChange, sem cross-contamination. Arquivo: `/app/frontend/src/pages/CRM/OrcamentosPage.js` → `TemplateMultiTabEditor`.
+- Validado via browser: os 3 campos persistem independentemente em round-trip entre abas.
+
 ### 2026-05-02 — Importação XLSX de Contatos (Incinera)
 - Novo endpoint `POST /api/crm/clients/import-xlsx` (admin/owner-only) — multipart `file`
 - Auto-matching de cada item de `tags e Kambam` contra Tags da empresa OU Colunas do Kanban (case/whitespace-insensitive). Não-matched vira tag livre + relatório.
