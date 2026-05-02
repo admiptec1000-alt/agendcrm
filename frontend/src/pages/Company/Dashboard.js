@@ -3287,10 +3287,64 @@ const EditableConnectionName = ({ conn, onSaved }) => {
 };
 
 
+// === Modal: configura o Flowbuilder atrelado a uma conexao WhatsApp ===
+// O fluxo selecionado eh disparado automaticamente na PRIMEIRA mensagem
+// que um cliente novo enviar para essa conexao (Feature 3). Empty = sem fluxo.
+const ConnectionFlowModal = ({ conn, onClose, onSaved }) => {
+  const [flowId, setFlowId] = useState(conn?.default_flow_id || '');
+  const [flows, setFlows] = useState([]);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    crmAPI.getFlows().then(r => setFlows(r.data || [])).catch(() => setFlows([]));
+  }, []);
+  const save = async () => {
+    setSaving(true);
+    try {
+      await channelsAPI.updateConnection(conn.id, { default_flow_id: flowId || '' });
+      toast.success('Fluxo configurado!');
+      onSaved && onSaved();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao salvar');
+    } finally { setSaving(false); }
+  };
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold font-heading flex items-center gap-2">
+            <GitBranch className="w-5 h-5 text-blue-500" /> Fluxo automatico
+          </h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+        <p className="text-xs text-slate-500 mb-3">
+          Quando um cliente novo entrar em contato pela conexao <strong>{conn.name}</strong>, o fluxo selecionado sera disparado automaticamente.
+        </p>
+        <label className="text-sm font-medium text-slate-700 mb-1 block">Selecionar fluxo</label>
+        <select
+          value={flowId}
+          onChange={e => setFlowId(e.target.value)}
+          className="input-field"
+          data-testid="conn-default-flow-select"
+        >
+          <option value="">— Sem fluxo automatico —</option>
+          {(flows || []).map(f => (<option key={f.id} value={f.id}>{f.name}</option>))}
+        </select>
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
+          <button onClick={save} disabled={saving} className="btn-primary text-sm disabled:opacity-50" data-testid="save-conn-flow-btn">
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) => {
   const [qrData, setQrData] = useState(null);
   const [polling, setPolling] = useState(false);
   const [pollingAttempts, setPollingAttempts] = useState(0);
+  const [showFlowEdit, setShowFlowEdit] = useState(false);
 
   useEffect(() => {
     if (conn.status === 'waiting_qr' || conn.status === 'connecting') {
@@ -3416,9 +3470,24 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
               Sincronizar
             </button>
           )}
+          <button
+            onClick={() => setShowFlowEdit(true)}
+            data-testid={`edit-conn-${conn.id}`}
+            className="p-2 rounded-lg hover:bg-blue-50 text-blue-500"
+            title="Configurar fluxo automatico (Flowbuilder)"
+          >
+            <GitBranch className="w-4 h-4" />
+          </button>
           <button onClick={() => onRemove(conn.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-400"><Trash2 className="w-4 h-4" /></button>
         </div>
       </div>
+      {showFlowEdit && (
+        <ConnectionFlowModal
+          conn={conn}
+          onClose={() => setShowFlowEdit(false)}
+          onSaved={() => { setShowFlowEdit(false); onRefresh(); }}
+        />
+      )}
       {(conn.status === 'waiting_qr' || conn.status === 'connecting') && (
         <div className="mt-4 p-4 bg-slate-50 rounded-xl text-center">
           {qrData ? (

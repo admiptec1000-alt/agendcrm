@@ -11,6 +11,36 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-02 — 5 Features em sequência (1 → 5)
+**F1: Cabeçalho/Rodapé multi-página no editor**
+- `quote_templates` agora persistem `header_html` + `footer_html`
+- `_generate_pdf_bytes` injeta como CSS running elements (`@page { @top-center; @bottom-center }`) — repete em todas as páginas
+- Editor com 3 sub-abas (Conteúdo / Cabeçalho / Rodapé), cada uma com Quill + image upload
+
+**F2: Preview = PDF (visualização idêntica)**
+- Novo helper Python `_QUOTE_STYLESHEET` (single source of truth visual)
+- Nova função `_build_browser_preview_html` injeta o stylesheet num wrapper A4 mockado
+- Novo endpoint `GET /api/quotes/{qid}/preview-pdf-html`
+- `OrcamentosPage.PreviewModal` e `QuoteAttachModal` agora usam iframe sandbox em vez de `dangerouslySetInnerHTML` — preview = PDF byte-for-byte
+
+**F3: Conexão WhatsApp → Flow automático**
+- `default_flow_id` em `/channels/connections` e `/whatsapp/connections` (empty string clears)
+- Webhook trigger: `_trigger_flow_for_ticket()` envia o primeiro nó `message` como outgoing quando ticket NOVO numa conexão com flow
+- UI: botão `GitBranch` (`edit-conn-{id}`) abre modal `ConnectionFlowModal` com select dos fluxos
+- Renomear flow: novo botão `Edit2` em FlowBuilderPage + função `renameFlow()`
+
+**F4: Reordenar Kanban (modo disfarçado)**
+- `POST /api/crm/kanban-columns/reorder` aceita `{column_ids: List[str]}`
+- UI: long-press 3s no título OU `Shift+R` ativa modo reordenação; badge "ORDENANDO"; column headers viram draggable
+
+**F5: Restrição de visibilidade (claim/release)**
+- `_user_can_view_all_tickets()` + `_ticket_visibility_filter()` aplicam Mongo `$or`: assigned_to=self OR (null AND status=aberto)
+- Aplicado em `/tickets`, `/tickets/counts`, `/kanban`, `/kanban-v2`
+- Endpoints: `POST /tickets/{id}/claim` (409 se já reivindicado), `POST /tickets/{id}/release`
+- UI: botão verde "+ Puxar" (`claim-ticket-{id}`) em tickets unassigned
+
+**Validação iter48**: 10/10 backend + UI confirmada (claim-ticket count=82, rename-flow count=12, kanban-col-header count=9, edit-conn modal com select de flow funcionando)
+
 ### 2026-05-01 v2 — PDF Moderno + @lid AUTO-RESOLVE (resolve as 2 follow-ups do user)
 **Reclamacao do user**: PDF orcamento-1025.pdf ainda estourava a margem direita do A4 e cabecalhos quebravam mid-word ("Descricao d / os Servicos", "Valor km rodad / 0.", "Qtde. Estim / ada"); @lid em **NOVO contato** continuava chegando como numero estranho — operador NAO TEM como digitar manualmente porque nem tem o numero salvo.
 
