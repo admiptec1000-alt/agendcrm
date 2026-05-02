@@ -1067,6 +1067,17 @@ def _build_browser_preview_html(body_html: str, header_html: Optional[str] = Non
         + "             margin: 0 auto 16px; padding: 18mm 16mm;\n"
         + "             background: #fff; box-shadow: 0 2px 12px rgba(15,23,42,0.08);\n"
         + "             border-radius: 4px; }\n"
+        # Match the constraints applied to the actual PDF chrome so the
+        # iframe preview is visually the same as the downloaded PDF.
+        + "#__quote_header, #__quote_footer { width: 100%; box-sizing: border-box;\n"
+        + "  text-align: center; line-height: 1.15; font-size: 9pt; }\n"
+        + "#__quote_header { max-height: 22mm; overflow: hidden; }\n"
+        + "#__quote_footer { max-height: 18mm; overflow: hidden; }\n"
+        + "#__quote_header img, #__quote_footer img { max-width: 100%; width: 100%;\n"
+        + "  height: auto; display: block; margin: 0 auto; object-fit: contain; }\n"
+        + "#__quote_header img { max-height: 22mm; }\n"
+        + "#__quote_footer img { max-height: 18mm; }\n"
+        + "#__quote_header p, #__quote_footer p { margin: 0; }\n"
         + "</style></head><body>"
         + '<div class="__a4_page">'
         + chrome_top
@@ -1121,11 +1132,30 @@ def _generate_pdf_bytes(html_content: str, header_html: Optional[str] = None, fo
     # templates can include "Página X de Y" if the operator wants.
     page_chrome_css = ""
     if has_header:
-        page_chrome_css += "\n@page { @top-center { content: element(quote_header); } }\n"
-        page_chrome_css += "#__quote_header { position: running(quote_header); }\n"
+        page_chrome_css += "\n@page { @top-center { content: element(quote_header); width: 100%; } }\n"
+        page_chrome_css += "#__quote_header { position: running(quote_header); width: 100%; }\n"
     if has_footer:
-        page_chrome_css += "\n@page { @bottom-center { content: element(quote_footer); } }\n"
-        page_chrome_css += "#__quote_footer { position: running(quote_footer); }\n"
+        page_chrome_css += "\n@page { @bottom-center { content: element(quote_footer); width: 100%; } }\n"
+        page_chrome_css += "#__quote_footer { position: running(quote_footer); width: 100%; }\n"
+
+    # Constrain header/footer dimensions so user-provided images don't blow
+    # past the @page margin (which would crash into the body content and
+    # shrink the printable area to "half the page" — exact bug reported by
+    # Incinera 02/05/2026). Force images to fill the full text-width and
+    # cap the chrome height to the reserved margin.
+    chrome_constraints_css = (
+        "#__quote_header, #__quote_footer { width: 100%; box-sizing: border-box; "
+        "text-align: center; line-height: 1.15; font-size: 9pt; }\n"
+        "#__quote_header { max-height: 22mm; overflow: hidden; }\n"
+        "#__quote_footer { max-height: 18mm; overflow: hidden; }\n"
+        "#__quote_header img, #__quote_footer img { "
+        "  max-width: 100%; width: 100%; height: auto; display: block; margin: 0 auto; "
+        "  object-fit: contain; "
+        "}\n"
+        "#__quote_header img { max-height: 22mm; }\n"
+        "#__quote_footer img { max-height: 18mm; }\n"
+        "#__quote_header p, #__quote_footer p { margin: 0; }\n"
+    )
 
     # Increase top/bottom margin when chrome is present so the body content
     # doesn't collide with the header/footer area.
@@ -1139,6 +1169,7 @@ def _generate_pdf_bytes(html_content: str, header_html: Optional[str] = None, fo
         f"  margin: {top_margin} 16mm {bottom_margin} 16mm;\n"
         "}\n"
         + page_chrome_css
+        + chrome_constraints_css
         + _QUOTE_STYLESHEET
         + "</style>\n"
     )

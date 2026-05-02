@@ -11,6 +11,14 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-02 — Fix: Cabeçalho/rodapé com imagem espremiam o conteúdo do PDF
+- **Bug**: ao colar uma imagem grande (banner) no Cabeçalho e Rodapé do template de orçamento, o PDF reservava uma faixa enorme para a imagem (que ultrapassava a margem `@page`), comprimindo o conteúdo do orçamento para metade da página. Além disso, a imagem podia renderizar com largura parcial (centro ~50%).
+- **Fix** (`backend/routes/quotes_routes.py` em `_generate_pdf_bytes` e `_build_browser_preview_html`):
+  - Adicionada CSS de constraint para `#__quote_header` (max-height 22mm) e `#__quote_footer` (max-height 18mm) com `overflow:hidden`.
+  - Imagens dentro do header/footer agora forçadas a `width:100%; max-width:100%; max-height:22mm/18mm; height:auto; object-fit:contain` — preenchem toda a largura útil mas não ultrapassam a faixa reservada.
+  - Mesmas constraints aplicadas no preview HTML (iframe) para que browser e PDF fiquem visualmente idênticos.
+- **Validado**: PDF de teste com banner pesado (`AgentCRM.png`) → 162 KB, conteúdo fluindo com 200+ linhas, banner em cada página com largura total.
+
 ### 2026-05-02 — Fix: Editor de template (conteúdo sumia ao trocar de aba)
 - **Bug**: ao alternar entre abas Conteúdo / Cabeçalho / Rodapé do editor de templates, o conteúdo digitado em uma aba sumia ou vazava para outra.
 - **Causa raiz**: um único `ReactQuill` com `value` controlado — ao mudar de aba, o `setContents` interno disparava `text-change` com a closure nova, gravando o HTML da aba anterior no campo da nova aba.
