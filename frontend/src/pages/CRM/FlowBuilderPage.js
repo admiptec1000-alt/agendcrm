@@ -8,7 +8,7 @@ import 'reactflow/dist/style.css';
 import { crmAPI, aiAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
-  Save, Plus, Trash2, X, MessageSquare, MenuSquare,
+  Save, Plus, Trash2, X, MessageSquare, MenuSquare, Edit2,
   Shuffle, Clock, Ticket as TicketIcon, Tag, Bot, Globe, Zap,
   ChevronLeft
 } from 'lucide-react';
@@ -191,6 +191,18 @@ const FlowBuilderPage = () => {
     catch (e) { toast.error('Erro'); }
   };
 
+  const renameFlow = async (f) => {
+    const newName = window.prompt('Novo nome do fluxo:', f.name || '');
+    if (!newName || !newName.trim() || newName.trim() === f.name) return;
+    try {
+      await crmAPI.updateFlow(f.id, { name: newName.trim() });
+      toast.success('Nome atualizado');
+      reload();
+    } catch (e) {
+      toast.error('Erro ao renomear');
+    }
+  };
+
   const saveFlow = async () => {
     if (!currentFlow) return;
     try {
@@ -248,6 +260,14 @@ const FlowBuilderPage = () => {
                   <p className="text-sm font-bold text-slate-900 truncate">{f.name}</p>
                   <p className="text-[11px] text-slate-500">{f.nodes?.length || 0} nos · {f.edges?.length || 0} conexoes</p>
                 </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); renameFlow(f); }}
+                  className="p-1 rounded text-slate-400 hover:text-blue-500"
+                  data-testid={`rename-flow-${f.id}`}
+                  title="Renomear fluxo"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
                 <button onClick={(e) => { e.stopPropagation(); deleteFlow(f); }} className="p-1 rounded text-slate-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
               </div>
             </div>

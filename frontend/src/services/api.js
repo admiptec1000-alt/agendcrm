@@ -105,6 +105,9 @@ export const crmAPI = {
   updateKanbanColumn: (id, data) => api.put(`/crm/kanban-columns/${id}`, data),
   deleteKanbanColumn: (id) => api.delete(`/crm/kanban-columns/${id}`),
   moveTicketColumn: (ticketId, columnId) => api.put(`/crm/tickets/${ticketId}/kanban-column`, { column_id: columnId }),
+  reorderKanbanColumns: (columnIds) => api.post('/crm/kanban-columns/reorder', { column_ids: columnIds }),
+  claimTicket: (ticketId) => api.post(`/crm/tickets/${ticketId}/claim`),
+  releaseTicket: (ticketId) => api.post(`/crm/tickets/${ticketId}/release`),
   // AI chat (legacy)
   aiChat: (data) => api.post('/crm/ai/chat', data),
   // Quick Responses + Campaigns
@@ -330,6 +333,7 @@ export const quotesAPI = {
   update: (id, data) => api.put(`/quotes/${id}`, data),
   delete: (id) => api.delete(`/quotes/${id}`),
   render: (id) => api.get(`/quotes/${id}/render`),
+  previewPdfHtml: (id) => api.get(`/quotes/${id}/preview-pdf-html`),
   pdfUrl: (id) => `${API_URL}/quotes/${id}/pdf`,
   sendWhatsApp: (id, data) => api.post(`/quotes/${id}/send-whatsapp`, data),
 };

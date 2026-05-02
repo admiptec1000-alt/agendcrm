@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 48 — Tested all 5 features (F1..F5). Backend: 10/10 tests passing in test_iteration_48.py — F1 template header_html/footer_html persist + appear in PDF; F2 GET /quotes/{qid}/preview-pdf-html returns __a4_page wrapper, header/footer + items rendered (no raw {{description}} leaks); F3 channel connection default_flow_id create+set/clear+webhook auto-trigger flow welcome message persisted with auto_flow_id and active_flow_id, plus PUT /api/crm/flows/{id} renaming; F4 POST /api/crm/kanban-columns/reorder persists order, GET kanban-v2 returns custom cols in new order with native pinned left, empty list → 400; F5 visibility filter + claim/release/409 multi-user flow. Frontend smoke (UI testids): claim-ticket-* count=82 visible on Atendimentos, rename-flow-* count=12 on Flowbuilder, kanban-col-header-* count=9 + reorder-mode-badge ('ORDENANDO') visible after Shift+R hotkey on Kanban. F3 frontend gap: edit-conn-* count=0 on Conexoes page → the sidebar 'Conexoes' link routes to inline ConexoesPage in /pages/Company/Dashboard.js, NOT to WhatsAppConnectionsPage.js where the GitBranch button + conn-default-flow-select dropdown live. The flow-attach modal is not reachable from the UI.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "F3 — Connection default_flow_id (UI)",
+        "issue": "WhatsAppConnectionsPage.js (which contains the GitBranch edit-conn-{id} button + conn-default-flow-select + save-conn-btn modal) is imported in /pages/Company/Dashboard.js but the active 'Conexoes' sidebar link renders an inline ConexoesPage component instead. Operators cannot attach a default flow to a connection through the live UI. Backend endpoints work (verified via tests). Either add a route/tab that mounts WhatsAppConnectionsPage, or port the GitBranch modal into the inline ConexoesPage's connection cards.",
+        "affected_selectors": ["[data-testid^='edit-conn-']", "[data-testid='conn-default-flow-select']", "[data-testid='save-conn-btn']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_48.py",
+    "/app/test_reports/pytest/iter48_results.xml"
+  ],
+  "action_items": [
+    "Wire WhatsAppConnectionsPage.js into the routing (or move the GitBranch + default-flow modal into the inline ConexoesPage in Dashboard.js) so operators can attach a default flow to a WhatsApp connection from the live UI. Backend endpoints (POST/PUT /api/channels/connections with default_flow_id) are functioning correctly.",
+    "Minor: TestF3ConnectionFlowId.test_connection_create_with_default_flow_id_preserved emits a PytestReturnNotNoneWarning — the test returns a tuple at the end. Cosmetic only; tests still pass."
+  ],
+  "critical_code_review_comments": [
+    "_user_can_view_all_tickets correctly handles role super_admin/company_admin and the explicit 'view_all_tickets' permission. Filter combines with $search via $and to avoid clobbering an existing $or — clean implementation.",
+    "claim_ticket is properly idempotent for the owner (re-claim returns 200) and 409 for foreign non-admin claimants. release_ticket allows owner OR admin (correct).",
+    "_trigger_flow_for_ticket node entry-point selection is reasonable (start/trigger/message/welcome → fallback to first node with text). Welcome is persisted to ticket.messages with auto_flow_id, and active_flow_id+flow_started_at are set. Microservice POST is best-effort with try/except (expected to fail in preview env per spec).",
+    "preview-pdf-html shares the same _QUOTE_STYLESHEET as the PDF generator — perfect for visual parity between iframe preview and download.",
+    "POST /kanban-columns/reorder correctly drops native:* ids from the input (anchored left) and bulk-updates `order` 1-indexed. GET /kanban-v2 prepends NATIVE_FIRST_COLUMN unconditionally so native is always left-most.",
+    "Channels webhook /webhook/message has a heuristic _looks_like_lid that treats 14+ digit phones starting outside (55, 12-13 digits) as LID-like and merges them into recent tickets — testers must use 13-digit Brazilian phones (5511 + 9 + 8 digits) to avoid spurious merges. (Not a code bug, but a testing gotcha — fixed in the test fixture.)",
+    "FRONTEND ROUTING GAP: WhatsAppConnectionsPage.js is imported but never rendered on the active 'Conexoes' sidebar tab. The inline ConexoesPage in /pages/Company/Dashboard.js (~line 3021) has its own connection card grid without the GitBranch + default-flow modal. F3 UI surface is incomplete on the live route."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_48.py (new — 10 tests, 10 passing)"
+  ],
+  "success_rate": {
+    "backend": "100% (10/10 in test_iteration_48.py)",
+    "frontend": "80% — F1/F2 (template editor multi-tab + preview iframe) not exercised in UI smoke (no template open); F4 + F5 + F3-flow-rename verified via testids; F3 connection-default-flow modal NOT reachable on live route"
+  },
+  "test_credentials": "crm@test.com / crm123 at https://agentcrm-book.preview.emergentagent.com/crmtest/login. Test agents created on the fly via POST /api/scheduling/company-users with TEST_iter48_*@t.com / p123456.",
+  "seed_data_creation": "Tests seed TEST_iter48_* templates / flows / connections / kanban columns / tickets (UUID-suffixed). Tickets generated via webhook with 13-digit Brazilian phones to avoid the LID-merge heuristic.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run with: cd /app/backend && REACT_APP_BACKEND_URL=$(grep REACT_APP_BACKEND_URL /app/frontend/.env | cut -d= -f2) python -m pytest tests/test_iteration_48.py -v. The webhook payload MUST use 13-digit Brazilian phones (e.g. 5511 + 9 + 8 random digits) — anything 14+ digits gets matched by _looks_like_lid heuristic in channels_routes.py line 577 and merged into an existing recent ticket of the same connection (silent failure). For UI re-test of F3 connection-flow-modal: confirm whether sidebar 'Conexoes' is meant to route to WhatsAppConnectionsPage.js or whether the GitBranch modal should be ported into the inline ConexoesPage.",
+  "rca of the issue": "F3 frontend integration partial-failure RCA: WhatsAppConnectionsPage.js carries the new default_flow_id UI (GitBranch edit-conn-{id} button → modal with conn-default-flow-select + save-conn-btn). It IS imported in /pages/Company/Dashboard.js (line 21) but the actual 'Conexoes' menu item resolves to the inline ConexoesPage component (Dashboard.js ~3021) which renders its own connection cards without a GitBranch button — therefore data-testid='edit-conn-*' resolves to 0 elements on the live route. Mitigation: either (a) replace `case 'conexoes': return <ConexoesPage />;` in Dashboard.js with `return <WhatsAppConnectionsPage />;` (or add a sub-tab), or (b) merge the GitBranch + default-flow-select modal into ConexoesPage's existing connection cards. Backend default_flow_id flow is fully operational and tested end-to-end including webhook auto-trigger."
+}

@@ -295,6 +295,106 @@ const PLACEHOLDERS = [
   { group: 'Blocos (listas)', token: '{{#freights}}...{{description}} {{km_total}} {{price_per_km}} {{total}}...{{/freights}}', label: 'Loop de fretes — repete para cada frete' },
 ];
 
+// ─── TEMPLATE EDITOR (3 ABAS: Conteúdo / Cabeçalho / Rodapé) ────────────────
+// Cabeçalho/rodapé repetem em TODAS as páginas do PDF (multi-page) via
+// CSS running elements no WeasyPrint. Placeholders funcionam tanto no
+// corpo quanto no header/footer ({{quote_number}}, {{razao_social}} etc).
+const TEMPLATE_TABS = [
+  { key: 'content', label: 'Conteudo' },
+  { key: 'header', label: 'Cabecalho' },
+  { key: 'footer', label: 'Rodape' },
+];
+
+const buildQuillImageHandler = () => function () {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.error('Imagem muito grande (limite 5MB)'); return; }
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resp = await api.post('/upload/', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const relUrl = resp.data?.url;
+      const absUrl = relUrl?.startsWith('/api/') ? `${process.env.REACT_APP_BACKEND_URL}${relUrl}` : relUrl;
+      const editor = this.quill;
+      const range = editor.getSelection(true);
+      editor.insertEmbed(range.index, 'image', absUrl, 'user');
+      editor.setSelection(range.index + 1);
+      toast.success('Imagem inserida');
+    } catch (err) {
+      toast.error('Falha no upload: ' + (err?.response?.data?.detail || err.message));
+    }
+  };
+  input.click();
+};
+
+const TemplateMultiTabEditor = ({ editing, setEditing }) => {
+  const [tab, setTab] = useState('content');
+  const fields = {
+    content: 'content',
+    header: 'header_html',
+    footer: 'footer_html',
+  };
+  const heights = { content: 320, header: 140, footer: 140 };
+  const minHeight = `${heights[tab]}px`;
+  const value = editing?.[fields[tab]] || '';
+
+  return (
+    <div data-testid="template-multi-tab-editor">
+      {/* Sub-tabs */}
+      <div className="flex gap-1 mb-2 border-b border-slate-200">
+        {TEMPLATE_TABS.map(t => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              data-testid={`template-subtab-${t.key}`}
+              className={`px-3 py-1.5 text-xs font-medium border-b-2 transition ${
+                active ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="border rounded bg-white" data-testid={`template-${tab}-quill`}>
+        <ReactQuill
+          theme="snow"
+          value={value}
+          onChange={(html) => setEditing({ ...editing, [fields[tab]]: html })}
+          modules={{
+            toolbar: {
+              container: [
+                [{ header: [1, 2, 3, false] }],
+                ['bold', 'italic', 'underline', 'strike'],
+                [{ color: [] }, { background: [] }],
+                [{ list: 'ordered' }, { list: 'bullet' }],
+                [{ align: [] }],
+                ['link', 'image'],
+                ['clean'],
+              ],
+              handlers: { image: buildQuillImageHandler() },
+            },
+          }}
+          style={{ minHeight }}
+        />
+      </div>
+      <p className="text-xs text-slate-500 mt-1">
+        {tab === 'content' && (<>Placeholders disponiveis abaixo. Loop de itens: <code className="bg-slate-100 px-1">{'{{#items}}...{{/items}}'}</code>.</>)}
+        {tab === 'header' && 'Aparece no TOPO de TODAS as paginas do PDF. Placeholders funcionam aqui tambem.'}
+        {tab === 'footer' && 'Aparece no RODAPE de TODAS as paginas do PDF. Suporta logos, contatos, termos de validade.'}
+      </p>
+    </div>
+  );
+};
+
+
 const TemplatesTab = () => {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -428,69 +528,7 @@ const TemplatesTab = () => {
               </Field>
             </div>
             <Field label="Conteudo do template *">
-              <div className="border rounded bg-white" data-testid="template-content-quill">
-                <ReactQuill
-                  theme="snow"
-                  value={editing.content}
-                  onChange={(html) => setEditing({ ...editing, content: html })}
-                  modules={{
-                    toolbar: {
-                      container: [
-                        [{ header: [1, 2, 3, false] }],
-                        ['bold', 'italic', 'underline', 'strike'],
-                        [{ color: [] }, { background: [] }],
-                        [{ list: 'ordered' }, { list: 'bullet' }],
-                        [{ align: [] }],
-                        ['link', 'image'],
-                        ['clean'],
-                      ],
-                      handlers: {
-                        image: function () {
-                          // Custom image handler: uploads the file to the
-                          // backend (/api/upload) which stores in object
-                          // storage and returns a PUBLIC URL that WeasyPrint
-                          // can fetch when rendering the PDF. This lets
-                          // users build letterhead (cabecalho/rodape) with
-                          // company logos.
-                          const input = document.createElement('input');
-                          input.type = 'file';
-                          input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
-                          input.onchange = async () => {
-                            const file = input.files?.[0];
-                            if (!file) return;
-                            if (file.size > 5 * 1024 * 1024) {
-                              toast.error('Imagem muito grande (limite 5MB)');
-                              return;
-                            }
-                            try {
-                              const fd = new FormData();
-                              fd.append('file', file);
-                              const resp = await api.post('/upload/', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-                              const relUrl = resp.data?.url;
-                              const absUrl = relUrl?.startsWith('/api/')
-                                ? `${process.env.REACT_APP_BACKEND_URL}${relUrl}`
-                                : relUrl;
-                              const editor = this.quill;
-                              const range = editor.getSelection(true);
-                              editor.insertEmbed(range.index, 'image', absUrl, 'user');
-                              editor.setSelection(range.index + 1);
-                              toast.success('Imagem inserida');
-                            } catch (err) {
-                              toast.error('Falha no upload: ' + (err?.response?.data?.detail || err.message));
-                            }
-                          };
-                          input.click();
-                        },
-                      },
-                    },
-                  }}
-                  style={{ minHeight: '320px' }}
-                />
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Dica: use o botao de imagem na barra para adicionar logotipo/cabecalho/rodape.
-                Placeholders disponiveis abaixo; blocos de itens: <code className="bg-slate-100 px-1">{'{{#items}}...{{/items}}'}</code>.
-              </p>
+              <TemplateMultiTabEditor editing={editing} setEditing={setEditing} />
             </Field>
             <div className="bg-slate-50 rounded p-3" data-testid="placeholder-list">
               <p className="text-xs font-semibold text-slate-700 mb-2">Placeholders disponiveis (clique para copiar):</p>
@@ -550,8 +588,10 @@ const QuotesTab = () => {
 
   const handlePreview = async (id) => {
     try {
-      const { data } = await quotesAPI.render(id);
-      setPreviewing({ id, html: data.html, quote: data.quote });
+      // Use preview-pdf-html so the preview MATCHES the downloaded PDF
+      // byte-for-byte (same CSS, header/footer, A4 paper visual).
+      const { data } = await quotesAPI.previewPdfHtml(id);
+      setPreviewing({ id, html: data.html, quote: { quote_number: data.quote_number } });
     } catch (e) {
       alert('Erro ao renderizar: ' + (e?.response?.data?.detail || e.message));
     }
@@ -983,8 +1023,17 @@ const PreviewModal = ({ html, quote, onClose }) => {
 
   return (
     <ModalShell title={`Visualizar Orcamento #${quote?.quote_number || ''}`} onClose={onClose} large>
-      <div className="bg-white border rounded shadow-inner p-2 max-h-[60vh] overflow-y-auto" data-testid="quote-preview">
-        <div dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Sandboxed iframe with the SAME stylesheet WeasyPrint uses on the
+          server, so the preview matches the downloaded PDF visually. The
+          srcDoc payload comes from /quotes/:id/preview-pdf-html. */}
+      <div className="bg-slate-100 border rounded shadow-inner max-h-[70vh] overflow-y-auto" data-testid="quote-preview">
+        <iframe
+          title="Visualizacao do orcamento"
+          srcDoc={html}
+          sandbox="allow-same-origin"
+          className="w-full block bg-transparent"
+          style={{ height: '70vh', border: 0 }}
+        />
       </div>
       <div className="flex flex-wrap justify-end gap-2 pt-3 border-t mt-3">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600">Fechar</button>

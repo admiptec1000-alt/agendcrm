@@ -545,6 +545,26 @@ const AtendimentosPage = () => {
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-white font-bold truncate max-w-[90px]" title={`Responsavel: ${u.name}`}>{u.name}</span>
                       ) : null;
                     })()}
+                    {/* Pull / Claim ticket — visible only when ticket is unassigned */}
+                    {!ticket.assigned_to && user?.id && (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            await crmAPI.claimTicket(ticket.id);
+                            toast.success('Atendimento puxado');
+                            loadData();
+                          } catch (err) {
+                            toast.error(err?.response?.data?.detail || 'Falha ao puxar');
+                          }
+                        }}
+                        data-testid={`claim-ticket-${ticket.id}`}
+                        title="Puxar este atendimento para mim (ficara restrito a voce)"
+                        className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500 text-white font-bold hover:bg-emerald-600"
+                      >
+                        + Puxar
+                      </button>
+                    )}
                     {/* Kanban column - clicable */}
                     <KanbanColumnPicker
                       ticket={ticket}

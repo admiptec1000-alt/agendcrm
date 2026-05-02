@@ -68,12 +68,16 @@ class QuoteTemplateCreate(BaseModel):
     name: str
     content: str        # HTML/markdown with {{placeholders}}
     is_default: bool = False
+    header_html: Optional[str] = None  # repeats on every page (top)
+    footer_html: Optional[str] = None  # repeats on every page (bottom; supports {{page_number}}/{{total_pages}})
 
 
 class QuoteTemplateUpdate(BaseModel):
     name: Optional[str] = None
     content: Optional[str] = None
     is_default: Optional[bool] = None
+    header_html: Optional[str] = None
+    footer_html: Optional[str] = None
 
 
 class QuoteItemIn(BaseModel):
@@ -349,6 +353,8 @@ async def create_quote_template(data: QuoteTemplateCreate, user=Depends(get_curr
         "name": data.name,
         "content": data.content,
         "is_default": data.is_default,
+        "header_html": data.header_html or None,
+        "footer_html": data.footer_html or None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.quote_templates.insert_one(doc)
@@ -907,7 +913,29 @@ async def delete_quote(qid: str, user=Depends(get_current_user), db: AsyncIOMoto
 async def render_quote(qid: str, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
     """Returns rendered HTML for printing/saving as PDF via the browser."""
     html, quote = await _build_quote_html(qid, user, db)
-    return {"html": html, "quote": quote}
+    return {
+        "html": html,
+        "quote": quote,
+        "header_html": quote.get("__header_html"),
+        "footer_html": quote.get("__footer_html"),
+    }
+
+
+@router.get("/{qid}/preview-pdf-html")
+async def preview_pdf_html(qid: str, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
+    """Returns the SAME HTML that is fed to WeasyPrint (CSS-styled, with
+    header/footer chrome composed into the document) — minus the
+    `position: running()` rules that only WeasyPrint understands. Allows
+    the frontend to render an iframe preview that visually matches the
+    final PDF byte-for-byte (modulo paper-page chrome). Used by the
+    'visualizar orçamento' button on both the Orçamentos page AND the
+    chat ticket header to fix the long-standing mismatch between the
+    on-screen preview and the downloaded PDF."""
+    body_html, quote = await _build_quote_html(qid, user, db)
+    header_html = quote.get("__header_html")
+    footer_html = quote.get("__footer_html")
+    composed = _build_browser_preview_html(body_html, header_html, footer_html)
+    return {"html": composed, "quote_number": quote.get("quote_number")}
 
 
 async def _build_quote_html(qid: str, user, db) -> tuple:
@@ -947,10 +975,108 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
         "notes": quote.get("notes") or "",
         "data_emissao": datetime.fromisoformat(quote["created_at"].replace("Z", "+00:00")).strftime("%d/%m/%Y") if quote.get("created_at") else "",
     }
-    return _render_template(template["content"], ctx), quote
+    body_html = _render_template(template["content"], ctx)
+    # Header/footer are OPTIONAL on the template (added in the v5 editor).
+    # Render them with the same context so placeholders work in them too.
+    header_html = _render_template(template.get("header_html") or "", ctx) or None
+    footer_html = _render_template(template.get("footer_html") or "", ctx) or None
+    quote_with_chrome = dict(quote)
+    quote_with_chrome["__header_html"] = header_html
+    quote_with_chrome["__footer_html"] = footer_html
+    return body_html, quote_with_chrome
 
 
-def _generate_pdf_bytes(html_content: str) -> bytes:
+# ─── PRINTABLE STYLESHEET ────────────────────────────────────────────────────
+# Single source of truth for the visual identity of generated quotes. Used by:
+#   - `_generate_pdf_bytes` (server-side WeasyPrint -> PDF)
+#   - `_build_browser_preview_html` (frontend iframe preview, identical look)
+# Keep this string in sync — the whole point of feature #2 is preview == PDF.
+_QUOTE_STYLESHEET = (
+    "* { box-sizing: border-box; }\n"
+    "html, body {\n"
+    "  margin: 0; padding: 0;\n"
+    "  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;\n"
+    "  font-size: 9.8pt; line-height: 1.5; color: #0f172a; background: #fff;\n"
+    "}\n"
+    "table, p, div, section, header, footer, ul, ol, blockquote, img { max-width: 100% !important; }\n"
+    ".ql-align-center { text-align: center !important; }\n"
+    ".ql-align-right  { text-align: right !important; }\n"
+    ".ql-align-justify { text-align: justify !important; }\n"
+    ".ql-align-left   { text-align: left !important; }\n"
+    "h1 { font-size: 17pt; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 8pt; color: #0a4a6f; }\n"
+    "h2 { font-size: 11.5pt; font-weight: 700; margin: 14pt 0 6pt; color: #0a4a6f;\n"
+    "     text-transform: uppercase; letter-spacing: 0.04em; padding: 6pt 8pt;\n"
+    "     background: linear-gradient(90deg, #e0f2fe 0%, #f0f9ff 100%); border-left: 3pt solid #0a4a6f; }\n"
+    "h3 { font-size: 10.5pt; font-weight: 600; margin: 8pt 0 3pt; color: #0f172a; }\n"
+    "p { margin: 3pt 0; }\n"
+    "strong { color: #0a4a6f; font-weight: 600; }\n"
+    "table { width: 100%; border-collapse: collapse; table-layout: auto;\n"
+    "        margin: 4pt 0 8pt; border: 0.5pt solid #cbd5e1; }\n"
+    "td, th { padding: 6pt 7pt; vertical-align: middle; text-align: left;\n"
+    "         word-break: normal; overflow-wrap: break-word; hyphens: auto;\n"
+    "         border: 0.5pt solid #e2e8f0; font-size: 9.5pt; }\n"
+    "th { background: #0a4a6f; font-weight: 600; color: #fff; font-size: 8.5pt;\n"
+    "     text-transform: uppercase; letter-spacing: 0.02em;\n"
+    "     border-color: #0a4a6f; white-space: normal; line-height: 1.2; }\n"
+    "table > tbody > tr:first-child > td,\n"
+    "table > tr:first-child > td {\n"
+    "  background: #0a4a6f !important; color: #fff !important; font-weight: 700 !important;\n"
+    "  text-transform: uppercase; letter-spacing: 0.02em;\n"
+    "  font-size: 8.5pt; padding: 5pt 6pt; line-height: 1.2;\n"
+    "  border-color: #0a4a6f !important; text-align: center !important;\n"
+    "}\n"
+    "table > tbody > tr:first-child > td *,\n"
+    "table > tr:first-child > td * { color: #fff !important; }\n"
+    "tbody > tr:not(:first-child) > td.ql-align-justify { text-align: left !important; }\n"
+    "tbody tr:nth-child(even):not(:first-child) td { background: #f8fafc; }\n"
+    "tbody tr td { line-height: 1.4; }\n"
+    "img { max-width: 100% !important; height: auto !important; }\n"
+    "td[data-align=\"right\"], th[data-align=\"right\"] { text-align: right; }\n"
+    "tr { page-break-inside: avoid; }\n"
+    "h2 + table { margin-top: 6pt; }\n"
+    "#__quote_header, #__quote_footer { font-size: 8.5pt; color: #475569; line-height: 1.3; }\n"
+    "#__quote_header img, #__quote_footer img { max-height: 18mm; max-width: 100%; }\n"
+    "#__quote_footer { border-top: 0.4pt solid #cbd5e1; padding-top: 3pt; }\n"
+    "#__quote_header { border-bottom: 0.4pt solid #cbd5e1; padding-bottom: 3pt; }\n"
+)
+
+
+def _build_browser_preview_html(body_html: str, header_html: Optional[str] = None, footer_html: Optional[str] = None) -> str:
+    """Wraps the rendered body in an A4-shaped page mockup using the SAME
+    stylesheet WeasyPrint uses, so the iframe preview visually matches the
+    downloaded PDF. The "page" is a fixed 210mm wide white sheet with
+    ~18mm padding; if header/footer are provided they sit at the top and
+    bottom of the sheet with thin separators (mirroring the PDF chrome)."""
+    nbsp_clean = (body_html or "").replace("\u00a0", " ")
+    cleaned_header = (header_html or "").replace("\u00a0", " ")
+    cleaned_footer = (footer_html or "").replace("\u00a0", " ")
+    chrome_top = (
+        f'<div id="__quote_header" style="margin-bottom:8mm;">{cleaned_header}</div>'
+        if cleaned_header.strip() else ""
+    )
+    chrome_bottom = (
+        f'<div id="__quote_footer" style="margin-top:8mm;">{cleaned_footer}</div>'
+        if cleaned_footer.strip() else ""
+    )
+    return (
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>\n"
+        + _QUOTE_STYLESHEET
+        + "/* On-screen-only chrome: emulate a real A4 sheet inside the iframe. */\n"
+        + "body { background: #f1f5f9; padding: 16px; }\n"
+        + ".__a4_page { width: 210mm; min-height: 297mm; max-width: 100%;\n"
+        + "             margin: 0 auto 16px; padding: 18mm 16mm;\n"
+        + "             background: #fff; box-shadow: 0 2px 12px rgba(15,23,42,0.08);\n"
+        + "             border-radius: 4px; }\n"
+        + "</style></head><body>"
+        + '<div class="__a4_page">'
+        + chrome_top
+        + nbsp_clean
+        + chrome_bottom
+        + "</div></body></html>"
+    )
+
+
+def _generate_pdf_bytes(html_content: str, header_html: Optional[str] = None, footer_html: Optional[str] = None) -> bytes:
     """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms).
 
     Three known landmines this function defuses BEFORE WeasyPrint sees them:
@@ -980,132 +1106,51 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
     # so we only collapse runs of NBSP between alphanumeric/punctuation
     # characters that include at least one alphabetic char.
     cleaned_html = (html_content or "").replace("\u00a0", " ")
+    cleaned_header = (header_html or "").replace("\u00a0", " ")
+    cleaned_footer = (footer_html or "").replace("\u00a0", " ")
 
-    css_prefix = """
-    <style>
-      @page {
-        size: A4;
-        margin: 18mm 16mm;
-      }
-      * { box-sizing: border-box; }
-      html, body {
-        margin: 0;
-        padding: 0;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-        font-size: 9.8pt;
-        line-height: 1.5;
-        color: #0f172a;
-        background: #fff;
-      }
-      /* docx imports often hard-code widths > page width — neutralise them */
-      table, p, div, section, header, footer, ul, ol, blockquote, img {
-        max-width: 100% !important;
-      }
-      /* === Quill alignment classes ===
-         These are emitted by the editor but the Quill stylesheet isn't
-         bundled — we provide explicit rules so the operator's centered
-         titles and signatures actually render centered. */
-      .ql-align-center { text-align: center !important; }
-      .ql-align-right { text-align: right !important; }
-      .ql-align-justify { text-align: justify !important; }
-      .ql-align-left { text-align: left !important; }
-      h1 {
-        font-size: 17pt;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        margin: 0 0 8pt;
-        color: #0a4a6f;
-      }
-      h2 {
-        font-size: 11.5pt;
-        font-weight: 700;
-        margin: 14pt 0 6pt;
-        color: #0a4a6f;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        padding: 6pt 8pt;
-        background: linear-gradient(90deg, #e0f2fe 0%, #f0f9ff 100%);
-        border-left: 3pt solid #0a4a6f;
-      }
-      h3 {
-        font-size: 10.5pt;
-        font-weight: 600;
-        margin: 8pt 0 3pt;
-        color: #0f172a;
-      }
-      p { margin: 3pt 0; }
-      strong { color: #0a4a6f; font-weight: 600; }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        /* `auto` makes "Descricao dos Servicos" get the lion's share of
-           width while "Item" / "Unid." stay narrow — yields single-line
-           headers in most cases. Combined with the global `max-width: 100%
-           !important` rule above the table can never escape the page. */
-        table-layout: auto;
-        margin: 4pt 0 8pt;
-        border: 0.5pt solid #cbd5e1;
-      }
-      td, th {
-        padding: 6pt 7pt;
-        vertical-align: middle;
-        text-align: left;
-        word-break: normal;
-        overflow-wrap: break-word;
-        hyphens: auto;
-        border: 0.5pt solid #e2e8f0;
-        font-size: 9.5pt;
-      }
-      th {
-        background: #0a4a6f;
-        font-weight: 600;
-        color: #fff;
-        font-size: 8.5pt;
-        text-transform: uppercase;
-        letter-spacing: 0.02em;
-        border-color: #0a4a6f;
-        white-space: normal;
-        line-height: 1.2;
-      }
-      /* The .docx files exported by Word/Quill don't emit <th> — instead
-         they put the header row as the first <tr> with bold text in <td>.
-         Style the FIRST row of every <tbody> the same way <th> would
-         render: dark brand header with white text. Keep font compact and
-         allow up to 2 lines so 6 columns fit comfortably in A4 width. */
-      table > tbody > tr:first-child > td,
-      table > tr:first-child > td {
-        background: #0a4a6f !important;
-        color: #fff !important;
-        font-weight: 700 !important;
-        text-transform: uppercase;
-        letter-spacing: 0.02em;
-        font-size: 8.5pt;
-        padding: 5pt 6pt;
-        line-height: 1.2;
-        border-color: #0a4a6f !important;
-        text-align: center !important;
-      }
-      table > tbody > tr:first-child > td *,
-      table > tr:first-child > td * {
-        color: #fff !important;
-      }
-      /* Ragged justify in narrow data cells is ugly — fall back to left.
-         (Headers handled above with !important center.) */
-      tbody > tr:not(:first-child) > td.ql-align-justify { text-align: left !important; }
-      tbody tr:nth-child(even):not(:first-child) td { background: #f8fafc; }
-      tbody tr td { line-height: 1.4; }
-      img {
-        max-width: 100% !important;
-        height: auto !important;
-      }
-      /* Right-aligned monetary cells when authors mark them with data-align */
-      td[data-align="right"], th[data-align="right"] { text-align: right; }
-      /* Helps WeasyPrint avoid orphan rows */
-      tr { page-break-inside: avoid; }
-      h2 + table { margin-top: 6pt; }
-    </style>
-    """
-    html_with_css = css_prefix + cleaned_html
+    has_header = bool(cleaned_header.strip())
+    has_footer = bool(cleaned_footer.strip())
+
+    # WeasyPrint supports CSS running elements: an arbitrary HTML block can
+    # be hoisted into @page { @top-center }/@bottom-center via
+    # `position: running(name)`. The block lives once in the document but
+    # WeasyPrint repeats it on every page. This is the cleanest way to
+    # implement "cabeçalho / rodapé que repete em todas as páginas". We
+    # also expose `string(page-counter)` and `counter(pages)` so footer
+    # templates can include "Página X de Y" if the operator wants.
+    page_chrome_css = ""
+    if has_header:
+        page_chrome_css += "\n@page { @top-center { content: element(quote_header); } }\n"
+        page_chrome_css += "#__quote_header { position: running(quote_header); }\n"
+    if has_footer:
+        page_chrome_css += "\n@page { @bottom-center { content: element(quote_footer); } }\n"
+        page_chrome_css += "#__quote_footer { position: running(quote_footer); }\n"
+
+    # Increase top/bottom margin when chrome is present so the body content
+    # doesn't collide with the header/footer area.
+    top_margin = "26mm" if has_header else "18mm"
+    bottom_margin = "22mm" if has_footer else "18mm"
+
+    css_prefix = (
+        "<style>\n"
+        "@page {\n"
+        "  size: A4;\n"
+        f"  margin: {top_margin} 16mm {bottom_margin} 16mm;\n"
+        "}\n"
+        + page_chrome_css
+        + _QUOTE_STYLESHEET
+        + "</style>\n"
+    )
+    # Wrap header/footer in id'd divs so the CSS `position: running()` rules above
+    # can hoist them into the @page slots. They MUST live in the document body
+    # (not display:none) for WeasyPrint to pick them up.
+    chrome_blocks = ""
+    if has_header:
+        chrome_blocks += '<div id="__quote_header">' + cleaned_header + '</div>'
+    if has_footer:
+        chrome_blocks += '<div id="__quote_footer">' + cleaned_footer + '</div>'
+    html_with_css = css_prefix + chrome_blocks + cleaned_html
     return HTML(string=html_with_css, base_url=base_url).write_pdf()
 
 
@@ -1113,7 +1158,11 @@ def _generate_pdf_bytes(html_content: str) -> bytes:
 async def download_quote_pdf(qid: str, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
     """Streams the quote as a printable PDF (Content-Type: application/pdf)."""
     html, quote = await _build_quote_html(qid, user, db)
-    pdf_bytes = _generate_pdf_bytes(html)
+    pdf_bytes = _generate_pdf_bytes(
+        html,
+        header_html=quote.get("__header_html"),
+        footer_html=quote.get("__footer_html"),
+    )
     filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
     return StreamingResponse(
         iter([pdf_bytes]),

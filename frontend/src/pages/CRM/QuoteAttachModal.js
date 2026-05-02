@@ -58,7 +58,9 @@ const QuoteAttachModal = ({ ticket, connections, onClose, onSent, initialQuoteId
     setSelectedQuote(q);
     setCaption(`Segue orcamento #${q.quote_number} no valor de ${formatBRL(q.total_value)}`);
     try {
-      const { data } = await quotesAPI.render(q.id);
+      // Use preview-pdf-html so the in-chat preview matches the WhatsApp
+      // PDF the customer will receive (Feature #2: preview = PDF).
+      const { data } = await quotesAPI.previewPdfHtml(q.id);
       setPreviewHtml(data.html);
     } catch (e) {
       setPreviewHtml('<p style="padding:16px;color:#a00">Falha ao gerar preview</p>');
@@ -163,12 +165,14 @@ const QuoteAttachModal = ({ ticket, connections, onClose, onSent, initialQuoteId
           <div className="flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto bg-slate-50">
               {selectedQuote ? (
-                <div className="p-2">
-                  <div
-                    className="bg-white rounded border shadow-sm transform scale-[0.7] origin-top-left"
-                    style={{ width: '143%', minHeight: '600px' }}
+                <div className="p-2 h-full">
+                  <iframe
+                    title={`Preview orcamento #${selectedQuote.quote_number}`}
+                    srcDoc={previewHtml || '<p style="padding:16px">Carregando...</p>'}
+                    sandbox="allow-same-origin"
                     data-testid="quote-attach-preview"
-                    dangerouslySetInnerHTML={{ __html: previewHtml || '<p style="padding:16px">Carregando...</p>' }}
+                    className="w-full h-full bg-white rounded border shadow-sm"
+                    style={{ minHeight: '600px', border: 0 }}
                   />
                 </div>
               ) : (

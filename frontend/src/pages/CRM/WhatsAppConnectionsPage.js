@@ -1,31 +1,42 @@
 import React, { useState, useEffect } from 'react';
-import { whatsappAPI } from '../../services/api';
+import { whatsappAPI, crmAPI } from '../../services/api';
 import { toast } from 'sonner';
 import {
   Plus, Phone, Link, Trash2, X, Wifi, WifiOff, QrCode, RefreshCw,
-  MoreVertical, Smartphone, CheckCircle2
+  Smartphone, GitBranch
 } from 'lucide-react';
 
 const WhatsAppConnectionsPage = () => {
   const [connections, setConnections] = useState([]);
   const [stats, setStats] = useState({});
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [flows, setFlows] = useState([]);
   const [connectingId, setConnectingId] = useState(null);
 
   useEffect(() => { load(); }, []);
   const load = async () => {
-    const [c, s] = await Promise.all([
+    const [c, s, f] = await Promise.all([
       whatsappAPI.getConnections(),
-      whatsappAPI.getConnectionStats()
+      whatsappAPI.getConnectionStats(),
+      crmAPI.getFlows().catch(() => ({ data: [] })),
     ]);
     setConnections(c.data);
     setStats(s.data);
+    setFlows(f.data || []);
   };
 
-  const handleCreate = async (name) => {
-    await whatsappAPI.createConnection({ name });
+  const handleCreate = async ({ name, default_flow_id }) => {
+    await whatsappAPI.createConnection({ name, default_flow_id: default_flow_id || null });
     toast.success('Conexao criada!');
     setShowAdd(false);
+    load();
+  };
+
+  const handleSaveEdit = async (conn, patch) => {
+    await whatsappAPI.updateConnection(conn.id, patch);
+    toast.success('Conexao atualizada!');
+    setEditing(null);
     load();
   };
 
@@ -158,6 +169,11 @@ const WhatsAppConnectionsPage = () => {
                           <RefreshCw className="w-3 h-3 animate-spin" /> Escaneie o QR
                         </span>
                       )}
+                      <button onClick={() => setEditing(conn)} data-testid={`edit-conn-${conn.id}`}
+                        className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 hover:text-blue-700 transition-colors"
+                        title="Configurar fluxo automatico">
+                        <GitBranch className="w-4 h-4" />
+                      </button>
                       <button onClick={() => handleDelete(conn.id)} data-testid={`delete-conn-${conn.id}`}
                         className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors">
                         <Trash2 className="w-4 h-4" />
@@ -200,19 +216,30 @@ const WhatsAppConnectionsPage = () => {
 
       {/* Add Modal */}
       {showAdd && (
-        <AddConnectionModal onClose={() => setShowAdd(false)} onSave={handleCreate} />
+        <ConnectionModal flows={flows} onClose={() => setShowAdd(false)} onSave={handleCreate} />
+      )}
+      {/* Edit Modal — change name, default_flow_id, etc */}
+      {editing && (
+        <ConnectionModal
+          initial={editing}
+          flows={flows}
+          onClose={() => setEditing(null)}
+          onSave={(patch) => handleSaveEdit(editing, patch)}
+        />
       )}
     </div>
   );
 };
 
-const AddConnectionModal = ({ onClose, onSave }) => {
-  const [name, setName] = useState('');
+const ConnectionModal = ({ initial, flows, onClose, onSave }) => {
+  const [name, setName] = useState(initial?.name || '');
+  const [flowId, setFlowId] = useState(initial?.default_flow_id || '');
+  const isEdit = !!initial?.id;
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold font-heading">Nova Conexao</h3>
+          <h3 className="text-lg font-bold font-heading" data-testid="connection-modal-title">{isEdit ? 'Editar Conexao' : 'Nova Conexao'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="space-y-3">
@@ -220,10 +247,37 @@ const AddConnectionModal = ({ onClose, onSave }) => {
             <label className="text-sm font-medium text-slate-700 mb-1 block">Nome da Conexao</label>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: WhatsApp Principal" className="input-field" data-testid="conn-name-input" />
           </div>
+          <div>
+            <label className="text-sm font-medium text-slate-700 mb-1 block flex items-center gap-1.5">
+              <GitBranch className="w-3.5 h-3.5 text-blue-500" />
+              Fluxo automatico (Flowbuilder)
+            </label>
+            <select
+              value={flowId}
+              onChange={e => setFlowId(e.target.value)}
+              className="input-field"
+              data-testid="conn-default-flow-select"
+            >
+              <option value="">— Sem fluxo automatico —</option>
+              {(flows || []).map(f => (
+                <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Quando alguem entrar em contato pela primeira vez por esta conexao, o fluxo selecionado sera disparado automaticamente.
+            </p>
+          </div>
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
-          <button onClick={() => name && onSave(name)} className="btn-primary text-sm" data-testid="save-conn-btn">Criar</button>
+          <button
+            onClick={() => name.trim() && onSave({ name: name.trim(), default_flow_id: flowId || '' })}
+            disabled={!name.trim()}
+            className="btn-primary text-sm disabled:opacity-50"
+            data-testid="save-conn-btn"
+          >
+            {isEdit ? 'Salvar' : 'Criar'}
+          </button>
         </div>
       </div>
     </div>

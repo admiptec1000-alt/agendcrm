@@ -95,10 +95,12 @@ class ConnectionCreate(BaseModel):
     name: str
     type: str = "whatsapp"  # whatsapp, instagram
     phone: Optional[str] = None
+    default_flow_id: Optional[str] = None  # Flowbuilder flow auto-triggered on first message
 
 class ConnectionUpdate(BaseModel):
     name: Optional[str] = None
     status: Optional[str] = None
+    default_flow_id: Optional[str] = None  # set to "" to clear, or new flow id
 
 class TemplateCreate(BaseModel):
     process_key: str
@@ -146,6 +148,7 @@ async def create_connection(
         "name": data.name,
         "type": data.type,
         "phone": data.phone,
+        "default_flow_id": data.default_flow_id or None,
         "status": "disconnected",
         "qr_code": None,
         "last_connected": None,
@@ -684,6 +687,14 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.tickets.insert_one(ticket)
+        # Auto-trigger Flowbuilder flow if connection has one configured.
+        # Fire-and-forget — flow execution should never block the webhook.
+        try:
+            if conn.get("default_flow_id"):
+                from routes.crm_routes import _trigger_flow_for_ticket
+                await _trigger_flow_for_ticket(db, conn["company_id"], conn["default_flow_id"], ticket)
+        except Exception as e:
+            logger.warning(f"[webhook/message] flow trigger failed: {e}")
     else:
         # Idempotency: skip if same wa message id already pushed
         existing_ids = [m.get("wa_message_id") for m in (ticket.get("messages") or [])]
@@ -839,6 +850,9 @@ async def update_connection(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    # Allow empty string to clear default_flow_id (operator unchecks the flow).
+    if "default_flow_id" in update and update["default_flow_id"] == "":
+        update["default_flow_id"] = None
     if not update:
         raise HTTPException(status_code=400, detail="Nada para atualizar")
     result = await db.channel_connections.update_one(

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { crmAPI } from '../../services/api';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, X, Phone, MessageSquare } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Phone, MessageSquare, GripHorizontal, ArrowLeftRight } from 'lucide-react';
 
 const COLORS = ['#4F46E5','#EF4444','#F59E0B','#10B981','#06B6D4','#8B5CF6','#EC4899','#64748B'];
 
@@ -12,6 +12,23 @@ const KanbanPage = ({ setActivePage }) => {
   const [editingCol, setEditingCol] = useState(null);
   const [colForm, setColForm] = useState({ name: '', color: '#4F46E5' });
   const [draggingTicket, setDraggingTicket] = useState(null);
+
+  // === Disfarçado: reorder mode ===
+  // Activated via secret long-press (3s) on the page TITLE OR by pressing
+  // Shift+R on the keyboard. Visually swaps the page subtitle and adds a
+  // "drag-handle" affordance to non-native columns. Drag a column header
+  // onto another to swap order. Persists via /kanban-columns/reorder.
+  const [reorderMode, setReorderMode] = useState(false);
+  const [draggingColId, setDraggingColId] = useState(null);
+  const titlePressTimer = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.shiftKey && (e.key === 'R' || e.key === 'r')) { setReorderMode(m => !m); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const reload = async () => {
     setLoading(true);
@@ -65,12 +82,59 @@ const KanbanPage = ({ setActivePage }) => {
     setDraggingTicket(null);
   };
 
+  // Reorder mode: column-on-column drag swaps order
+  const handleColumnDrop = async (targetCol) => {
+    if (!draggingColId || draggingColId === targetCol.id) return;
+    if (targetCol.is_native) { toast.error('Coluna nativa nao pode trocar de posicao'); setDraggingColId(null); return; }
+    const customCols = data.columns.filter(c => !c.is_native);
+    const fromIdx = customCols.findIndex(c => c.id === draggingColId);
+    const toIdx = customCols.findIndex(c => c.id === targetCol.id);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const reordered = [...customCols];
+    const [moved] = reordered.splice(fromIdx, 1);
+    reordered.splice(toIdx, 0, moved);
+    try {
+      await crmAPI.reorderKanbanColumns(reordered.map(c => c.id));
+      toast.success('Ordem atualizada');
+      reload();
+    } catch (e) { toast.error('Erro ao reordenar'); }
+    setDraggingColId(null);
+  };
+
+  const onTitlePressStart = () => {
+    titlePressTimer.current = setTimeout(() => {
+      setReorderMode(m => !m);
+      toast.info(reorderMode ? 'Modo reordenacao DESATIVADO' : 'Modo reordenacao ATIVADO. Arraste cabecalhos das colunas customizadas.');
+    }, 3000);
+  };
+  const onTitlePressEnd = () => {
+    if (titlePressTimer.current) { clearTimeout(titlePressTimer.current); titlePressTimer.current = null; }
+  };
+
   return (
     <div className="animate-fade-in" data-testid="kanban-page">
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <div>
-          <h2 className="text-lg font-bold font-page-title">Kanban de Atendimentos</h2>
-          <p className="text-xs text-slate-500">Arraste cards entre as colunas. A coluna "Atendimentos" e nativa.</p>
+        <div
+          onMouseDown={onTitlePressStart}
+          onMouseUp={onTitlePressEnd}
+          onMouseLeave={onTitlePressEnd}
+          onTouchStart={onTitlePressStart}
+          onTouchEnd={onTitlePressEnd}
+          className="select-none cursor-default"
+        >
+          <h2 className="text-lg font-bold font-page-title flex items-center gap-2">
+            Kanban de Atendimentos
+            {reorderMode && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold flex items-center gap-1" data-testid="reorder-mode-badge">
+                <ArrowLeftRight className="w-3 h-3" /> ORDENANDO
+              </span>
+            )}
+          </h2>
+          <p className="text-xs text-slate-500">
+            {reorderMode
+              ? 'Arraste o cabecalho de uma coluna sobre outra para trocar a ordem. Pressione Shift+R para sair.'
+              : 'Arraste cards entre as colunas. A coluna "Atendimentos" e nativa.'}
+          </p>
         </div>
         <button onClick={openNewCol} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-column-btn">
           <Plus className="w-4 h-4" /> Nova Coluna
@@ -87,12 +151,22 @@ const KanbanPage = ({ setActivePage }) => {
               <div
                 key={col.id}
                 onDragOver={e => e.preventDefault()}
-                onDrop={() => handleDrop(col.id)}
+                onDrop={() => reorderMode ? handleColumnDrop(col) : handleDrop(col.id)}
                 className="flex-shrink-0 w-72 snap-start"
                 data-testid={`kanban-col-${col.id}`}
               >
-                <div className="rounded-t-xl px-3 py-2.5 text-white shadow-sm" style={{ background: col.color }}>
+                <div
+                  className={`rounded-t-xl px-3 py-2.5 text-white shadow-sm ${reorderMode && !col.is_native ? 'cursor-grab' : ''} ${draggingColId === col.id ? 'opacity-60' : ''}`}
+                  style={{ background: col.color }}
+                  draggable={reorderMode && !col.is_native}
+                  onDragStart={() => reorderMode && !col.is_native && setDraggingColId(col.id)}
+                  onDragEnd={() => setDraggingColId(null)}
+                  data-testid={`kanban-col-header-${col.id}`}
+                >
                   <div className="flex items-center gap-2">
+                    {reorderMode && !col.is_native && (
+                      <GripHorizontal className="w-3.5 h-3.5 text-white/80" />
+                    )}
                     <span className="font-semibold text-sm flex-1 truncate">{col.name}</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 font-bold">{tickets.length}</span>
                     {!col.is_native && (

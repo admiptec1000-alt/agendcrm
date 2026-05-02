@@ -18,6 +18,40 @@ from clients_link import find_or_create_client_by_phone
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
+def _user_can_view_all_tickets(user: dict) -> bool:
+    """Returns True if the user is allowed to see EVERY ticket in the
+    company. Otherwise the user only sees:
+      (a) tickets currently assigned to them (`assigned_to == user.id`)
+      (b) unassigned tickets in the first kanban column (status='aberto'
+          AND `assigned_to` is null) — these are the public pool. As soon
+          as another user CLAIMS one of these (POST /tickets/{id}/claim),
+          it disappears from this user's listings.
+    The permission is granted by either:
+      - role (super_admin / company_admin) — implicit
+      - explicit `view_all_tickets` flag in `user.permissions` (per-user toggle)
+    """
+    role = (user.get("role") or "").lower()
+    if role in ("super_admin", "superadmin", "company_admin"):
+        return True
+    perms = user.get("permissions") or []
+    return "view_all_tickets" in perms
+
+
+def _ticket_visibility_filter(user: dict) -> dict:
+    """Mongo `$or` clause to enforce the visibility rules above. Returns an
+    empty dict (no filter) for users with the view-all permission."""
+    if _user_can_view_all_tickets(user):
+        return {}
+    uid = user["id"]
+    return {
+        "$or": [
+            {"assigned_to": uid},
+            {"assigned_to": None, "status": "aberto"},
+            {"assigned_to": {"$exists": False}, "status": "aberto"},
+        ]
+    }
+
+
 # Tickets
 @router.get("/tickets")
 async def list_tickets(
@@ -46,6 +80,17 @@ async def list_tickets(
     elif tab == "aguardando":
         query["status"] = {"$in": ["pago", "bloqueado"]}
 
+    # Visibility: non-admin users only see their own tickets + the
+    # unassigned-aberto pool. Admins / view_all_tickets see everything.
+    vis_filter = _ticket_visibility_filter(user)
+    if vis_filter:
+        # If a `$or` already exists (from `search`), combine via $and
+        if "$or" in query:
+            existing_or = query.pop("$or")
+            query["$and"] = [{"$or": existing_or}, vis_filter]
+        else:
+            query.update(vis_filter)
+
     tickets = await db.tickets.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
     return tickets
 
@@ -55,9 +100,13 @@ async def get_ticket_counts(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     company_id = user["company_id"]
-    atendendo = await db.tickets.count_documents({"company_id": company_id, "status": {"$in": ["aberto", "em_cobranca", "proposta"]}})
-    aguardando = await db.tickets.count_documents({"company_id": company_id, "status": {"$in": ["pago", "bloqueado"]}})
-    total = await db.tickets.count_documents({"company_id": company_id})
+    base = {"company_id": company_id}
+    vis = _ticket_visibility_filter(user)
+    if vis:
+        base = {**base, **vis}
+    atendendo = await db.tickets.count_documents({**base, "status": {"$in": ["aberto", "em_cobranca", "proposta"]}})
+    aguardando = await db.tickets.count_documents({**base, "status": {"$in": ["pago", "bloqueado"]}})
+    total = await db.tickets.count_documents(base)
     return {"atendendo": atendendo, "aguardando": aguardando, "total": total}
 
 
@@ -216,6 +265,52 @@ async def merge_tickets(
 
 class ResolveLidRequest(BaseModel):
     real_phone: str
+
+
+@router.post("/tickets/{ticket_id}/claim")
+async def claim_ticket(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Operator pulls (puxa) a ticket from the unassigned-aberto pool.
+    From this moment on, the ticket disappears from EVERY other operator's
+    list (unless they have `view_all_tickets`). Idempotent: re-claiming
+    a ticket already assigned to the caller is a no-op success."""
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    current = ticket.get("assigned_to")
+    if current and current != user["id"] and not _user_can_view_all_tickets(user):
+        # Another operator already owns it AND we don't have view-all rights.
+        raise HTTPException(409, "Atendimento ja foi puxado por outro operador")
+    await db.tickets.update_one(
+        {"id": ticket_id},
+        {"$set": {"assigned_to": user["id"], "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
+
+
+@router.post("/tickets/{ticket_id}/release")
+async def release_ticket(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Returns a claimed ticket back to the public pool (sets `assigned_to`
+    to null). Only the current owner OR an admin can release. Used when
+    the operator realises another colleague is better-suited for the case."""
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    current = ticket.get("assigned_to")
+    if current and current != user["id"] and not _user_can_view_all_tickets(user):
+        raise HTTPException(403, "Apenas o atendente atual ou um admin pode liberar este atendimento")
+    await db.tickets.update_one(
+        {"id": ticket_id},
+        {"$set": {"assigned_to": None, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
 
 
 @router.post("/tickets/{ticket_id}/resolve-lid")
@@ -551,10 +646,11 @@ async def get_kanban(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    tickets = await db.tickets.find(
-        {"company_id": user["company_id"]},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(1000)
+    query = {"company_id": user["company_id"]}
+    vis = _ticket_visibility_filter(user)
+    if vis:
+        query.update(vis)
+    tickets = await db.tickets.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     kanban = {
         TicketStatus.EM_COBRANCA: [],
@@ -1336,6 +1432,94 @@ async def delete_flow(
     return {"message": "Flow removido"}
 
 
+# === FLOW EXECUTION (auto-trigger when WhatsApp connection has default_flow_id) ===
+async def _trigger_flow_for_ticket(db: AsyncIOMotorDatabase, company_id: str, flow_id: str, ticket: dict) -> None:
+    """Sends the WELCOME / FIRST-MESSAGE node of a Flowbuilder flow as the
+    initial automated reply on a brand-new ticket.
+
+    Minimal initial implementation: looks for the FIRST node of type
+    `message` (or any node with a `message`/`text` data field) and posts
+    its content as an outgoing agent message. The full flow execution
+    engine (branching, conditions, AI nodes) is a separate roadmap item;
+    this fires off the welcome reply so the customer gets an instant
+    acknowledgement when they hit a connection that has a flow attached.
+
+    We persist `active_flow_id` and `flow_started_at` on the ticket so
+    a future executor can pick up where this leaves off.
+    """
+    flow = await db.flow_builders.find_one({"id": flow_id, "company_id": company_id}, {"_id": 0})
+    if not flow:
+        return
+    nodes = flow.get("nodes") or []
+    if not nodes:
+        return
+
+    # Pick the entry node: prefer one explicitly marked as `start`/`trigger`,
+    # fallback to the first node that has a usable text payload.
+    def _node_text(n):
+        d = n.get("data") or {}
+        for k in ("message", "text", "label", "content"):
+            v = d.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+        # Some nodes nest under data.config.message
+        cfg = (d.get("config") or {})
+        for k in ("message", "text"):
+            v = cfg.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+        return None
+
+    entry = next((n for n in nodes if (n.get("type") or "").lower() in ("start", "trigger", "message", "welcome")), None)
+    if not entry:
+        entry = next((n for n in nodes if _node_text(n)), None)
+    if not entry:
+        return
+    welcome_text = _node_text(entry)
+    if not welcome_text:
+        return
+
+    # Render simple placeholders against the ticket's customer
+    welcome_text = (welcome_text
+                    .replace("{{nome}}", ticket.get("customer_name") or "")
+                    .replace("{{name}}", ticket.get("customer_name") or "")
+                    .replace("{{ticket_number}}", str(ticket.get("ticket_number") or "")))
+
+    # Send via WhatsApp (fire-and-forget) and persist as outgoing message
+    new_msg = {
+        "id": str(uuid.uuid4()),
+        "ticket_id": ticket["id"],
+        "content": welcome_text,
+        "sender_type": "agent",  # marks it as a system/auto reply
+        "sender_id": None,
+        "channel": "whatsapp",
+        "wa_message_id": None,
+        "auto_flow_id": flow_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.tickets.update_one(
+        {"id": ticket["id"]},
+        {"$push": {"messages": new_msg},
+         "$set": {"active_flow_id": flow_id,
+                  "flow_started_at": datetime.now(timezone.utc).isoformat(),
+                  "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+
+    # Forward to microservice (best-effort)
+    try:
+        import httpx as _httpx
+        wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+        target_phone = ticket.get("lid_jid") if ticket.get("pending_lid_resolution") else ticket.get("customer_phone")
+        if ticket.get("connection_id") and target_phone:
+            async with _httpx.AsyncClient(timeout=15.0) as client:
+                await client.post(
+                    f"{wa_url}/instances/{ticket['connection_id']}/send",
+                    json={"phone": target_phone, "message": welcome_text}
+                )
+    except Exception:
+        pass
+
+
 # === TAGS ===
 from pydantic import BaseModel as _BM
 
@@ -1520,10 +1704,13 @@ async def get_kanban_v2(
     columns = [NATIVE_FIRST_COLUMN] + custom_cols
     custom_ids = {c["id"] for c in custom_cols}
 
-    tickets = await db.tickets.find(
-        {"company_id": user["company_id"]},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(2000)
+    # Apply per-user visibility (Feature #5): non-admins only see their
+    # own claimed tickets + the unassigned-aberto pool.
+    query = {"company_id": user["company_id"]}
+    vis = _ticket_visibility_filter(user)
+    if vis:
+        query.update(vis)
+    tickets = await db.tickets.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
     grouped = {c["id"]: [] for c in columns}
     for t in tickets:
@@ -1540,6 +1727,32 @@ async def get_kanban_v2(
     }
 
     return {"columns": columns, "tickets_by_column": grouped, "totals_by_column": totals_by_column}
+
+
+class KanbanReorderRequest(BaseModel):
+    column_ids: List[str]  # ordered list of column ids; first one shown left-most
+
+
+@router.post("/kanban-columns/reorder")
+async def reorder_kanban_columns(
+    body: KanbanReorderRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Persist a new column ordering. Native columns (`native:*`) are
+    silently dropped from the input — they are always anchored on the
+    left. Operators access this via a "disfarçado" button in the Kanban
+    page header (long-press / admin-only)."""
+    if not body.column_ids:
+        raise HTTPException(400, "column_ids vazio")
+    custom_ids = [c for c in body.column_ids if not c.startswith("native:")]
+    # Bulk-update order (1-indexed; native column always sits at 0)
+    for idx, col_id in enumerate(custom_ids, start=1):
+        await db.kanban_columns.update_one(
+            {"id": col_id, "company_id": user["company_id"]},
+            {"$set": {"order": idx, "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    return {"reordered": len(custom_ids)}
 
 
 @router.put("/tickets/{ticket_id}/kanban-column")

@@ -12,10 +12,12 @@ router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 class ConnectionCreate(BaseModel):
     name: str
     phone: Optional[str] = None
+    default_flow_id: Optional[str] = None  # Flowbuilder flow auto-triggered on first message
 
 class ConnectionUpdate(BaseModel):
     name: Optional[str] = None
     status: Optional[str] = None
+    default_flow_id: Optional[str] = None  # set to "" (empty string) to clear
 
 @router.get("/connections")
 async def list_connections(
@@ -39,6 +41,7 @@ async def create_connection(
         "company_id": user["company_id"],
         "name": data.name,
         "phone": data.phone,
+        "default_flow_id": data.default_flow_id or None,
         "status": "disconnected",
         "qr_code": None,
         "last_connected": None,
@@ -60,6 +63,9 @@ async def update_connection(
         raise HTTPException(status_code=404, detail="Conexao nao encontrada")
     
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    # Allow empty string to clear default_flow_id
+    if "default_flow_id" in update_data and update_data["default_flow_id"] == "":
+        update_data["default_flow_id"] = None
     if update_data:
         if update_data.get("status") == "connected":
             update_data["last_connected"] = datetime.now(timezone.utc).isoformat()
