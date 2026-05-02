@@ -997,6 +997,9 @@ const ClientsPage = () => {
   const [bookingClientId, setBookingClientId] = useState(null);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [importReport, setImportReport] = useState(null);
+  const importInputRef = useRef(null);
 
   useEffect(() => { load(); }, [search]);
   useEffect(() => {
@@ -1073,16 +1076,92 @@ const ClientsPage = () => {
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao agendar'); }
   };
 
+  const handleImportXlsx = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      toast.error('Envie um arquivo .xlsx');
+      return;
+    }
+    setImporting(true);
+    setImportReport(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await api.post('/crm/clients/import-xlsx', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 600000,
+      });
+      setImportReport(res.data);
+      toast.success(`Importação concluída: ${res.data.created} novos, ${res.data.updated} atualizados`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Falha na importação');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const STATUS_COLORS = { confirmado: 'bg-emerald-100 text-emerald-700', pendente: 'bg-amber-100 text-amber-700', cancelado: 'bg-red-100 text-red-700', concluido: 'bg-blue-100 text-blue-700' };
 
   return (
     <div className="animate-fade-in" data-testid="clients-page">
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
         <p className="text-sm text-slate-600">{clients.length} clientes cadastrados</p>
-        <button onClick={() => { setEditingClient(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2 justify-center" data-testid="add-client-btn">
-          <Plus className="w-4 h-4" /> Novo Cliente
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={handleImportXlsx}
+            data-testid="import-clients-input"
+          />
+          <button
+            onClick={() => importInputRef.current?.click()}
+            disabled={importing}
+            className="px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm flex items-center gap-2 justify-center disabled:opacity-60"
+            data-testid="import-clients-btn"
+            title="Importar contatos de uma planilha .xlsx (colunas: name, Telefone, email, tags e Kambam)"
+          >
+            <Upload className="w-4 h-4" />
+            {importing ? 'Importando…' : 'Importar XLSX'}
+          </button>
+          <button onClick={() => { setEditingClient(null); setShowAdd(true); }} className="btn-primary flex items-center gap-2 justify-center" data-testid="add-client-btn">
+            <Plus className="w-4 h-4" /> Novo Cliente
+          </button>
+        </div>
       </div>
+
+      {importReport && (
+        <div className="mb-4 p-3 rounded-lg border border-emerald-200 bg-emerald-50 text-sm" data-testid="import-clients-report">
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <div className="font-medium text-emerald-900">Relatório da importação</div>
+            <button onClick={() => setImportReport(null)} className="text-emerald-700 hover:text-emerald-900" aria-label="fechar">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="text-emerald-800">
+            {importReport.rows_total} linhas • <b>{importReport.created}</b> novos •{' '}
+            <b>{importReport.updated}</b> atualizados • {importReport.tickets_created} tickets criados •{' '}
+            {importReport.tickets_updated} tickets movidos •{' '}
+            {importReport.skipped_no_phone} ignorados (sem telefone)
+          </div>
+          {importReport.unknown_labels_top?.length > 0 && (
+            <details className="mt-2 text-emerald-900">
+              <summary className="cursor-pointer">
+                {importReport.unknown_labels_count} rótulos não identificados como Tag/Kanban (foram salvos como tag livre)
+              </summary>
+              <ul className="mt-1 ml-4 list-disc text-xs">
+                {importReport.unknown_labels_top.slice(0, 15).map((u, i) => (
+                  <li key={i}>{u.label} ({u.count})</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
 
       <div className="relative mb-4">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />

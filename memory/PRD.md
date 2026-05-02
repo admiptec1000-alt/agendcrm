@@ -11,6 +11,17 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-02 — Importação XLSX de Contatos (Incinera)
+- Novo endpoint `POST /api/crm/clients/import-xlsx` (admin/owner-only) — multipart `file`
+- Auto-matching de cada item de `tags e Kambam` contra Tags da empresa OU Colunas do Kanban (case/whitespace-insensitive). Não-matched vira tag livre + relatório.
+- Cliente existente (mesmo phone digits-only) é atualizado: nome/email refrescados, tags em **união**.
+- Quando há match com coluna do Kanban → cria/atualiza UM ticket com `kanban_column_id` (último match vence). 1 ticket por cliente, idempotente.
+- Telefones com 15+ dígitos (LIDs) são importados normalmente (sem filtro).
+- UI: botão `Importar XLSX` em `Clientes / Leads` (Dashboard.js) + report verde com counts e top labels desconhecidos
+- Validado em preview com a base real da Incinera: 1153 linhas, 0 ignoradas, 103 tickets ancorados em colunas, dedup OK em re-run.
+- Testes: `/app/backend/tests/test_xlsx_import.py` (2 passes)
+- Documentação: `/app/IMPORT_INCINERA_GUIDE.md`
+
 ### 2026-05-02 — 5 Features em sequência (1 → 5)
 **F1: Cabeçalho/Rodapé multi-página no editor**
 - `quote_templates` agora persistem `header_html` + `footer_html`

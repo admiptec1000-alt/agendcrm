@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
 from auth import get_current_user
@@ -8,13 +8,15 @@ from models import (
     TicketStatus
 )
 import uuid
+import io
+import re
 from datetime import datetime, timezone
 from typing import List, Optional, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import os
 from pydantic import BaseModel
 from counters import next_ticket_number
-from clients_link import find_or_create_client_by_phone
+from clients_link import find_or_create_client_by_phone, normalize_phone
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -1776,3 +1778,215 @@ async def move_ticket_to_column(
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Ticket nao encontrado")
     return {"message": "Ticket movido"}
+
+
+
+# === BULK IMPORT (XLSX) =====================================================
+def _norm(s: str) -> str:
+    """Lowercase + strip + collapse spaces — used to compare tag/column names."""
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+@router.post("/clients/import-xlsx")
+async def import_clients_xlsx(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """One-shot import of a `.xlsx` contact backup into the company.
+
+    Expected columns (case-insensitive): `name`, `Telefone`, `email`,
+    `tags e Kambam`. Each entry in the last column is matched against the
+    company's existing `tags` (added to client.tags) or `kanban_columns`
+    (a single ticket is created/updated to anchor the client in the kanban
+    board on the latest matching column). Duplicates by phone (digits-only)
+    are merged: name/email/tags get refreshed from the file.
+
+    Restricted to owners/admins of the calling company.
+    """
+    role = (user.get("role") or "").lower()
+    if role not in ("super_admin", "superadmin", "company_admin", "owner"):
+        raise HTTPException(status_code=403, detail="Apenas administradores podem importar contatos")
+
+    company_id = user["company_id"]
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    try:
+        import pandas as pd  # local import keeps cold-start light
+        df = pd.read_excel(io.BytesIO(raw))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Falha ao ler XLSX: {e}")
+
+    # Normalize headers — accept upper/lowercase variations
+    cols = {c.lower().strip(): c for c in df.columns}
+    name_col = cols.get("name") or cols.get("nome")
+    phone_col = cols.get("telefone") or cols.get("phone")
+    email_col = cols.get("email") or cols.get("e-mail")
+    tags_col = cols.get("tags e kambam") or cols.get("tags") or cols.get("tags e kanban")
+    if not (name_col and phone_col):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Colunas obrigatorias ausentes (esperado: name, Telefone). Encontradas: {list(df.columns)}",
+        )
+
+    # Pre-load the company tags + kanban columns so we can match by name
+    tags_docs = await db.tags.find({"company_id": company_id}, {"_id": 0}).to_list(2000)
+    cols_docs = await db.kanban_columns.find({"company_id": company_id}, {"_id": 0}).to_list(500)
+    tags_by_name = {_norm(t["name"]): t for t in tags_docs}
+    cols_by_name = {_norm(c["name"]): c for c in cols_docs}
+
+    # Cache existing clients (digits-only phone -> client doc)
+    existing = {}
+    async for c in db.clients.find({"company_id": company_id}, {"_id": 0}):
+        d = normalize_phone(c.get("phone"))
+        if d:
+            existing[d] = c
+
+    created = 0
+    updated = 0
+    skipped_no_phone = 0
+    tickets_created = 0
+    tickets_updated = 0
+    unknown_labels: dict[str, int] = {}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for _, row in df.iterrows():
+        name = str(row[name_col]).strip() if row[name_col] is not None and str(row[name_col]) != "nan" else ""
+        phone_raw = "" if row[phone_col] is None else str(row[phone_col]).strip()
+        # pandas may store ints — kill the trailing `.0`
+        if phone_raw.endswith(".0"):
+            phone_raw = phone_raw[:-2]
+        digits = normalize_phone(phone_raw)
+        if not digits:
+            skipped_no_phone += 1
+            continue
+
+        email_val = None
+        if email_col is not None:
+            ev = row[email_col]
+            if ev is not None and str(ev) != "nan" and str(ev).strip():
+                email_val = str(ev).strip()
+
+        labels: list[str] = []
+        if tags_col is not None:
+            tv = row[tags_col]
+            if tv is not None and str(tv) != "nan":
+                labels = [s.strip() for s in str(tv).split(",") if s.strip()]
+
+        # Split labels into tag-names vs kanban-column matches
+        matched_tags: list[str] = []      # tag names (will land in client.tags)
+        matched_columns: list[dict] = []  # kanban_columns docs
+        for lbl in labels:
+            key = _norm(lbl)
+            if key in tags_by_name:
+                matched_tags.append(tags_by_name[key]["name"])
+            elif key in cols_by_name:
+                matched_columns.append(cols_by_name[key])
+            else:
+                unknown_labels[lbl] = unknown_labels.get(lbl, 0) + 1
+                # Default behaviour: still keep the label as a free-form tag so
+                # the data isn't lost — admins can clean it up later.
+                matched_tags.append(lbl)
+
+        # Pick the LAST kanban column listed as the anchor (most-recent stage)
+        anchor_col = matched_columns[-1] if matched_columns else None
+
+        existing_client = existing.get(digits)
+        if existing_client:
+            # Merge: union tags, refresh name/email if non-empty
+            cur_tags = list(existing_client.get("tags") or [])
+            merged_tags = cur_tags[:]
+            for t in matched_tags:
+                if t not in merged_tags:
+                    merged_tags.append(t)
+            update_set: dict = {"tags": merged_tags, "updated_at": now_iso}
+            if name:
+                update_set["name"] = name
+            if email_val:
+                update_set["email"] = email_val
+            await db.clients.update_one(
+                {"id": existing_client["id"], "company_id": company_id},
+                {"$set": update_set},
+            )
+            client_id = existing_client["id"]
+            client_name = name or existing_client.get("name") or phone_raw
+            client_phone = existing_client.get("phone") or phone_raw
+            updated += 1
+        else:
+            client_id = str(uuid.uuid4())
+            doc = {
+                "id": client_id,
+                "company_id": company_id,
+                "name": name or phone_raw,
+                "phone": phone_raw,
+                "email": email_val,
+                "person_type": "fisica",
+                "tags": matched_tags,
+                "total_appointments": 0,
+                "created_at": now_iso,
+                "created_via": "xlsx_import",
+            }
+            await db.clients.insert_one(doc)
+            existing[digits] = {**doc}
+            client_name = name or phone_raw
+            client_phone = phone_raw
+            created += 1
+
+        # Anchor in kanban (only when at least one matched column)
+        if anchor_col:
+            t_existing = await db.tickets.find_one(
+                {"company_id": company_id, "client_id": client_id},
+                {"_id": 0, "id": 1},
+            )
+            if t_existing:
+                await db.tickets.update_one(
+                    {"id": t_existing["id"]},
+                    {"$set": {
+                        "kanban_column_id": anchor_col["id"],
+                        "customer_name": client_name,
+                        "customer_phone": client_phone,
+                        "updated_at": now_iso,
+                    }},
+                )
+                tickets_updated += 1
+            else:
+                t_id = str(uuid.uuid4())
+                tnum = await next_ticket_number(db, company_id)
+                await db.tickets.insert_one({
+                    "id": t_id,
+                    "ticket_number": tnum,
+                    "company_id": company_id,
+                    "client_id": client_id,
+                    "customer_name": client_name,
+                    "customer_phone": client_phone,
+                    "customer_email": email_val,
+                    "status": "aberto",
+                    "priority": "media",
+                    "channel": "import",
+                    "description": "Importado via XLSX",
+                    "assigned_to": None,
+                    "messages": [],
+                    "tags": [],
+                    "value": 0.0,
+                    "kanban_column_id": anchor_col["id"],
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                })
+                tickets_created += 1
+
+    # Top-N unknown labels for the report
+    top_unknown = sorted(unknown_labels.items(), key=lambda x: -x[1])[:30]
+
+    return {
+        "rows_total": int(len(df)),
+        "created": created,
+        "updated": updated,
+        "skipped_no_phone": skipped_no_phone,
+        "tickets_created": tickets_created,
+        "tickets_updated": tickets_updated,
+        "unknown_labels_count": len(unknown_labels),
+        "unknown_labels_top": [{"label": k, "count": v} for k, v in top_unknown],
+    }
