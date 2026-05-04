@@ -11,6 +11,14 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-04 — Importação XLSX completa: modelo padrão + birth_date + remoção do Agendar
+- **Novo endpoint** `GET /api/crm/clients/import-xlsx-template` — retorna `.xlsx` pronto pra preencher com 2 abas:
+  - `clientes`: 14 colunas (name, Telefone, email, **data de nascimento**, tipo de pessoa, cpf, cnpj, razão social, cep, endereço, cidade, estado, tags e Kambam, observações) + 2 linhas de exemplo (1 PF + 1 PJ).
+  - `instrucoes`: documentação coluna a coluna (obrigatório? formato? defaults).
+- **Importador estendido** (`POST /api/crm/clients/import-xlsx`) — agora reconhece todos os 14 campos com aliases PT/EN; person_type vira automaticamente `juridica` se houver CNPJ; birth_date aceita Timestamp do Excel ou string ISO. Validado E2E: importou template → todos os campos persistidos em `db.clients`.
+- **UI**: novo botão `Baixar modelo` em *Clientes / Leads* (Dashboard.js), ao lado do `Importar XLSX`. Tooltip explicativo. Faz download via blob (com JWT).
+- **Removido**: botão `Agendar` do cadastro de cliente (a pedido). Estados `bookingClientId`, função `handleBookFromClient` e `BookFromClientForm` inline removidos. Agendamento permanece disponível normalmente em Atendimentos / Agenda.
+
 ### 2026-05-03 — Fix: "Erro anexo" ao clicar Abrir PDF no modal Anexar Orçamento
 - **Causa raiz**: o botão "Abrir PDF" no `QuoteAttachModal` era um `<a href="/api/quotes/{id}/pdf" target="_blank">`. Browser não anexa o `Authorization: Bearer <token>` em cliques de anchor → backend retornava 401/403 e o usuário via "erro ao abrir anexo".
 - **Mesmo padrão errado** havia em `AtendimentosPage.js` na bolha de chat (PDF anexado por mensagem de "documento") — clicar no card abria a URL direto sem auth.

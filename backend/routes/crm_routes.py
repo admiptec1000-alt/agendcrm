@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
 from auth import get_current_user
@@ -1787,6 +1788,83 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
+@router.get("/clients/import-xlsx-template")
+async def download_clients_import_template(user: dict = Depends(get_current_user)):
+    """Return a ready-to-fill `.xlsx` template with the columns the importer
+    accepts. The first sheet has 2 example rows (PJ + PF) so the operator
+    sees how to format `data de nascimento`, `tags e Kambam`, CPF/CNPJ etc.
+    A second sheet documents each column."""
+    import pandas as pd
+    columns = [
+        "name", "Telefone", "email", "data de nascimento",
+        "tipo de pessoa", "cpf", "cnpj", "razao social",
+        "cep", "endereco", "cidade", "estado",
+        "tags e Kambam", "observacoes",
+    ]
+    examples = [
+        {
+            "name": "Joao Silva",
+            "Telefone": "5511988887777",
+            "email": "joao@example.com",
+            "data de nascimento": "1990-05-12",
+            "tipo de pessoa": "fisica",
+            "cpf": "123.456.789-00",
+            "cnpj": "",
+            "razao social": "",
+            "cep": "01310-100",
+            "endereco": "Av. Paulista, 1000",
+            "cidade": "Sao Paulo",
+            "estado": "SP",
+            "tags e Kambam": "Novo Cliente, PROSPECTAR",
+            "observacoes": "Indicado por Maria",
+        },
+        {
+            "name": "ACME Industria LTDA",
+            "Telefone": "5562999998888",
+            "email": "contato@acme.com.br",
+            "data de nascimento": "",
+            "tipo de pessoa": "juridica",
+            "cpf": "",
+            "cnpj": "07.393.407/0001-75",
+            "razao social": "ACME Industria LTDA",
+            "cep": "75252-320",
+            "endereco": "Rua das Flores, 200",
+            "cidade": "Senador Canedo",
+            "estado": "GO",
+            "tags e Kambam": "WON - PROP. FECHADA",
+            "observacoes": "",
+        },
+    ]
+    docs = [
+        {"coluna": "name",                "obrigatorio": "SIM",  "descricao": "Nome do cliente / razao social abreviada"},
+        {"coluna": "Telefone",            "obrigatorio": "SIM",  "descricao": "Com DDI 55, somente digitos. Ex.: 5511988887777"},
+        {"coluna": "email",               "obrigatorio": "nao",  "descricao": "E-mail do contato"},
+        {"coluna": "data de nascimento",  "obrigatorio": "nao",  "descricao": "ISO YYYY-MM-DD ou data do Excel. Ex.: 1990-05-12"},
+        {"coluna": "tipo de pessoa",      "obrigatorio": "nao",  "descricao": "fisica | juridica (default: fisica, ou juridica se houver CNPJ)"},
+        {"coluna": "cpf",                 "obrigatorio": "nao",  "descricao": "CPF para PF"},
+        {"coluna": "cnpj",                "obrigatorio": "nao",  "descricao": "CNPJ para PJ"},
+        {"coluna": "razao social",        "obrigatorio": "nao",  "descricao": "Razao social / nome da empresa (PJ)"},
+        {"coluna": "cep",                 "obrigatorio": "nao",  "descricao": "CEP do endereco"},
+        {"coluna": "endereco",            "obrigatorio": "nao",  "descricao": "Logradouro completo"},
+        {"coluna": "cidade",              "obrigatorio": "nao",  "descricao": "Cidade"},
+        {"coluna": "estado",              "obrigatorio": "nao",  "descricao": "UF (2 letras). Ex.: SP, GO"},
+        {"coluna": "tags e Kambam",       "obrigatorio": "nao",  "descricao": "Lista separada por virgula. Cada item bate com uma Tag ou Coluna do Kanban da empresa (case-insensitive)."},
+        {"coluna": "observacoes",         "obrigatorio": "nao",  "descricao": "Texto livre que vai para o campo Observacoes do cliente"},
+    ]
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        pd.DataFrame(examples, columns=columns).to_excel(
+            writer, index=False, sheet_name="clientes"
+        )
+        pd.DataFrame(docs).to_excel(writer, index=False, sheet_name="instrucoes")
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="modelo-importacao-clientes.xlsx"'},
+    )
+
+
 @router.post("/clients/import-xlsx")
 async def import_clients_xlsx(
     file: UploadFile = File(...),
@@ -1819,12 +1897,28 @@ async def import_clients_xlsx(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Falha ao ler XLSX: {e}")
 
-    # Normalize headers — accept upper/lowercase variations
+    # Normalize headers — accept upper/lowercase + a few aliases (PT/EN)
     cols = {c.lower().strip(): c for c in df.columns}
-    name_col = cols.get("name") or cols.get("nome")
-    phone_col = cols.get("telefone") or cols.get("phone")
-    email_col = cols.get("email") or cols.get("e-mail")
-    tags_col = cols.get("tags e kambam") or cols.get("tags") or cols.get("tags e kanban")
+    def pick(*aliases):
+        for a in aliases:
+            if a in cols:
+                return cols[a]
+        return None
+    name_col         = pick("name", "nome")
+    phone_col        = pick("telefone", "phone", "celular")
+    email_col        = pick("email", "e-mail")
+    tags_col         = pick("tags e kambam", "tags", "tags e kanban", "tag")
+    birth_date_col   = pick("data de nascimento", "data_nascimento", "birth_date", "nascimento")
+    person_type_col  = pick("tipo de pessoa", "person_type", "tipo")
+    cpf_col          = pick("cpf")
+    cnpj_col         = pick("cnpj")
+    company_name_col = pick("razao social", "razão social", "company_name", "nome da empresa", "empresa")
+    cep_col          = pick("cep")
+    address_col      = pick("endereco", "endereço", "address")
+    city_col         = pick("cidade", "city")
+    state_col        = pick("estado", "state", "uf")
+    notes_col        = pick("observacoes", "observações", "notes", "obs")
+
     if not (name_col and phone_col):
         raise HTTPException(
             status_code=400,
@@ -1870,6 +1964,53 @@ async def import_clients_xlsx(
             if ev is not None and str(ev) != "nan" and str(ev).strip():
                 email_val = str(ev).strip()
 
+        # Optional extra fields. We trust the spreadsheet — admins can clean
+        # up later from the contact panel. `birth_date` is normalized to
+        # ISO YYYY-MM-DD when pandas parsed it as a Timestamp.
+        def cell(col):
+            if col is None:
+                return None
+            v = row[col]
+            if v is None:
+                return None
+            s = str(v).strip()
+            if not s or s.lower() == "nan":
+                return None
+            return s
+
+        birth_val = None
+        if birth_date_col is not None:
+            v = row[birth_date_col]
+            if v is not None and str(v).strip() and str(v).lower() != "nan":
+                # pandas may parse the cell as a Timestamp — keep ISO date only
+                try:
+                    import pandas as _pd
+                    if isinstance(v, _pd.Timestamp):
+                        birth_val = v.date().isoformat()
+                    else:
+                        birth_val = str(v).strip()
+                except Exception:
+                    birth_val = str(v).strip()
+
+        person_type_val = (cell(person_type_col) or "").lower()
+        if person_type_val not in ("fisica", "juridica"):
+            person_type_val = "juridica" if cell(cnpj_col) else "fisica"
+
+        extras = {
+            "person_type": person_type_val,
+            "cpf": cell(cpf_col),
+            "cnpj": cell(cnpj_col),
+            "company_name": cell(company_name_col),
+            "cep": cell(cep_col),
+            "address": cell(address_col),
+            "city": cell(city_col),
+            "state": cell(state_col),
+            "notes": cell(notes_col),
+            "birth_date": birth_val,
+        }
+        # Drop None fields so we don't overwrite existing data with blanks
+        extras_nonnull = {k: v for k, v in extras.items() if v}
+
         labels: list[str] = []
         if tags_col is not None:
             tv = row[tags_col]
@@ -1907,6 +2048,7 @@ async def import_clients_xlsx(
                 update_set["name"] = name
             if email_val:
                 update_set["email"] = email_val
+            update_set.update(extras_nonnull)
             await db.clients.update_one(
                 {"id": existing_client["id"], "company_id": company_id},
                 {"$set": update_set},
@@ -1923,11 +2065,12 @@ async def import_clients_xlsx(
                 "name": name or phone_raw,
                 "phone": phone_raw,
                 "email": email_val,
-                "person_type": "fisica",
+                "person_type": person_type_val or "fisica",
                 "tags": matched_tags,
                 "total_appointments": 0,
                 "created_at": now_iso,
                 "created_via": "xlsx_import",
+                **extras_nonnull,
             }
             await db.clients.insert_one(doc)
             existing[digits] = {**doc}

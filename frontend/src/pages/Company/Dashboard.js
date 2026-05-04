@@ -994,7 +994,6 @@ const ClientsPage = () => {
   const [editingClient, setEditingClient] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [historyByPhone, setHistoryByPhone] = useState({});
-  const [bookingClientId, setBookingClientId] = useState(null);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
   const [importing, setImporting] = useState(false);
@@ -1021,10 +1020,8 @@ const ClientsPage = () => {
   const handleToggleExpand = (client) => {
     if (expandedId === client.id) {
       setExpandedId(null);
-      setBookingClientId(null);
     } else {
       setExpandedId(client.id);
-      setBookingClientId(null);
       if (!historyByPhone[client.phone]) loadHistory(client.phone);
     }
   };
@@ -1044,9 +1041,7 @@ const ClientsPage = () => {
         const newClient = res.data;
         if (newClient?.id) {
           setExpandedId(newClient.id);
-          setBookingClientId(newClient.id);
           if (!historyByPhone[newClient.phone]) loadHistory(newClient.phone);
-          toast('Deseja agendar agora?', { description: 'Preencha os dados abaixo' });
         }
       }
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
@@ -1060,20 +1055,6 @@ const ClientsPage = () => {
       setExpandedId(null);
       load();
     } catch (e) { toast.error('Erro ao excluir'); }
-  };
-
-  const handleBookFromClient = async (client, bookForm) => {
-    try {
-      await schedulingAPI.createAppointment({
-        customer_name: client.name,
-        customer_phone: client.phone,
-        customer_email: client.email || undefined,
-        ...bookForm
-      });
-      toast.success('Agendamento criado!');
-      setBookingClientId(null);
-      loadHistory(client.phone);
-    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao agendar'); }
   };
 
   const handleImportXlsx = async (e) => {
@@ -1103,6 +1084,22 @@ const ClientsPage = () => {
     }
   };
 
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await api.get('/crm/clients/import-xlsx-template', { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'modelo-importacao-clientes.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      toast.error('Falha ao baixar modelo: ' + (err?.response?.data?.detail || err.message));
+    }
+  };
+
   const STATUS_COLORS = { confirmado: 'bg-emerald-100 text-emerald-700', pendente: 'bg-amber-100 text-amber-700', cancelado: 'bg-red-100 text-red-700', concluido: 'bg-blue-100 text-blue-700' };
 
   return (
@@ -1119,11 +1116,20 @@ const ClientsPage = () => {
             data-testid="import-clients-input"
           />
           <button
+            onClick={handleDownloadTemplate}
+            className="px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm flex items-center gap-2 justify-center"
+            data-testid="download-template-btn"
+            title="Baixe um modelo .xlsx pronto para preencher"
+          >
+            <Download className="w-4 h-4" />
+            Baixar modelo
+          </button>
+          <button
             onClick={() => importInputRef.current?.click()}
             disabled={importing}
             className="px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm flex items-center gap-2 justify-center disabled:opacity-60"
             data-testid="import-clients-btn"
-            title="Importar contatos de uma planilha .xlsx (colunas: name, Telefone, email, tags e Kambam)"
+            title="Importar contatos de uma planilha .xlsx (use o modelo padrão para os campos completos)"
           >
             <Upload className="w-4 h-4" />
             {importing ? 'Importando…' : 'Importar XLSX'}
@@ -1172,7 +1178,6 @@ const ClientsPage = () => {
         {clients.map(c => {
           const isExpanded = expandedId === c.id;
           const history = historyByPhone[c.phone] || [];
-          const isBookingHere = bookingClientId === c.id;
           return (
             <div key={c.id} className={`rounded-xl border bg-white transition-all ${isExpanded ? 'border-primary/40 shadow-sm' : 'border-slate-200'}`} data-testid={`client-card-${c.id}`}>
               <button onClick={() => handleToggleExpand(c)} className="w-full p-3 sm:p-4 flex items-center gap-3 text-left" data-testid={`client-row-${c.id}`}>
@@ -1196,9 +1201,6 @@ const ClientsPage = () => {
                 <div className="border-t border-slate-100 p-3 sm:p-4 space-y-3 animate-fade-in" data-testid={`client-expanded-${c.id}`}>
                   {/* Action buttons */}
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={() => setBookingClientId(isBookingHere ? null : c.id)} className="btn-primary text-sm flex items-center gap-1.5" data-testid={`book-from-client-btn-${c.id}`}>
-                      <Calendar className="w-4 h-4" /> {isBookingHere ? 'Cancelar' : 'Agendar'}
-                    </button>
                     <button onClick={() => { setEditingClient(c); setShowAdd(true); }} className="btn-secondary text-sm flex items-center gap-1.5" data-testid={`edit-client-btn-${c.id}`}>
                       <Pencil className="w-4 h-4" /> Editar
                     </button>
@@ -1242,14 +1244,6 @@ const ClientsPage = () => {
                       </div>
                     );
                   })()}
-
-                  {/* Inline Booking Form */}
-                  {isBookingHere && (
-                    <div className="bg-primary/5 border border-primary/20 rounded-xl p-3" data-testid={`inline-booking-${c.id}`}>
-                      <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Novo Agendamento</p>
-                      <BookFromClientForm services={services} professionals={professionals} onSave={(form) => handleBookFromClient(c, form)} />
-                    </div>
-                  )}
 
                   {/* History */}
                   <div>
