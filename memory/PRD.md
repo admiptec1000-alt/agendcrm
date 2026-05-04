@@ -11,6 +11,12 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-03 — Fix: "Erro anexo" ao clicar Abrir PDF no modal Anexar Orçamento
+- **Causa raiz**: o botão "Abrir PDF" no `QuoteAttachModal` era um `<a href="/api/quotes/{id}/pdf" target="_blank">`. Browser não anexa o `Authorization: Bearer <token>` em cliques de anchor → backend retornava 401/403 e o usuário via "erro ao abrir anexo".
+- **Mesmo padrão errado** havia em `AtendimentosPage.js` na bolha de chat (PDF anexado por mensagem de "documento") — clicar no card abria a URL direto sem auth.
+- **Fix**: substituí ambos `<a href>` por `<button>` que faz `api.get(..., responseType:'blob')` (com JWT), cria `Blob URL` e abre em nova aba via `window.open(url)`. Mesmo padrão usado pelo PreviewModal.
+- **Validado**: click no "Abrir PDF" → HTTP 200 logado no network → `window.open` chamado com blob URL → PDF abre em nova aba. Sem toast de erro.
+
 ### 2026-05-03 — Fix crítico: "Erro ao baixar PDF 404" (root cause encontrado)
 - **Causa raiz (real)**: no arquivo `OrcamentosPage.js`, `handlePreview()` criava o objeto `quote` passado ao `PreviewModal` SEM o campo `id` (só `quote_number`). Os botões "Baixar PDF" e "Abrir PDF" montavam a URL `/quotes/${quote.id}/pdf` → viravam `/quotes/undefined/pdf` → HTTP 404. **Não** era versão antiga do backend em produção — o endpoint funciona em ambos.
 - **Fix**: `setPreviewing({ id, html: data.html, quote: { id, quote_number: data.quote_number } })` agora inclui o `id`. Também adicionei guard nos handlers `openPdf`/`downloadPdf` que mostra toast amigável caso id esteja ausente.

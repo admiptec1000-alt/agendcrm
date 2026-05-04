@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { crmAPI, channelsAPI, schedulingAPI } from '../../services/api';
+import api from '../../services/api';
 import { toast } from 'sonner';
 import {
   Search, Plus, X, Phone, Mail, Send, Paperclip, Smile, Mic,
@@ -810,12 +811,21 @@ const AtendimentosPage = () => {
                     <p className="text-[10px] font-bold text-emerald-700 mb-0.5">{msg.sender_name || 'Admin'}</p>
                   )}
                   {msg.type === 'document' && msg.attachment_kind === 'quote_pdf' && (
-                    <a
-                      href={msg.quote_id ? `${process.env.REACT_APP_BACKEND_URL}/api/quotes/${msg.quote_id}/pdf` : '#'}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(e) => { if (!msg.quote_id) e.preventDefault(); }}
-                      className="flex items-center gap-2 bg-white/70 border border-emerald-200 rounded p-2 mb-1 hover:bg-white"
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!msg.quote_id) return;
+                        try {
+                          const r = await api.get(`/quotes/${msg.quote_id}/pdf`, { responseType: 'blob' });
+                          const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+                          window.open(url, '_blank');
+                          setTimeout(() => URL.revokeObjectURL(url), 60000);
+                        } catch (e) {
+                          toast.error('Erro ao abrir anexo: ' + (e?.response?.data?.detail || e.message));
+                        }
+                      }}
+                      disabled={!msg.quote_id}
+                      className="w-full text-left flex items-center gap-2 bg-white/70 border border-emerald-200 rounded p-2 mb-1 hover:bg-white disabled:opacity-60"
                       data-testid={`chat-quote-attachment-${msg.id}`}
                     >
                       <FileText className="w-5 h-5 text-emerald-700 flex-shrink-0" />
@@ -823,7 +833,7 @@ const AtendimentosPage = () => {
                         <p className="text-xs font-medium text-emerald-800 truncate">{msg.attachment_filename || 'orcamento.pdf'}</p>
                         <p className="text-[10px] text-slate-500">PDF anexado</p>
                       </div>
-                    </a>
+                    </button>
                   )}
                   {/* Inbound WhatsApp media — rendered inline so the operator
                      can actually play/view it without downloading. */}

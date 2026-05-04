@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { quotesAPI } from '../../services/api';
+import api from '../../services/api';
 import { toast } from 'sonner';
 import { X, FileText, Send, Plus, Eye, Loader2, ExternalLink } from 'lucide-react';
 
@@ -95,6 +96,23 @@ const QuoteAttachModal = ({ ticket, connections, onClose, onSent, initialQuoteId
     sessionStorage.setItem('quote_prefill_client_id', ticket.client_id || '');
     sessionStorage.setItem('quote_prefill_ticket_id', ticket.id || '');
     window.open('/' + (window.location.pathname.split('/')[1] || '') + '/dashboard?tab=orcamentos', '_blank');
+  };
+
+  // Open the PDF in a new tab. We cannot use a plain `<a href>` because the
+  // backend endpoint requires the Authorization header — browsers don't
+  // attach it to anchor clicks. Fetch via axios (which injects the JWT),
+  // turn the bytes into a blob URL and open that in a new tab.
+  const handleOpenPdf = async () => {
+    if (!selectedQuote?.id) return;
+    try {
+      const response = await api.get(`/quotes/${selectedQuote.id}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      toast.error('Erro ao abrir PDF: ' + (e?.response?.data?.detail || e.message));
+    }
   };
 
   return createPortal(
@@ -214,15 +232,14 @@ const QuoteAttachModal = ({ ticket, connections, onClose, onSent, initialQuoteId
               </label>
               <div className="flex justify-between items-center gap-2 pt-1">
                 {selectedQuote && (
-                  <a
-                    href={quotesAPI.pdfUrl(selectedQuote.id)}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={handleOpenPdf}
                     className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1"
                     data-testid="download-pdf-link"
                   >
                     <ExternalLink className="w-3 h-3" /> Abrir PDF
-                  </a>
+                  </button>
                 )}
                 <div className="flex-1" />
                 <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600">Cancelar</button>
