@@ -11,6 +11,11 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-03 — Fix crítico: "Erro ao baixar PDF 404" (root cause encontrado)
+- **Causa raiz (real)**: no arquivo `OrcamentosPage.js`, `handlePreview()` criava o objeto `quote` passado ao `PreviewModal` SEM o campo `id` (só `quote_number`). Os botões "Baixar PDF" e "Abrir PDF" montavam a URL `/quotes/${quote.id}/pdf` → viravam `/quotes/undefined/pdf` → HTTP 404. **Não** era versão antiga do backend em produção — o endpoint funciona em ambos.
+- **Fix**: `setPreviewing({ id, html: data.html, quote: { id, quote_number: data.quote_number } })` agora inclui o `id`. Também adicionei guard nos handlers `openPdf`/`downloadPdf` que mostra toast amigável caso id esteja ausente.
+- **Validado**: click no botão "Baixar PDF" no preview retorna HTTP 200 + PDF binário real.
+
 ### 2026-05-03 — Feature: Áudio/Imagem/Vídeo/Documento do WhatsApp tocável no chat
 - **Causa raiz**: o microserviço só gravava `"[Audio]"` como texto — nunca baixava o arquivo. O operador nunca tinha como ouvir.
 - **Implementado** em 3 camadas:

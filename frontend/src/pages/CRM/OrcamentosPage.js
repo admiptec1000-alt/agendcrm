@@ -607,7 +607,12 @@ const QuotesTab = () => {
       // Use preview-pdf-html so the preview MATCHES the downloaded PDF
       // byte-for-byte (same CSS, header/footer, A4 paper visual).
       const { data } = await quotesAPI.previewPdfHtml(id);
-      setPreviewing({ id, html: data.html, quote: { quote_number: data.quote_number } });
+      // IMPORTANT: include `id` inside the quote payload — the modal's
+      // "Baixar PDF" / "Abrir PDF" buttons rely on `quote.id` to build the
+      // `/quotes/{id}/pdf` URL. Without it, the URL became `/quotes//pdf`
+      // and the server returned 404 ("Erro ao baixar PDF: Request failed
+      // with status code 404") — exact bug reported by Incinera 03/05/2026.
+      setPreviewing({ id, html: data.html, quote: { id, quote_number: data.quote_number } });
     } catch (e) {
       alert('Erro ao renderizar: ' + (e?.response?.data?.detail || e.message));
     }
@@ -1002,6 +1007,10 @@ const PreviewModal = ({ html, quote, onClose }) => {
   // document.write (which produced a blank page in Safari and strict CSP
   // environments). Also provides download button.
   const openPdf = async () => {
+    if (!quote?.id) {
+      toast.error('Nao foi possivel abrir o PDF: id do orcamento ausente');
+      return;
+    }
     setDownloading(true);
     try {
       const response = await api.get(`/quotes/${quote.id}/pdf`, { responseType: 'blob' });
@@ -1018,6 +1027,10 @@ const PreviewModal = ({ html, quote, onClose }) => {
   };
 
   const downloadPdf = async () => {
+    if (!quote?.id) {
+      toast.error('Nao foi possivel baixar o PDF: id do orcamento ausente');
+      return;
+    }
     setDownloading(true);
     try {
       const response = await api.get(`/quotes/${quote.id}/pdf`, { responseType: 'blob' });
