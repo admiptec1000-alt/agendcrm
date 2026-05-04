@@ -333,12 +333,33 @@ const buildQuillImageHandler = () => function () {
 
 const TemplateMultiTabEditor = ({ editing, setEditing }) => {
   const [tab, setTab] = useState('content');
+  const [a4Open, setA4Open] = useState(false);
+  const [a4Html, setA4Html] = useState('');
+  const [a4Loading, setA4Loading] = useState(false);
   const fields = {
     content: 'content',
     header: 'header_html',
     footer: 'footer_html',
   };
   const heights = { content: 320, header: 140, footer: 140 };
+
+  const handleOpenA4 = async () => {
+    setA4Loading(true);
+    setA4Open(true);
+    try {
+      const { data } = await api.post('/quotes/templates/preview-html', {
+        content: editing?.content || '',
+        header_html: editing?.header_html || '',
+        footer_html: editing?.footer_html || '',
+      });
+      setA4Html(data.html);
+    } catch (e) {
+      toast.error('Falha ao gerar preview A4: ' + (e?.response?.data?.detail || e.message));
+      setA4Open(false);
+    } finally {
+      setA4Loading(false);
+    }
+  };
 
   // IMPORTANT: render the 3 Quill instances in parallel and toggle visibility
   // via CSS. Swapping a single Quill's `value` prop on tab switch causes
@@ -362,23 +383,34 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
   return (
     <div data-testid="template-multi-tab-editor">
       {/* Sub-tabs */}
-      <div className="flex gap-1 mb-2 border-b border-slate-200">
-        {TEMPLATE_TABS.map(t => {
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              data-testid={`template-subtab-${t.key}`}
-              className={`px-3 py-1.5 text-xs font-medium border-b-2 transition ${
-                active ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {t.label}
-            </button>
-          );
-        })}
+      <div className="flex items-end justify-between gap-2 mb-2 border-b border-slate-200">
+        <div className="flex gap-1">
+          {TEMPLATE_TABS.map(t => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                data-testid={`template-subtab-${t.key}`}
+                className={`px-3 py-1.5 text-xs font-medium border-b-2 transition ${
+                  active ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={handleOpenA4}
+          className="mb-1 px-2.5 py-1 text-xs font-medium rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 flex items-center gap-1.5"
+          data-testid="template-preview-a4-btn"
+          title="Veja como a página A4 vai ficar antes de salvar"
+        >
+          <Eye className="w-3.5 h-3.5" /> Pré-visualizar A4
+        </button>
       </div>
       {TEMPLATE_TABS.map(t => {
         const field = fields[t.key];
@@ -406,6 +438,49 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
         {tab === 'header' && 'Aparece no TOPO de TODAS as paginas do PDF. Placeholders funcionam aqui tambem.'}
         {tab === 'footer' && 'Aparece no RODAPE de TODAS as paginas do PDF. Suporta logos, contatos, termos de validade.'}
       </p>
+
+      {a4Open && createPortal(
+        <div
+          className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4"
+          data-testid="template-a4-modal"
+          onClick={() => setA4Open(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-[860px] max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Pré-visualização A4</h3>
+                <p className="text-[11px] text-slate-500">Renderizado com os mesmos paddings do PDF gerado. Nada foi salvo.</p>
+              </div>
+              <button
+                onClick={() => setA4Open(false)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+                aria-label="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden bg-slate-100">
+              {a4Loading ? (
+                <div className="h-full flex items-center justify-center text-slate-400 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" /> Gerando preview…
+                </div>
+              ) : (
+                <iframe
+                  title="A4 preview"
+                  srcDoc={a4Html}
+                  sandbox="allow-same-origin"
+                  className="w-full h-full border-0 bg-slate-100"
+                  data-testid="template-a4-iframe"
+                />
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

@@ -938,6 +938,57 @@ async def preview_pdf_html(qid: str, user=Depends(get_current_user), db: AsyncIO
     return {"html": composed, "quote_number": quote.get("quote_number")}
 
 
+class _TemplatePreviewRequest(BaseModel):
+    content: Optional[str] = ""
+    header_html: Optional[str] = ""
+    footer_html: Optional[str] = ""
+
+
+@router.post("/templates/preview-html")
+async def preview_template_html(
+    body: _TemplatePreviewRequest,
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Render an unsaved template (the Quill-edited HTML) in the same A4-
+    framed wrapper used by `/preview-pdf-html`. Lets the operator see —
+    LIVE inside the template editor — how header / body / footer line up
+    on a real A4 sheet, BEFORE saving anything to the database. No real
+    quote required; uses the company logo and a single placeholder so the
+    layout is realistic."""
+    company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
+    fake_quote_ctx = {
+        "quote_number": "0001 (preview)",
+        "items": [{"description": "Servico exemplo", "quantity": 1, "unit_price": 100.0, "total": 100.0, "unit": "un"}],
+        "freights": [],
+        "items_total": 100.0,
+        "freights_total": 0.0,
+        "total_value": 100.0,
+        "minimum_billing_kg": "",
+        "payment_terms": "30 dias apos emissao",
+        "validity_days": 15,
+        "notes": "Este e um preview do template — nada foi salvo.",
+        "client_name": "Cliente Exemplo LTDA",
+        "client_phone": "5511999990000",
+        "client_email": "cliente@exemplo.com",
+        "client_address": "Rua Exemplo, 123",
+        "client_cnpj": "12.345.678/0001-90",
+        "company_name": company.get("name", ""),
+        "company_phone": company.get("phone", ""),
+        "company_email": company.get("email", ""),
+        "company_address": company.get("address", ""),
+        "company_logo": company.get("logo_url") or company.get("logo", ""),
+    }
+    body_html = _render_template((body.content or ""), fake_quote_ctx)
+    composed = _build_browser_preview_html(
+        body_html,
+        body.header_html or None,
+        body.footer_html or None,
+    )
+    return {"html": composed}
+
+
+
 async def _build_quote_html(qid: str, user, db) -> tuple:
     """Shared helper: returns (html, quote_dict). Raises 404 if not found.
 

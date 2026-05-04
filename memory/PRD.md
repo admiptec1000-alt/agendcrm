@@ -11,6 +11,12 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-04 — Feature: "Pré-visualizar A4" no editor de templates
+- O usuário pediu uma forma de ver o alinhamento cabeçalho/conteúdo/rodapé no formato A4 enquanto monta o template, antes de salvar. Adicionado:
+  - **Endpoint** `POST /api/quotes/templates/preview-html` — recebe `{content, header_html, footer_html}` (rascunho não-salvo), renderiza com placeholders fake (cliente exemplo + 1 item) e devolve HTML com o mesmo wrapper A4 usado pelo `/preview-pdf-html`.
+  - **UI**: botão `Pré-visualizar A4` no canto direito da barra de abas do `TemplateMultiTabEditor`. Abre um modal com iframe sandbox renderizando o template em formato A4 (210×297mm com paddings idênticos ao PDF final).
+- Validado: clicar no botão abre modal, iframe carrega com cabeçalho/conteúdo/rodapé alinhados A4. Sem precisar salvar.
+
 ### 2026-05-04 — Fix: Importador não convertia data BR (DD/MM/YYYY) + migração em produção
 - **Bug**: a planilha do usuário trazia datas no formato BR `20/12/1985`. O importador armazenava a string crua, e o frontend (`new Date('20/12/1985')`) retornava NaN — campo aparecia vazio.
 - **Fix do importador** (`backend/routes/crm_routes.py`): agora aceita `DD/MM/YYYY` e `DD-MM-YYYY`, converte para ISO `YYYY-MM-DD` antes de salvar. Também aceita Timestamp do Excel e ISO já formatado. Validado com a planilha real (179 linhas → 74 com aniversário, todos em ISO).
