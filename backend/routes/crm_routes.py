@@ -1788,6 +1788,70 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
+@router.post("/clients/normalize-birth-dates")
+async def normalize_birth_dates(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """One-shot migration: convert non-ISO `birth_date` values currently in
+    `db.clients` to ISO `YYYY-MM-DD`. Required after the 04/05/2026 fix —
+    contacts imported with a BR-formatted date (DD/MM/YYYY) were stored as
+    a free string and never rendered in the UI. Idempotent: rows already in
+    ISO are left untouched. Restricted to admin/owner of the calling
+    company; only normalizes clients OF THAT company."""
+    role = (user.get("role") or "").lower()
+    if role not in ("super_admin", "superadmin", "company_admin", "owner"):
+        raise HTTPException(status_code=403, detail="Apenas administradores podem executar esta migracao")
+
+    company_id = user["company_id"]
+    cursor = db.clients.find(
+        {"company_id": company_id, "birth_date": {"$exists": True, "$ne": None, "$ne": ""}},
+        {"_id": 0, "id": 1, "birth_date": 1},
+    )
+    converted = 0
+    skipped_already_iso = 0
+    failed: list[dict] = []
+    async for c in cursor:
+        cur = c.get("birth_date")
+        if not isinstance(cur, str):
+            continue
+        s = cur.strip()
+        if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+            skipped_already_iso += 1
+            continue
+        new_iso = None
+        # BR format DD/MM/YYYY (or with -)
+        m = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$", s)
+        if m:
+            d, mo, y = m.group(1), m.group(2), m.group(3)
+            if len(y) == 2:
+                y = ("19" + y) if int(y) > 30 else ("20" + y)
+            try:
+                from datetime import date as _date
+                new_iso = _date(int(y), int(mo), int(d)).isoformat()
+            except Exception:
+                pass
+        if not new_iso:
+            try:
+                import pandas as _pd
+                ts = _pd.to_datetime(s, dayfirst=True, errors="raise")
+                new_iso = ts.date().isoformat()
+            except Exception:
+                failed.append({"id": c["id"], "value": s})
+                continue
+        await db.clients.update_one(
+            {"id": c["id"], "company_id": company_id},
+            {"$set": {"birth_date": new_iso}},
+        )
+        converted += 1
+    return {
+        "converted": converted,
+        "skipped_already_iso": skipped_already_iso,
+        "failed_count": len(failed),
+        "failed_sample": failed[:30],
+    }
+
+
 @router.get("/clients/import-xlsx-template")
 async def download_clients_import_template(user: dict = Depends(get_current_user)):
     """Return a ready-to-fill `.xlsx` template with the columns the importer
@@ -1982,13 +2046,38 @@ async def import_clients_xlsx(
         if birth_date_col is not None:
             v = row[birth_date_col]
             if v is not None and str(v).strip() and str(v).lower() != "nan":
-                # pandas may parse the cell as a Timestamp — keep ISO date only
+                # Normalize to ISO YYYY-MM-DD so the frontend can render it
+                # via `new Date(...)`. We accept:
+                #   * pandas Timestamp (when Excel cell was a real date)
+                #   * BR string DD/MM/YYYY or DD-MM-YYYY (most common)
+                #   * ISO string YYYY-MM-DD (already normalized)
+                # Anything else is stored verbatim as a last-resort.
                 try:
                     import pandas as _pd
                     if isinstance(v, _pd.Timestamp):
                         birth_val = v.date().isoformat()
                     else:
-                        birth_val = str(v).strip()
+                        s = str(v).strip()
+                        # try BR format DD/MM/YYYY (or DD-MM-YYYY)
+                        m = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$", s)
+                        if m:
+                            d, mo, y = m.group(1), m.group(2), m.group(3)
+                            if len(y) == 2:
+                                y = ("19" + y) if int(y) > 30 else ("20" + y)
+                            try:
+                                from datetime import date as _date
+                                birth_val = _date(int(y), int(mo), int(d)).isoformat()
+                            except Exception:
+                                birth_val = s
+                        elif re.match(r"^\d{4}-\d{2}-\d{2}", s):
+                            birth_val = s[:10]
+                        else:
+                            # try pandas as last resort
+                            try:
+                                ts = _pd.to_datetime(s, dayfirst=True, errors="raise")
+                                birth_val = ts.date().isoformat()
+                            except Exception:
+                                birth_val = s
                 except Exception:
                     birth_val = str(v).strip()
 

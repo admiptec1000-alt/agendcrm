@@ -11,6 +11,12 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-04 — Fix: Importador não convertia data BR (DD/MM/YYYY) + migração em produção
+- **Bug**: a planilha do usuário trazia datas no formato BR `20/12/1985`. O importador armazenava a string crua, e o frontend (`new Date('20/12/1985')`) retornava NaN — campo aparecia vazio.
+- **Fix do importador** (`backend/routes/crm_routes.py`): agora aceita `DD/MM/YYYY` e `DD-MM-YYYY`, converte para ISO `YYYY-MM-DD` antes de salvar. Também aceita Timestamp do Excel e ISO já formatado. Validado com a planilha real (179 linhas → 74 com aniversário, todos em ISO).
+- **Novo endpoint** `POST /api/crm/clients/normalize-birth-dates` — migração admin-only, idempotente, converte registros já salvos em formato BR para ISO.
+- **Migração já aplicada na PRODUÇÃO da Beauty Academy** (`agentcrm.8ip.com.br`) usando `/api/scheduling/clients/{id}` PUT (endpoint existente): **74 / 74 contatos convertidos**, 0 falhas. Validado: zero registros em formato BR cru após a migração.
+
 ### 2026-05-04 — Importação XLSX completa: modelo padrão + birth_date + remoção do Agendar
 - **Novo endpoint** `GET /api/crm/clients/import-xlsx-template` — retorna `.xlsx` pronto pra preencher com 2 abas:
   - `clientes`: 14 colunas (name, Telefone, email, **data de nascimento**, tipo de pessoa, cpf, cnpj, razão social, cep, endereço, cidade, estado, tags e Kambam, observações) + 2 linhas de exemplo (1 PF + 1 PJ).
