@@ -4,6 +4,7 @@ from database import get_database
 from auth import get_current_user
 from pydantic import BaseModel
 from typing import Optional, List
+import base64
 import uuid
 import httpx
 import os
@@ -12,11 +13,95 @@ import logging
 from datetime import datetime, timezone, timedelta
 from counters import next_ticket_number
 from clients_link import find_or_create_client_by_phone
+from routes.upload_routes import put_object, APP_NAME
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 logger = logging.getLogger(__name__)
 
 WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+
+
+# Extensions for inbound WhatsApp media (used when we store the file in
+# object storage and persist a URL on the message). Keep this small — we
+# only need enough to help the browser pick a decoder / renderer.
+_MEDIA_EXT_BY_KIND = {
+    "audio": "ogg",      # WhatsApp ships audio as Opus-in-Ogg
+    "image": "jpg",
+    "video": "mp4",
+    "document": "bin",
+    "sticker": "webp",
+}
+
+
+def _ext_for_mime(mimetype: Optional[str], kind: str) -> str:
+    """Pick a best-effort file extension for the MIME / media-kind combo."""
+    if mimetype:
+        mt = mimetype.lower().split(";")[0].strip()
+        mapping = {
+            "audio/ogg": "ogg", "audio/opus": "opus",
+            "audio/mpeg": "mp3", "audio/mp4": "m4a",
+            "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+            "video/mp4": "mp4", "video/webm": "webm",
+            "application/pdf": "pdf",
+        }
+        if mt in mapping:
+            return mapping[mt]
+        if "/" in mt:
+            return mt.split("/", 1)[1][:5]
+    return _MEDIA_EXT_BY_KIND.get(kind, "bin")
+
+
+async def _persist_inbound_media(
+    db: AsyncIOMotorDatabase,
+    company_id: str,
+    media_base64: str,
+    mimetype: Optional[str],
+    kind: str,
+    filename: Optional[str] = None,
+) -> Optional[dict]:
+    """Decode a base64 media blob sent from the WhatsApp microservice, push
+    it to object storage and register it in `db.files`. Returns a small
+    descriptor `{url, mimetype, size, filename}` or None on failure."""
+    try:
+        data = base64.b64decode(media_base64)
+    except Exception as e:
+        logger.warning(f"[webhook/media] bad base64: {e}")
+        return None
+    if not data:
+        return None
+    ext = _ext_for_mime(mimetype, kind)
+    file_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/wa/{company_id}/{file_id}.{ext}"
+    try:
+        # put_object is sync (requests) — run in a worker thread so we don't
+        # block the event loop for big files.
+        import asyncio
+        result = await asyncio.to_thread(
+            put_object, path, data, mimetype or "application/octet-stream"
+        )
+    except Exception as e:
+        logger.error(f"[webhook/media] object_store upload failed: {e}")
+        return None
+    try:
+        await db.files.insert_one({
+            "id": file_id,
+            "company_id": company_id,
+            "storage_path": result["path"],
+            "original_filename": filename or f"{kind}.{ext}",
+            "content_type": mimetype,
+            "size": result.get("size", len(data)),
+            "is_deleted": False,
+            "uploaded_by": "whatsapp:webhook",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"[webhook/media] db.files insert failed (non-fatal): {e}")
+    return {
+        "url": f"/api/upload/files/{result['path']}",
+        "mimetype": mimetype,
+        "size": result.get("size", len(data)),
+        "filename": filename or f"{kind}.{ext}",
+    }
 
 
 @router.get("/service-health")
@@ -524,6 +609,14 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     #   (b) auto-merge later when /webhook/lid-resolved arrives with the
     #       real phone for the same LID.
     lid_jid = (data.get("lid_jid") or "").strip() or None
+    # Optional inbound media (audio/image/video/document). The microservice
+    # downloads the encrypted payload via Baileys, decrypts it and forwards
+    # the decoded bytes as base64. We persist it to object storage here so
+    # the operator can play/view/download it from the chat UI.
+    media_kind = (data.get("media_kind") or "").strip() or None
+    media_mimetype = data.get("media_mimetype")
+    media_filename = data.get("media_filename")
+    media_b64 = data.get("media_base64")
     logger.info(f"[webhook/message] {company_id[:8]} phone={phone} mid={msg_id} text='{text[:40]}'")
 
     # Filter out messages older than the moment this channel was connected.
@@ -651,6 +744,23 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         "created_at": datetime.now(timezone.utc).isoformat(),
         "wa_message_id": msg_id,
     }
+
+    # Persist inbound media to object storage so the chat can render an
+    # inline <audio>/<img>/<video>/<a> element for the operator. The file
+    # entry is created under a per-company prefix and referenced in
+    # `new_message.media_*` fields. Failures are logged but do NOT break the
+    # webhook — we still record the message with its text placeholder.
+    if media_kind and media_b64:
+        saved = await _persist_inbound_media(
+            db, company_id, media_b64,
+            mimetype=media_mimetype, kind=media_kind, filename=media_filename,
+        )
+        if saved:
+            new_message["media_kind"] = media_kind
+            new_message["media_url"] = saved["url"]
+            new_message["media_mimetype"] = saved["mimetype"]
+            new_message["media_filename"] = saved["filename"]
+            new_message["media_size"] = saved["size"]
 
     if not ticket:
         ticket_id = str(uuid.uuid4())

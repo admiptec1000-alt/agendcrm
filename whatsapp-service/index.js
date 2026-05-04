@@ -1,4 +1,4 @@
-const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -511,16 +511,53 @@ async function createConnection(instanceId) {
         || '';
 
       // Provide a placeholder for media-only messages so the agent sees them
+      let mediaKind = null;
+      let mediaMimetype = null;
+      let mediaFilename = null;
       if (!text) {
-        if (m.imageMessage) text = '[Imagem]';
-        else if (m.videoMessage) text = '[Video]';
-        else if (m.audioMessage) text = '[Audio]';
-        else if (m.stickerMessage) text = '[Figurinha]';
-        else if (m.documentMessage) text = `[Documento] ${m.documentMessage.fileName || ''}`.trim();
+        if (m.imageMessage) { text = '[Imagem]'; mediaKind = 'image'; mediaMimetype = m.imageMessage.mimetype; }
+        else if (m.videoMessage) { text = '[Video]'; mediaKind = 'video'; mediaMimetype = m.videoMessage.mimetype; }
+        else if (m.audioMessage) { text = '[Audio]'; mediaKind = 'audio'; mediaMimetype = m.audioMessage.mimetype; }
+        else if (m.stickerMessage) { text = '[Figurinha]'; mediaKind = 'sticker'; mediaMimetype = m.stickerMessage.mimetype; }
+        else if (m.documentMessage) {
+          text = `[Documento] ${m.documentMessage.fileName || ''}`.trim();
+          mediaKind = 'document';
+          mediaMimetype = m.documentMessage.mimetype;
+          mediaFilename = m.documentMessage.fileName || null;
+        }
         else if (m.locationMessage) text = '[Localizacao]';
         else if (m.contactMessage) text = `[Contato] ${m.contactMessage.displayName || ''}`.trim();
+      } else {
+        // Caption case — also tag the kind so the frontend can render an
+        // inline player / thumbnail alongside the caption text.
+        if (m.imageMessage) { mediaKind = 'image'; mediaMimetype = m.imageMessage.mimetype; }
+        else if (m.videoMessage) { mediaKind = 'video'; mediaMimetype = m.videoMessage.mimetype; }
+        else if (m.documentMessage) {
+          mediaKind = 'document';
+          mediaMimetype = m.documentMessage.mimetype;
+          mediaFilename = m.documentMessage.fileName || null;
+        }
       }
       if (!text) continue;
+
+      // Download media bytes when present so the agent can actually play /
+      // view it in the chat (WhatsApp encrypts media; Baileys handles the
+      // decryption transparently via downloadMediaMessage). Size-capped at
+      // 15 MB to protect the webhook round-trip; larger files keep the text
+      // placeholder but skip the base64 payload.
+      let mediaB64 = null;
+      if (mediaKind && mediaKind !== 'sticker') {
+        try {
+          const buf = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+          if (buf && buf.length && buf.length <= 15 * 1024 * 1024) {
+            mediaB64 = buf.toString('base64');
+          } else if (buf) {
+            console.log(`[${instanceId}] media too large (${buf.length} bytes), skipping download`);
+          }
+        } catch (e) {
+          console.error(`[${instanceId}] media download failed for ${mediaKind}: ${e.message}`);
+        }
+      }
 
       // Coerce Baileys Long timestamp into a plain int for JSON serialization
       let ts = msg.messageTimestamp;
@@ -536,8 +573,12 @@ async function createConnection(instanceId) {
           message_id: msg.key.id,
           timestamp: ts,
           lid_jid: incomingLidJid,  // null unless original was @lid
-        }, { timeout: 10000 });
-        console.log(`[${instanceId}] ✓ webhook sent phone=${phone} text="${text.slice(0, 40)}" -> ${resp.status}`);
+          media_kind: mediaKind,
+          media_mimetype: mediaMimetype,
+          media_filename: mediaFilename,
+          media_base64: mediaB64,
+        }, { timeout: 30000, maxBodyLength: 50 * 1024 * 1024, maxContentLength: 50 * 1024 * 1024 });
+        console.log(`[${instanceId}] ✓ webhook sent phone=${phone} text="${text.slice(0, 40)}"${mediaKind ? ' media='+mediaKind : ''} -> ${resp.status}`);
       } catch (e) {
         console.error(`[${instanceId}] ✗ webhook FAILED (${FASTAPI_URL}): ${e.message} — check FASTAPI_URL env var on Render!`);
       }

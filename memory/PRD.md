@@ -11,6 +11,16 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-03 — Feature: Áudio/Imagem/Vídeo/Documento do WhatsApp tocável no chat
+- **Causa raiz**: o microserviço só gravava `"[Audio]"` como texto — nunca baixava o arquivo. O operador nunca tinha como ouvir.
+- **Implementado** em 3 camadas:
+  1. **Microserviço** (`whatsapp-service/index.js`): importa `downloadMediaMessage` do Baileys e baixa inbound media até 15 MB por mensagem. Envia base64 + mimetype + kind + filename no webhook.
+  2. **Backend** (`routes/channels_routes.py`): novo helper `_persist_inbound_media()` decodifica base64, faz upload em object storage (via `put_object`) e registra em `db.files`. Persiste `media_url`, `media_mimetype`, `media_kind`, `media_filename`, `media_size` na própria mensagem do ticket.
+  3. **Frontend** (`AtendimentosPage.js`): player `<audio controls>` para kind=audio, `<img>` para image, `<video controls>` para video, link de download para document. Tudo inline na bolha da mensagem.
+- Reutiliza o endpoint público `/api/upload/files/{path}` que já existia (sem auth, via db.files lookup).
+- Validado: webhook simulado → ticket criado → ticket-list retorna `media_url` → browser carrega o áudio num `<audio>` element com HTTP 200 + Content-Type audio/ogg.
+- **Importante para deploy**: para essa feature funcionar em produção é OBRIGATÓRIO redeployar TANTO o backend QUANTO o microserviço Node.js (`whatsapp-service/`).
+
 ### 2026-05-02 — Fix: Cabeçalho/rodapé com imagem espremiam o conteúdo do PDF
 - **Bug**: ao colar uma imagem grande (banner) no Cabeçalho e Rodapé do template de orçamento, o PDF reservava uma faixa enorme para a imagem (que ultrapassava a margem `@page`), comprimindo o conteúdo do orçamento para metade da página. Além disso, a imagem podia renderizar com largura parcial (centro ~50%).
 - **Fix** (`backend/routes/quotes_routes.py` em `_generate_pdf_bytes` e `_build_browser_preview_html`):

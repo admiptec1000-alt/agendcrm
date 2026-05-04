@@ -825,6 +825,64 @@ const AtendimentosPage = () => {
                       </div>
                     </a>
                   )}
+                  {/* Inbound WhatsApp media — rendered inline so the operator
+                     can actually play/view it without downloading. */}
+                  {msg.media_url && msg.media_kind === 'audio' && (
+                    <audio
+                      controls
+                      preload="metadata"
+                      className="w-56 sm:w-64 mb-1"
+                      data-testid={`chat-audio-${msg.id}`}
+                    >
+                      <source
+                        src={`${process.env.REACT_APP_BACKEND_URL}${msg.media_url}`}
+                        type={msg.media_mimetype || 'audio/ogg'}
+                      />
+                    </audio>
+                  )}
+                  {msg.media_url && msg.media_kind === 'image' && (
+                    <a
+                      href={`${process.env.REACT_APP_BACKEND_URL}${msg.media_url}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block mb-1"
+                      data-testid={`chat-image-${msg.id}`}
+                    >
+                      <img
+                        src={`${process.env.REACT_APP_BACKEND_URL}${msg.media_url}`}
+                        alt={msg.media_filename || 'Imagem'}
+                        className="max-w-[240px] max-h-60 rounded"
+                      />
+                    </a>
+                  )}
+                  {msg.media_url && msg.media_kind === 'video' && (
+                    <video
+                      controls
+                      preload="metadata"
+                      className="max-w-[280px] max-h-60 rounded mb-1"
+                      data-testid={`chat-video-${msg.id}`}
+                    >
+                      <source
+                        src={`${process.env.REACT_APP_BACKEND_URL}${msg.media_url}`}
+                        type={msg.media_mimetype || 'video/mp4'}
+                      />
+                    </video>
+                  )}
+                  {msg.media_url && msg.media_kind === 'document' && (
+                    <a
+                      href={`${process.env.REACT_APP_BACKEND_URL}${msg.media_url}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2 bg-white/70 border border-slate-200 rounded p-2 mb-1 hover:bg-white"
+                      data-testid={`chat-document-${msg.id}`}
+                    >
+                      <FileText className="w-5 h-5 text-slate-600 flex-shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-slate-700 truncate">{msg.media_filename || 'Documento'}</p>
+                        <p className="text-[10px] text-slate-400">Abrir / baixar</p>
+                      </div>
+                    </a>
+                  )}
                   <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
                   <div className="text-[10px] text-slate-400 text-right mt-1 flex items-center justify-end gap-1">
                     {formatTime(msg.created_at)}
