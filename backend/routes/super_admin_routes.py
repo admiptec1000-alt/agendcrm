@@ -6,7 +6,8 @@ from models import (
     CompanyCreate, CompanyUpdate, CompanyResponse, CompanyStatus, ThemeColors,
     BusinessTypeCreate, BusinessTypeUpdate, PlanType, UserRole
 )
-from typing import List
+from pydantic import BaseModel
+from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 
@@ -491,3 +492,203 @@ async def update_company_indoor_for_super(
         })
     return await db.indoor_settings.find_one({"company_id": company_id}, {"_id": 0})
 
+
+
+# === SUPER-ADMIN: VIEW CLIENTS OF ANY TENANT ================================
+@router.get("/companies/{company_id}/clients")
+async def list_company_clients(
+    company_id: str,
+    q: Optional[str] = None,
+    limit: int = 200,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    """Read-only list of `clients` for any company in the platform. Used by
+    the SuperAdmin to audit a tenant's contact base. Search by name/phone/email."""
+    company = await db.companies.find_one({"id": company_id}, {"_id": 0, "name": 1})
+    if not company:
+        raise HTTPException(404, "Empresa nao encontrada")
+    query: dict = {"company_id": company_id}
+    if q:
+        rx = {"$regex": q, "$options": "i"}
+        query["$or"] = [{"name": rx}, {"phone": rx}, {"email": rx}]
+    rows = await db.clients.find(query, {"_id": 0}).sort("created_at", -1).limit(max(1, min(1000, int(limit)))).to_list(1000)
+    return {"company_name": company.get("name"), "total": len(rows), "clients": rows}
+
+
+# === SUPER-ADMIN: MANUAL BILLING CLIENTS (financial only) ====================
+class BillingClientIn(BaseModel):
+    name: str
+    licenses: int = 1
+    unit_price: float = 0.0
+    notes: Optional[str] = None
+
+
+@router.get("/billing-clients")
+async def list_billing_clients(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    rows = await db.billing_clients.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    total_value = sum((r.get("licenses") or 0) * (r.get("unit_price") or 0.0) for r in rows)
+    return {"total": len(rows), "total_value": round(total_value, 2), "items": rows}
+
+
+@router.post("/billing-clients")
+async def create_billing_client(
+    data: BillingClientIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    licenses = max(0, int(data.licenses or 0))
+    unit_price = max(0.0, float(data.unit_price or 0.0))
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": data.name.strip(),
+        "licenses": licenses,
+        "unit_price": unit_price,
+        "total_value": round(licenses * unit_price, 2),
+        "notes": (data.notes or "").strip() or None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.billing_clients.insert_one(doc)
+    return await db.billing_clients.find_one({"id": doc["id"]}, {"_id": 0})
+
+
+@router.put("/billing-clients/{cid}")
+async def update_billing_client(
+    cid: str,
+    data: BillingClientIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    licenses = max(0, int(data.licenses or 0))
+    unit_price = max(0.0, float(data.unit_price or 0.0))
+    update = {
+        "name": data.name.strip(),
+        "licenses": licenses,
+        "unit_price": unit_price,
+        "total_value": round(licenses * unit_price, 2),
+        "notes": (data.notes or "").strip() or None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.billing_clients.update_one({"id": cid}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Cliente financeiro nao encontrado")
+    return await db.billing_clients.find_one({"id": cid}, {"_id": 0})
+
+
+@router.delete("/billing-clients/{cid}")
+async def delete_billing_client(
+    cid: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    r = await db.billing_clients.delete_one({"id": cid})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Cliente financeiro nao encontrado")
+    return {"message": "Removido"}
+
+
+# === SUPER-ADMIN: SUBSCRIPTION PLANS (with limits + duplicate) ==============
+class PlanIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+    monthly_price: float = 0.0
+    plan_type: PlanType = PlanType.BOTH
+    max_connections: int = 1
+    max_users: int = 1
+    enabled_features: Optional[List[str]] = None
+    is_active: bool = True
+
+
+@router.get("/plans")
+async def list_plans(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    rows = await db.subscription_plans.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return rows
+
+
+@router.post("/plans")
+async def create_plan(
+    data: PlanIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": data.name.strip(),
+        "description": (data.description or "").strip() or None,
+        "monthly_price": max(0.0, float(data.monthly_price or 0.0)),
+        "plan_type": data.plan_type.value if hasattr(data.plan_type, "value") else str(data.plan_type),
+        "max_connections": max(0, int(data.max_connections or 0)),
+        "max_users": max(0, int(data.max_users or 0)),
+        "enabled_features": list(data.enabled_features or []),
+        "is_active": bool(data.is_active),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.subscription_plans.insert_one(doc)
+    return await db.subscription_plans.find_one({"id": doc["id"]}, {"_id": 0})
+
+
+@router.put("/plans/{pid}")
+async def update_plan(
+    pid: str,
+    data: PlanIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    update = {
+        "name": data.name.strip(),
+        "description": (data.description or "").strip() or None,
+        "monthly_price": max(0.0, float(data.monthly_price or 0.0)),
+        "plan_type": data.plan_type.value if hasattr(data.plan_type, "value") else str(data.plan_type),
+        "max_connections": max(0, int(data.max_connections or 0)),
+        "max_users": max(0, int(data.max_users or 0)),
+        "enabled_features": list(data.enabled_features or []),
+        "is_active": bool(data.is_active),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.subscription_plans.update_one({"id": pid}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Plano nao encontrado")
+    return await db.subscription_plans.find_one({"id": pid}, {"_id": 0})
+
+
+@router.post("/plans/{pid}/duplicate")
+async def duplicate_plan(
+    pid: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    src = await db.subscription_plans.find_one({"id": pid}, {"_id": 0})
+    if not src:
+        raise HTTPException(404, "Plano nao encontrado")
+    clone = {
+        **src,
+        "id": str(uuid.uuid4()),
+        "name": f"{src.get('name', 'Plano')} (cópia)",
+        "is_active": False,  # safer: clone starts inactive so admin can review before publishing
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    clone.pop("updated_at", None)
+    clone.pop("_id", None)  # paranoia: src came from find_one with _id=0, but be safe
+    await db.subscription_plans.insert_one(clone)
+    return await db.subscription_plans.find_one({"id": clone["id"]}, {"_id": 0})
+
+
+@router.delete("/plans/{pid}")
+async def delete_plan(
+    pid: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    in_use = await db.companies.count_documents({"plan_id": pid})
+    if in_use > 0:
+        raise HTTPException(409, f"Plano em uso por {in_use} empresa(s) — desative ou migre antes de deletar")
+    r = await db.subscription_plans.delete_one({"id": pid})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Plano nao encontrado")
+    return {"message": "Plano removido"}

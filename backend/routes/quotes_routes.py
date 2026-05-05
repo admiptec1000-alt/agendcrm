@@ -70,6 +70,8 @@ class QuoteTemplateCreate(BaseModel):
     is_default: bool = False
     header_html: Optional[str] = None  # repeats on every page (top)
     footer_html: Optional[str] = None  # repeats on every page (bottom; supports {{page_number}}/{{total_pages}})
+    header_height_mm: Optional[int] = None  # override default 22mm
+    footer_height_mm: Optional[int] = None  # override default 18mm
 
 
 class QuoteTemplateUpdate(BaseModel):
@@ -78,6 +80,8 @@ class QuoteTemplateUpdate(BaseModel):
     is_default: Optional[bool] = None
     header_html: Optional[str] = None
     footer_html: Optional[str] = None
+    header_height_mm: Optional[int] = None
+    footer_height_mm: Optional[int] = None
 
 
 class QuoteItemIn(BaseModel):
@@ -355,6 +359,8 @@ async def create_quote_template(data: QuoteTemplateCreate, user=Depends(get_curr
         "is_default": data.is_default,
         "header_html": data.header_html or None,
         "footer_html": data.footer_html or None,
+        "header_height_mm": data.header_height_mm or 22,
+        "footer_height_mm": data.footer_height_mm or 18,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.quote_templates.insert_one(doc)
@@ -934,7 +940,11 @@ async def preview_pdf_html(qid: str, user=Depends(get_current_user), db: AsyncIO
     body_html, quote = await _build_quote_html(qid, user, db)
     header_html = quote.get("__header_html")
     footer_html = quote.get("__footer_html")
-    composed = _build_browser_preview_html(body_html, header_html, footer_html)
+    composed = _build_browser_preview_html(
+        body_html, header_html, footer_html,
+        header_height_mm=quote.get("__header_height_mm") or 22,
+        footer_height_mm=quote.get("__footer_height_mm") or 18,
+    )
     return {"html": composed, "quote_number": quote.get("quote_number")}
 
 
@@ -942,6 +952,8 @@ class _TemplatePreviewRequest(BaseModel):
     content: Optional[str] = ""
     header_html: Optional[str] = ""
     footer_html: Optional[str] = ""
+    header_height_mm: Optional[int] = 22
+    footer_height_mm: Optional[int] = 18
 
 
 @router.post("/templates/preview-html")
@@ -984,6 +996,8 @@ async def preview_template_html(
         body_html,
         body.header_html or None,
         body.footer_html or None,
+        header_height_mm=body.header_height_mm or 22,
+        footer_height_mm=body.footer_height_mm or 18,
     )
     return {"html": composed}
 
@@ -1034,6 +1048,8 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
     quote_with_chrome = dict(quote)
     quote_with_chrome["__header_html"] = header_html
     quote_with_chrome["__footer_html"] = footer_html
+    quote_with_chrome["__header_height_mm"] = template.get("header_height_mm") or 22
+    quote_with_chrome["__footer_height_mm"] = template.get("footer_height_mm") or 18
     return body_html, quote_with_chrome
 
 
@@ -1092,12 +1108,20 @@ _QUOTE_STYLESHEET = (
 )
 
 
-def _build_browser_preview_html(body_html: str, header_html: Optional[str] = None, footer_html: Optional[str] = None) -> str:
+def _build_browser_preview_html(
+    body_html: str,
+    header_html: Optional[str] = None,
+    footer_html: Optional[str] = None,
+    header_height_mm: int = 22,
+    footer_height_mm: int = 18,
+) -> str:
     """Wraps the rendered body in an A4-shaped page mockup using the SAME
     stylesheet WeasyPrint uses, so the iframe preview visually matches the
     downloaded PDF. The "page" is a fixed 210mm wide white sheet with
     ~18mm padding; if header/footer are provided they sit at the top and
-    bottom of the sheet with thin separators (mirroring the PDF chrome)."""
+    bottom of the sheet with thin separators (mirroring the PDF chrome).
+    `header_height_mm`/`footer_height_mm` come from the template config —
+    operator can adjust them in the editor (default 22/18)."""
     nbsp_clean = (body_html or "").replace("\u00a0", " ")
     cleaned_header = (header_html or "").replace("\u00a0", " ")
     cleaned_footer = (footer_html or "").replace("\u00a0", " ")
@@ -1109,6 +1133,8 @@ def _build_browser_preview_html(body_html: str, header_html: Optional[str] = Non
         f'<div id="__quote_footer" style="margin-top:8mm;">{cleaned_footer}</div>'
         if cleaned_footer.strip() else ""
     )
+    h = max(8, min(80, int(header_height_mm or 22)))
+    f = max(8, min(80, int(footer_height_mm or 18)))
     return (
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>\n"
         + _QUOTE_STYLESHEET
@@ -1122,12 +1148,12 @@ def _build_browser_preview_html(body_html: str, header_html: Optional[str] = Non
         # iframe preview is visually the same as the downloaded PDF.
         + "#__quote_header, #__quote_footer { width: 100%; box-sizing: border-box;\n"
         + "  text-align: center; line-height: 1.15; font-size: 9pt; }\n"
-        + "#__quote_header { max-height: 22mm; overflow: hidden; }\n"
-        + "#__quote_footer { max-height: 18mm; overflow: hidden; }\n"
+        + f"#__quote_header {{ height: {h}mm; max-height: {h}mm; overflow: hidden; }}\n"
+        + f"#__quote_footer {{ height: {f}mm; max-height: {f}mm; overflow: hidden; }}\n"
         + "#__quote_header img, #__quote_footer img { max-width: 100%; width: 100%;\n"
         + "  height: auto; display: block; margin: 0 auto; object-fit: contain; }\n"
-        + "#__quote_header img { max-height: 22mm; }\n"
-        + "#__quote_footer img { max-height: 18mm; }\n"
+        + f"#__quote_header img {{ max-height: {h}mm; }}\n"
+        + f"#__quote_footer img {{ max-height: {f}mm; }}\n"
         + "#__quote_header p, #__quote_footer p { margin: 0; }\n"
         + "</style></head><body>"
         + '<div class="__a4_page">'
@@ -1138,7 +1164,13 @@ def _build_browser_preview_html(body_html: str, header_html: Optional[str] = Non
     )
 
 
-def _generate_pdf_bytes(html_content: str, header_html: Optional[str] = None, footer_html: Optional[str] = None) -> bytes:
+def _generate_pdf_bytes(
+    html_content: str,
+    header_html: Optional[str] = None,
+    footer_html: Optional[str] = None,
+    header_height_mm: int = 22,
+    footer_height_mm: int = 18,
+) -> bytes:
     """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms).
 
     Three known landmines this function defuses BEFORE WeasyPrint sees them:
@@ -1193,25 +1225,30 @@ def _generate_pdf_bytes(html_content: str, header_html: Optional[str] = None, fo
     # past the @page margin (which would crash into the body content and
     # shrink the printable area to "half the page" — exact bug reported by
     # Incinera 02/05/2026). Force images to fill the full text-width and
-    # cap the chrome height to the reserved margin.
+    # cap the chrome height to the (configurable) reserved margin. The
+    # height comes from the template — operator can adjust it in the editor
+    # (default 22/18mm; tested up to ~80mm without breakage).
+    h = max(8, min(80, int(header_height_mm or 22)))
+    f = max(8, min(80, int(footer_height_mm or 18)))
     chrome_constraints_css = (
         "#__quote_header, #__quote_footer { width: 100%; box-sizing: border-box; "
         "text-align: center; line-height: 1.15; font-size: 9pt; }\n"
-        "#__quote_header { max-height: 22mm; overflow: hidden; }\n"
-        "#__quote_footer { max-height: 18mm; overflow: hidden; }\n"
+        f"#__quote_header {{ height: {h}mm; max-height: {h}mm; overflow: hidden; }}\n"
+        f"#__quote_footer {{ height: {f}mm; max-height: {f}mm; overflow: hidden; }}\n"
         "#__quote_header img, #__quote_footer img { "
         "  max-width: 100%; width: 100%; height: auto; display: block; margin: 0 auto; "
         "  object-fit: contain; "
         "}\n"
-        "#__quote_header img { max-height: 22mm; }\n"
-        "#__quote_footer img { max-height: 18mm; }\n"
+        f"#__quote_header img {{ max-height: {h}mm; }}\n"
+        f"#__quote_footer img {{ max-height: {f}mm; }}\n"
         "#__quote_header p, #__quote_footer p { margin: 0; }\n"
     )
 
-    # Increase top/bottom margin when chrome is present so the body content
-    # doesn't collide with the header/footer area.
-    top_margin = "26mm" if has_header else "18mm"
-    bottom_margin = "22mm" if has_footer else "18mm"
+    # Reserve the @page top/bottom margin so the body content doesn't
+    # collide with the header/footer area. Add 4mm safety so paragraphs
+    # don't graze the chrome.
+    top_margin = f"{h + 4}mm" if has_header else "18mm"
+    bottom_margin = f"{f + 4}mm" if has_footer else "18mm"
 
     css_prefix = (
         "<style>\n"
@@ -1244,6 +1281,8 @@ async def download_quote_pdf(qid: str, user=Depends(get_current_user), db: Async
         html,
         header_html=quote.get("__header_html"),
         footer_html=quote.get("__footer_html"),
+        header_height_mm=quote.get("__header_height_mm") or 22,
+        footer_height_mm=quote.get("__footer_height_mm") or 18,
     )
     filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
     return StreamingResponse(
@@ -1297,7 +1336,13 @@ async def send_quote_whatsapp(
     if not conn:
         raise HTTPException(404, "Conexao WhatsApp nao encontrada")
 
-    pdf_bytes = _generate_pdf_bytes(html)
+    pdf_bytes = _generate_pdf_bytes(
+        html,
+        header_html=quote.get("__header_html"),
+        footer_html=quote.get("__footer_html"),
+        header_height_mm=quote.get("__header_height_mm") or 22,
+        footer_height_mm=quote.get("__footer_height_mm") or 18,
+    )
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
     filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
     caption = data.caption or f"Segue orcamento #{quote.get('quote_number')} no valor de {_format_brl(quote.get('total_value', 0))}"

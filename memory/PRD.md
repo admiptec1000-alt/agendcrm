@@ -11,6 +11,27 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
+### 2026-05-04 — Super-Admin: Planos, Clientes Financeiros, Base de Clientes
+- **Backend** (`routes/super_admin_routes.py`):
+  - `GET /api/super-admin/companies/{id}/clients` — read-only browser dos clientes de qualquer empresa, com busca por nome/telefone/email.
+  - CRUD `GET/POST/PUT/DELETE /api/super-admin/billing-clients` — cadastro manual de clientes financeiros (nome, qtd licenças, valor unitário, total auto-calculado).
+  - CRUD `GET/POST/PUT/DELETE /api/super-admin/plans` + `POST /api/super-admin/plans/{id}/duplicate` — gestão de planos com `max_connections`, `max_users`, `enabled_features`, `monthly_price`. Duplicação cria cópia inativa.
+- **Frontend** (`pages/SuperAdmin/Dashboard.js`): 3 novas abas no sidebar do SuperAdmin:
+  - **Planos**: cards com preço/limites, botões Editar/Duplicar/Excluir, modal de edição com nome/preço/tipo/conexões/usuários/ativo.
+  - **Clientes Financeiros**: tabela com nome/licenças/valor unit./total/notas, agregando o valor total recorrente. Modal de cadastro com cálculo automático.
+  - **Base de Clientes**: select de empresa + busca textual → tabela read-only com nome/telefone/email/tags/cadastro.
+- Validado via browser: criação de plano funcionou (Starter, R$99,90, 1 conexão, 3 usuários), abas todas carregam, select de empresas populado.
+
+### 2026-05-04 — Fix: Cabeçalho/rodapé não expandiam + altura configurável
+- **Bug**: o `max-height` fixo (22/18mm) impedia o usuário de aumentar a área do cabeçalho — por mais que ele subisse a imagem, ela não preenchia mais espaço. E mesmo aumentando a imagem, ela ficava centralizada com largura parcial.
+- **Fix**:
+  - Modelo `QuoteTemplate` agora tem `header_height_mm` e `footer_height_mm` (8–80mm, defaults 22/18).
+  - Backend (`_generate_pdf_bytes` e `_build_browser_preview_html`): CSS dinâmico aplica esses valores em `#__quote_header { height: …mm }` e nos `img` filhos. As margens `@page` são calculadas como `altura + 4mm` para o conteúdo nunca esbarrar na faixa.
+  - Imagens dentro do header/footer agora SEMPRE preenchem 100% da largura (`width:100%; object-fit:contain`) — não há mais centralização parcial.
+- **Frontend** (`OrcamentosPage.js → TemplateMultiTabEditor`): nas abas Cabeçalho e Rodapé, novo painel com **slider** + **input numérico** "Altura do cabeçalho/rodapé" (8–80mm). Persistido no save do template via `editing.{header,footer}_height_mm`. Pré-visualização A4 reflete o valor em tempo real.
+- Endpoints atualizados: `POST /api/quotes/templates`, `PUT /api/quotes/templates/{tid}`, `POST /api/quotes/templates/preview-html`, `GET /api/quotes/{qid}/preview-pdf-html`, `GET /api/quotes/{qid}/pdf`, `POST /api/quotes/{qid}/send-whatsapp` — todos passam as novas alturas.
+- Validado E2E: criou template com 35/25mm, alterou para 50/30mm via PUT, persistiu, preview retorna `height: 35mm/40mm/50mm` no CSS conforme escolhido.
+
 ### 2026-05-04 — Feature: "Pré-visualizar A4" no editor de templates
 - O usuário pediu uma forma de ver o alinhamento cabeçalho/conteúdo/rodapé no formato A4 enquanto monta o template, antes de salvar. Adicionado:
   - **Endpoint** `POST /api/quotes/templates/preview-html` — recebe `{content, header_html, footer_html}` (rascunho não-salvo), renderiza com placeholders fake (cliente exemplo + 1 item) e devolve HTML com o mesmo wrapper A4 usado pelo `/preview-pdf-html`.

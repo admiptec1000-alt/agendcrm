@@ -351,6 +351,8 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
         content: editing?.content || '',
         header_html: editing?.header_html || '',
         footer_html: editing?.footer_html || '',
+        header_height_mm: editing?.header_height_mm || 22,
+        footer_height_mm: editing?.footer_height_mm || 18,
       });
       setA4Html(data.html);
     } catch (e) {
@@ -359,6 +361,13 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
     } finally {
       setA4Loading(false);
     }
+  };
+
+  const setHeightField = (field, value) => {
+    let n = parseInt(value, 10);
+    if (isNaN(n)) n = field === 'header_height_mm' ? 22 : 18;
+    n = Math.max(8, Math.min(80, n));
+    setEditing(prev => ({ ...prev, [field]: n }));
   };
 
   // IMPORTANT: render the 3 Quill instances in parallel and toggle visibility
@@ -415,21 +424,53 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
       {TEMPLATE_TABS.map(t => {
         const field = fields[t.key];
         const isActive = tab === t.key;
+        const heightField = t.key === 'header' ? 'header_height_mm' : (t.key === 'footer' ? 'footer_height_mm' : null);
+        const heightVal = heightField
+          ? (editing?.[heightField] ?? (heightField === 'header_height_mm' ? 22 : 18))
+          : null;
         return (
           <div
             key={t.key}
             // Keep DOM mounted so Quill state persists; just hide inactive tabs.
             style={{ display: isActive ? 'block' : 'none' }}
-            className="border rounded bg-white"
             data-testid={`template-${t.key}-quill`}
           >
-            <ReactQuill
-              theme="snow"
-              value={editing?.[field] || ''}
-              onChange={(html) => setEditing(prev => ({ ...prev, [field]: html }))}
-              modules={quillModules}
-              style={{ minHeight: `${heights[t.key]}px` }}
-            />
+            {heightField && (
+              <div className="flex items-center gap-3 mb-2 p-2 bg-slate-50 border border-slate-200 rounded text-xs">
+                <span className="font-medium text-slate-700 whitespace-nowrap">
+                  Altura {t.key === 'header' ? 'do cabeçalho' : 'do rodapé'}:
+                </span>
+                <input
+                  type="range"
+                  min={8}
+                  max={80}
+                  step={1}
+                  value={heightVal}
+                  onChange={(e) => setHeightField(heightField, e.target.value)}
+                  className="flex-1"
+                  data-testid={`template-${t.key}-height-range`}
+                />
+                <input
+                  type="number"
+                  min={8}
+                  max={80}
+                  value={heightVal}
+                  onChange={(e) => setHeightField(heightField, e.target.value)}
+                  className="w-16 px-2 py-1 border border-slate-300 rounded text-right"
+                  data-testid={`template-${t.key}-height-input`}
+                />
+                <span className="text-slate-500">mm</span>
+              </div>
+            )}
+            <div className="border rounded bg-white">
+              <ReactQuill
+                theme="snow"
+                value={editing?.[field] || ''}
+                onChange={(html) => setEditing(prev => ({ ...prev, [field]: html }))}
+                modules={quillModules}
+                style={{ minHeight: `${heights[t.key]}px` }}
+              />
+            </div>
           </div>
         );
       })}
