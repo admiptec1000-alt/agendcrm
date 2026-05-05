@@ -12,7 +12,10 @@ const api = axios.create({
 // Add token to requests
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    // Impersonation aware: an impersonated tab carries its JWT in
+    // sessionStorage (per-tab) so the SuperAdmin's localStorage token in
+    // the original tab keeps untouched. Prefer sessionStorage when set.
+    const token = sessionStorage.getItem('token') || localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
