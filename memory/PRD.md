@@ -11,7 +11,18 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 ## What's been implemented (latest first)
 
-### 2026-05-04 — Super-Admin: Planos, Clientes Financeiros, Base de Clientes
+### 2026-05-04 — Super-Admin v2: impersonação, planos por tipo de negócio, módulo financeiro
+**Refeito** após feedback do usuário (a v1 estava interpretada errada). Agora:
+- **Botão "Gestão" na lista de Empresas** — ícone de fone de ouvido: chama `POST /api/super-admin/companies/{id}/impersonate`, recebe JWT da empresa e abre nova aba em `/__impersonate__?token=...&slug=...` que persiste o token em localStorage e redireciona para o dashboard do cliente. SuperAdmin passa a "ser" o admin da empresa para suporte (token válido por 60min, com claim `impersonated_by`).
+- **Planos configuráveis e vinculados a Tipos de Negócio** — `subscription_plans` ganhou `business_type_ids[]`, `billing_cycle` (monthly/yearly/one_time), `installments` (parcelas auto-geradas) e `grace_days` (dias até bloqueio automático). Modal do SuperAdmin mostra toggles multi-seleção dos tipos de negócio para escolher onde o plano aparece na `/landing`.
+- **Criação de empresa auto-gera faturas** — quando SuperAdmin cadastra uma empresa com `plan_id`, o backend chama `_generate_invoices_for_company()` que cria N parcelas no ciclo configurado (mensal avança o mês, anual avança o ano).
+- **Aba Financeiro no SuperAdmin** — `GET/POST/PUT/DELETE /api/super-admin/invoices` + agregados por status (A receber/Vencido/Pago). UI com tabela filtrável, marcar como pago, criar fatura manual.
+- **Rotina de inadimplência** — `POST /api/super-admin/invoices/run-suspension-check` varre faturas vencidas, move `pending → overdue`, e para cada empresa verifica se a mais antiga vencida passou do `grace_days` → muda `companies.status = "blocked"`. Botão manual na UI; idempotente.
+- **Configuração "Empresa Gestora Financeira"** — `GET/PUT /api/super-admin/settings` persiste `financial_manager_company_id`. Opção mostrada em *SuperAdmin → Configurações*. (P1 futuro: renderizar menu especial na UI dessa empresa).
+- Abas temporárias "Base de Clientes" e "Clientes Financeiros" (v1 errada) foram **removidas**.
+- Validado E2E: 2 botões Gestão nos cards, modal de plano com ciclo/parcelas/grace/10 toggles de tipo, aba Financeiro com ações, Settings salva empresa gestora.
+
+### 2026-05-04 — Super-Admin v1 (removido; substituído pela v2 acima)
 - **Backend** (`routes/super_admin_routes.py`):
   - `GET /api/super-admin/companies/{id}/clients` — read-only browser dos clientes de qualquer empresa, com busca por nome/telefone/email.
   - CRUD `GET/POST/PUT/DELETE /api/super-admin/billing-clients` — cadastro manual de clientes financeiros (nome, qtd licenças, valor unitário, total auto-calculado).

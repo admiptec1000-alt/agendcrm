@@ -93,6 +93,7 @@ class CompanyCreate(BaseModel):
     phone: Optional[str] = None
     plan_type: PlanType
     business_type_id: Optional[str] = None  # ID do tipo de negócio
+    plan_id: Optional[str] = None  # ID of the subscription plan (drives auto-invoicing)
     theme_colors: Optional[ThemeColors] = None
     admin_name: str
     admin_email: EmailStr
@@ -107,6 +108,7 @@ class CompanyUpdate(BaseModel):
     status: Optional[CompanyStatus] = None
     plan_type: Optional[PlanType] = None
     business_type_id: Optional[str] = None
+    plan_id: Optional[str] = None
     theme_colors: Optional[ThemeColors] = None
     subdomain: Optional[str] = None
 

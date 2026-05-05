@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
-from auth import require_super_admin, get_password_hash
+from auth import require_super_admin, get_password_hash, create_access_token
 from models import (
     CompanyCreate, CompanyUpdate, CompanyResponse, CompanyStatus, ThemeColors,
     BusinessTypeCreate, BusinessTypeUpdate, PlanType, UserRole
@@ -9,7 +9,7 @@ from models import (
 from pydantic import BaseModel
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 router = APIRouter(prefix="/super-admin", tags=["super-admin"])
 
@@ -236,6 +236,7 @@ async def create_company(
         "status": CompanyStatus.ACTIVE,
         "plan_type": data.plan_type,
         "business_type_id": data.business_type_id,
+        "plan_id": data.plan_id,
         "features": features,
         "mobile_bottom_nav": mobile_bottom_nav,
         "subdomain": data.subdomain,
@@ -244,6 +245,12 @@ async def create_company(
         "created_by": user["id"]
     }
     await db.companies.insert_one(company)
+
+    # Auto-generate invoices for the newly assigned plan (if any)
+    if data.plan_id:
+        plan_doc = await db.subscription_plans.find_one({"id": data.plan_id}, {"_id": 0})
+        if plan_doc:
+            await _generate_invoices_for_company(db, company_id, plan_doc)
 
     # Create admin user for this company
     admin_user = {
@@ -494,100 +501,53 @@ async def update_company_indoor_for_super(
 
 
 
-# === SUPER-ADMIN: VIEW CLIENTS OF ANY TENANT ================================
-@router.get("/companies/{company_id}/clients")
-async def list_company_clients(
+# === SUPER-ADMIN: IMPERSONATE COMPANY (support access) =======================
+@router.post("/companies/{company_id}/impersonate")
+async def impersonate_company(
     company_id: str,
-    q: Optional[str] = None,
-    limit: int = 200,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    _: dict = Depends(require_super_admin),
+    sa: dict = Depends(require_super_admin),
 ):
-    """Read-only list of `clients` for any company in the platform. Used by
-    the SuperAdmin to audit a tenant's contact base. Search by name/phone/email."""
-    company = await db.companies.find_one({"id": company_id}, {"_id": 0, "name": 1})
+    """Issue a short-lived JWT that logs the SuperAdmin IN as the admin of
+    the target company — lets 8IP staff troubleshoot a tenant by seeing
+    EXACTLY what the customer sees (same CRM, Agenda, Orçamentos menus).
+    The frontend opens a new tab with this token prefilled in localStorage.
+
+    Security:
+      * Only SuperAdmins can call this endpoint.
+      * Token is valid for 60 minutes (shorter than normal).
+      * `impersonated_by` is recorded in the token so we can audit + show a
+        banner in the cloned UI.
+    """
+    company = await db.companies.find_one({"id": company_id}, {"_id": 0})
     if not company:
         raise HTTPException(404, "Empresa nao encontrada")
-    query: dict = {"company_id": company_id}
-    if q:
-        rx = {"$regex": q, "$options": "i"}
-        query["$or"] = [{"name": rx}, {"phone": rx}, {"email": rx}]
-    rows = await db.clients.find(query, {"_id": 0}).sort("created_at", -1).limit(max(1, min(1000, int(limit)))).to_list(1000)
-    return {"company_name": company.get("name"), "total": len(rows), "clients": rows}
 
+    # Pick the first company admin; fallback to any user if none.
+    admin = await db.company_users.find_one(
+        {"company_id": company_id, "role": UserRole.COMPANY_ADMIN.value},
+        {"_id": 0, "password": 0},
+    ) or await db.company_users.find_one(
+        {"company_id": company_id}, {"_id": 0, "password": 0}
+    )
+    if not admin:
+        raise HTTPException(409, "Empresa nao possui nenhum usuario cadastrado")
 
-# === SUPER-ADMIN: MANUAL BILLING CLIENTS (financial only) ====================
-class BillingClientIn(BaseModel):
-    name: str
-    licenses: int = 1
-    unit_price: float = 0.0
-    notes: Optional[str] = None
-
-
-@router.get("/billing-clients")
-async def list_billing_clients(
-    db: AsyncIOMotorDatabase = Depends(get_database),
-    _: dict = Depends(require_super_admin),
-):
-    rows = await db.billing_clients.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    total_value = sum((r.get("licenses") or 0) * (r.get("unit_price") or 0.0) for r in rows)
-    return {"total": len(rows), "total_value": round(total_value, 2), "items": rows}
-
-
-@router.post("/billing-clients")
-async def create_billing_client(
-    data: BillingClientIn,
-    db: AsyncIOMotorDatabase = Depends(get_database),
-    _: dict = Depends(require_super_admin),
-):
-    licenses = max(0, int(data.licenses or 0))
-    unit_price = max(0.0, float(data.unit_price or 0.0))
-    doc = {
-        "id": str(uuid.uuid4()),
-        "name": data.name.strip(),
-        "licenses": licenses,
-        "unit_price": unit_price,
-        "total_value": round(licenses * unit_price, 2),
-        "notes": (data.notes or "").strip() or None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+    token_data = {
+        "sub": admin["id"],
+        "type": "company_user",
+        "role": admin["role"],
+        "company_id": company_id,
+        "impersonated_by": sa.get("id") or sa.get("sub"),
     }
-    await db.billing_clients.insert_one(doc)
-    return await db.billing_clients.find_one({"id": doc["id"]}, {"_id": 0})
-
-
-@router.put("/billing-clients/{cid}")
-async def update_billing_client(
-    cid: str,
-    data: BillingClientIn,
-    db: AsyncIOMotorDatabase = Depends(get_database),
-    _: dict = Depends(require_super_admin),
-):
-    licenses = max(0, int(data.licenses or 0))
-    unit_price = max(0.0, float(data.unit_price or 0.0))
-    update = {
-        "name": data.name.strip(),
-        "licenses": licenses,
-        "unit_price": unit_price,
-        "total_value": round(licenses * unit_price, 2),
-        "notes": (data.notes or "").strip() or None,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+    token = create_access_token(token_data, expires_delta=timedelta(minutes=60))
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "company_slug": company.get("slug"),
+        "company_name": company.get("name"),
+        "user": {k: v for k, v in admin.items() if k != "password"},
     }
-    r = await db.billing_clients.update_one({"id": cid}, {"$set": update})
-    if r.matched_count == 0:
-        raise HTTPException(404, "Cliente financeiro nao encontrado")
-    return await db.billing_clients.find_one({"id": cid}, {"_id": 0})
-
-
-@router.delete("/billing-clients/{cid}")
-async def delete_billing_client(
-    cid: str,
-    db: AsyncIOMotorDatabase = Depends(get_database),
-    _: dict = Depends(require_super_admin),
-):
-    r = await db.billing_clients.delete_one({"id": cid})
-    if r.deleted_count == 0:
-        raise HTTPException(404, "Cliente financeiro nao encontrado")
-    return {"message": "Removido"}
 
 
 # === SUPER-ADMIN: SUBSCRIPTION PLANS (with limits + duplicate) ==============
@@ -600,6 +560,10 @@ class PlanIn(BaseModel):
     max_users: int = 1
     enabled_features: Optional[List[str]] = None
     is_active: bool = True
+    business_type_ids: Optional[List[str]] = None  # which tipos-de-negocio offer this plan
+    billing_cycle: str = "monthly"  # monthly | yearly | one_time
+    installments: int = 1  # how many invoices to auto-generate on company signup
+    grace_days: int = 5  # days after due_date before auto-suspension
 
 
 @router.get("/plans")
@@ -627,6 +591,10 @@ async def create_plan(
         "max_users": max(0, int(data.max_users or 0)),
         "enabled_features": list(data.enabled_features or []),
         "is_active": bool(data.is_active),
+        "business_type_ids": list(data.business_type_ids or []),
+        "billing_cycle": (data.billing_cycle or "monthly").lower(),
+        "installments": max(1, int(data.installments or 1)),
+        "grace_days": max(0, int(data.grace_days or 5)),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.subscription_plans.insert_one(doc)
@@ -649,6 +617,10 @@ async def update_plan(
         "max_users": max(0, int(data.max_users or 0)),
         "enabled_features": list(data.enabled_features or []),
         "is_active": bool(data.is_active),
+        "business_type_ids": list(data.business_type_ids or []),
+        "billing_cycle": (data.billing_cycle or "monthly").lower(),
+        "installments": max(1, int(data.installments or 1)),
+        "grace_days": max(0, int(data.grace_days or 5)),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     r = await db.subscription_plans.update_one({"id": pid}, {"$set": update})
@@ -692,3 +664,205 @@ async def delete_plan(
     if r.deleted_count == 0:
         raise HTTPException(404, "Plano nao encontrado")
     return {"message": "Plano removido"}
+
+
+# === SUPER-ADMIN: FINANCIAL MODULE (invoices + auto-suspend) =================
+class InvoiceIn(BaseModel):
+    company_id: str
+    amount: float
+    due_date: str  # ISO YYYY-MM-DD
+    description: Optional[str] = None
+
+
+class InvoiceUpdate(BaseModel):
+    amount: Optional[float] = None
+    due_date: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None  # pending | paid | overdue | canceled
+    paid_at: Optional[str] = None
+
+
+async def _generate_invoices_for_company(db, company_id: str, plan: dict, start_date: Optional[str] = None) -> list:
+    """Create auto-invoices for a newly assigned plan. Called from:
+      * `POST /api/super-admin/companies` right after company creation
+      * `PUT /api/super-admin/companies/{id}/plan` (plan switch)
+    Rules:
+      * `installments` invoices are created, spaced by `billing_cycle`.
+      * First due_date = start_date (default: today).
+      * Skips generation when `monthly_price <= 0`.
+    """
+    price = float(plan.get("monthly_price") or 0)
+    if price <= 0:
+        return []
+    cycle = (plan.get("billing_cycle") or "monthly").lower()
+    installments = int(plan.get("installments") or 1)
+    base_dt = datetime.fromisoformat(start_date) if start_date else datetime.now(timezone.utc)
+    docs = []
+    for i in range(installments):
+        if cycle == "yearly":
+            due = base_dt.replace(year=base_dt.year + i)
+        elif cycle == "one_time":
+            due = base_dt
+            if i > 0:
+                break
+        else:  # monthly
+            month = ((base_dt.month - 1) + i) % 12 + 1
+            year = base_dt.year + ((base_dt.month - 1) + i) // 12
+            try:
+                due = base_dt.replace(year=year, month=month)
+            except ValueError:
+                due = base_dt.replace(year=year, month=month, day=28)
+        docs.append({
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "plan_id": plan.get("id"),
+            "amount": price,
+            "due_date": due.date().isoformat(),
+            "status": "pending",
+            "description": f"{plan.get('name')} - parcela {i + 1}/{installments}" if installments > 1 else plan.get("name"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    if docs:
+        await db.invoices.insert_many(docs)
+    return docs
+
+
+@router.get("/invoices")
+async def list_invoices(
+    company_id: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    q: dict = {}
+    if company_id: q["company_id"] = company_id
+    if status_filter: q["status"] = status_filter
+    rows = await db.invoices.find(q, {"_id": 0}).sort("due_date", 1).to_list(2000)
+    cmap: dict = {}
+    for c in await db.companies.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(1000):
+        cmap[c["id"]] = c["name"]
+    for r in rows:
+        r["company_name"] = cmap.get(r["company_id"], "—")
+    agg = {"pending": 0.0, "paid": 0.0, "overdue": 0.0}
+    for r in rows:
+        agg[r["status"]] = agg.get(r["status"], 0.0) + float(r.get("amount") or 0.0)
+    return {"total": len(rows), "items": rows, "totals": agg}
+
+
+@router.post("/invoices")
+async def create_invoice(
+    data: InvoiceIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    if not await db.companies.find_one({"id": data.company_id}, {"_id": 0, "id": 1}):
+        raise HTTPException(404, "Empresa nao encontrada")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": data.company_id,
+        "plan_id": None,
+        "amount": max(0.0, float(data.amount or 0)),
+        "due_date": data.due_date,
+        "status": "pending",
+        "description": (data.description or "").strip() or "Cobranca manual",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.invoices.insert_one(doc)
+    return await db.invoices.find_one({"id": doc["id"]}, {"_id": 0})
+
+
+@router.put("/invoices/{inv_id}")
+async def update_invoice(
+    inv_id: str,
+    data: InvoiceUpdate,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    update: dict = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if data.status == "paid" and not data.paid_at:
+        update["paid_at"] = datetime.now(timezone.utc).isoformat()
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    r = await db.invoices.update_one({"id": inv_id}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Fatura nao encontrada")
+    return await db.invoices.find_one({"id": inv_id}, {"_id": 0})
+
+
+@router.delete("/invoices/{inv_id}")
+async def delete_invoice(
+    inv_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    r = await db.invoices.delete_one({"id": inv_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Fatura nao encontrada")
+    return {"message": "Removida"}
+
+
+@router.post("/invoices/run-suspension-check")
+async def run_suspension_check(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    """Sweep overdue invoices, mark them `overdue`, and auto-suspend
+    (status='blocked') any company whose oldest overdue invoice has been
+    past its grace_days window. Idempotent — safe to re-run."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    overdue_upd = 0
+    suspended = 0
+    async for inv in db.invoices.find({"status": "pending"}, {"_id": 0, "id": 1, "due_date": 1}):
+        if (inv.get("due_date") or "") < today:
+            await db.invoices.update_one(
+                {"id": inv["id"]}, {"$set": {"status": "overdue", "updated_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            overdue_upd += 1
+    async for company in db.companies.find({"status": {"$ne": "blocked"}}, {"_id": 0, "id": 1, "plan_id": 1}):
+        oldest = await db.invoices.find_one(
+            {"company_id": company["id"], "status": "overdue"},
+            {"_id": 0, "due_date": 1},
+            sort=[("due_date", 1)],
+        )
+        if not oldest:
+            continue
+        plan = await db.subscription_plans.find_one({"id": company.get("plan_id") or ""}, {"_id": 0, "grace_days": 1})
+        grace = int((plan or {}).get("grace_days") or 5)
+        try:
+            due = datetime.fromisoformat(oldest["due_date"]).date()
+        except Exception:
+            continue
+        if (datetime.now(timezone.utc).date() - due).days >= grace:
+            await db.companies.update_one(
+                {"id": company["id"]},
+                {"$set": {"status": "blocked", "suspended_at": datetime.now(timezone.utc).isoformat(), "suspended_reason": "inadimplencia"}},
+            )
+            suspended += 1
+    return {"marked_overdue": overdue_upd, "companies_suspended": suspended}
+
+
+# === SUPER-ADMIN: SETTINGS (financial delegate company) =====================
+class SettingsIn(BaseModel):
+    financial_manager_company_id: Optional[str] = None
+
+
+@router.get("/settings")
+async def get_super_admin_settings(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    doc = await db.super_admin_settings.find_one({"_id": "singleton"}, {"_id": 0}) or {}
+    return doc
+
+
+@router.put("/settings")
+async def update_super_admin_settings(
+    data: SettingsIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    payload = {k: v for k, v in data.model_dump(exclude_unset=True).items()}
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.super_admin_settings.update_one(
+        {"_id": "singleton"}, {"$set": payload}, upsert=True
+    )
+    return await db.super_admin_settings.find_one({"_id": "singleton"}, {"_id": 0}) or {}

@@ -9,7 +9,7 @@ import {
   Briefcase, BarChart3, Eye, Check, Scissors, Stethoscope,
   Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe,
   Monitor, ExternalLink, Tv, Link as LinkIcon, RefreshCw,
-  Database, Receipt, Package, Copy
+  Receipt, Package, Copy
 } from 'lucide-react';
 
 const iconMap = {
@@ -58,8 +58,7 @@ const SuperAdminDashboard = () => {
     { key: 'companies', label: 'Empresas', icon: Building },
     { key: 'business-types', label: 'Tipos de Negocio', icon: Briefcase },
     { key: 'plans', label: 'Planos', icon: Package },
-    { key: 'billing-clients', label: 'Clientes Financeiros', icon: Receipt },
-    { key: 'company-clients', label: 'Base de Clientes', icon: Database },
+    { key: 'financial', label: 'Financeiro', icon: Receipt },
     { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
   ];
@@ -150,6 +149,18 @@ const SuperAdminDashboard = () => {
                   loadAll();
                 }
               }}
+              onImpersonate={async (c) => {
+                try {
+                  const { data } = await api.post(`/super-admin/companies/${c.id}/impersonate`);
+                  // Open a fresh tab for the client's dashboard — the new
+                  // tab gets its own access token via query string which
+                  // the AuthContext will consume and stash into localStorage.
+                  const url = `${window.location.origin}/__impersonate__?token=${encodeURIComponent(data.access_token)}&slug=${encodeURIComponent(data.company_slug || '')}`;
+                  window.open(url, '_blank');
+                } catch (e) {
+                  toast.error('Falha ao acessar: ' + (e?.response?.data?.detail || e.message));
+                }
+              }}
               reload={loadAll}
             />
           )}
@@ -169,10 +180,9 @@ const SuperAdminDashboard = () => {
             />
           )}
           {activeTab === 'plans' && <PlansTab />}
-          {activeTab === 'billing-clients' && <BillingClientsTab />}
-          {activeTab === 'company-clients' && <CompanyClientsTab companies={companies} />}
+          {activeTab === 'financial' && <FinancialTab companies={companies} />}
           {activeTab === 'indoor' && <IndoorTab companies={companies} />}
-          {activeTab === 'settings' && <SettingsTab />}
+          {activeTab === 'settings' && <SettingsTab companies={companies} />}
         </div>
       </main>
 
@@ -246,7 +256,7 @@ const DashboardTab = ({ stats, companies, businessTypes }) => (
 );
 
 /* ========== COMPANIES TAB ========== */
-const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onAdd, onEdit, onDelete }) => {
+const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onAdd, onEdit, onDelete, onImpersonate }) => {
   const filtered = companies.filter(c =>
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -313,6 +323,10 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-1">
                       <CompanyLinksDropdown company={company} />
+                      <button onClick={() => onImpersonate(company)} data-testid={`impersonate-company-${company.id}`}
+                        className="p-2 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors" title="Gestão (acessar como admin)">
+                        <Headphones className="w-4 h-4" />
+                      </button>
                       <button onClick={() => onEdit(company)} data-testid={`edit-company-${company.id}`}
                         className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
                         <Pencil className="w-4 h-4" />
@@ -505,6 +519,15 @@ const PlansTab = () => {
 };
 
 const PlanModal = ({ initial, onClose, onSave }) => {
+  const [businessTypes, setBusinessTypes] = useState([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get('/super-admin/business-types');
+        setBusinessTypes(Array.isArray(data) ? data : (data.items || []));
+      } catch (e) { /* ignore */ }
+    })();
+  }, []);
   const [form, setForm] = useState({
     name: initial?.name || '',
     description: initial?.description || '',
@@ -514,8 +537,20 @@ const PlanModal = ({ initial, onClose, onSave }) => {
     max_users: initial?.max_users ?? 1,
     enabled_features: initial?.enabled_features || [],
     is_active: initial?.is_active !== false,
+    business_type_ids: initial?.business_type_ids || [],
+    billing_cycle: initial?.billing_cycle || 'monthly',
+    installments: initial?.installments ?? 1,
+    grace_days: initial?.grace_days ?? 5,
   });
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+  const toggleBt = (id) => {
+    setForm(prev => ({
+      ...prev,
+      business_type_ids: prev.business_type_ids.includes(id)
+        ? prev.business_type_ids.filter(x => x !== id)
+        : [...prev.business_type_ids, id]
+    }));
+  };
   return (
     <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} data-testid="plan-modal">
@@ -556,9 +591,45 @@ const PlanModal = ({ initial, onClose, onSave }) => {
               <input type="number" min={0} value={form.max_users} onChange={(e) => set('max_users', parseInt(e.target.value, 10) || 0)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="plan-max-users-input" />
             </div>
           </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Ciclo</label>
+              <select value={form.billing_cycle} onChange={(e) => set('billing_cycle', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="plan-cycle-select">
+                <option value="monthly">Mensal</option>
+                <option value="yearly">Anual</option>
+                <option value="one_time">Pagamento único</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Parcelas geradas</label>
+              <input type="number" min={1} max={60} value={form.installments} onChange={(e) => set('installments', parseInt(e.target.value, 10) || 1)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="plan-installments-input" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Dias p/ bloqueio</label>
+              <input type="number" min={0} max={90} value={form.grace_days} onChange={(e) => set('grace_days', parseInt(e.target.value, 10) || 0)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="plan-grace-days-input" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">Tipos de negócio (em quais este plano aparece)</label>
+            <div className="flex flex-wrap gap-2 p-2 border border-slate-200 rounded max-h-32 overflow-y-auto">
+              {businessTypes.length === 0 ? (
+                <span className="text-xs text-slate-400">Nenhum tipo cadastrado ainda.</span>
+              ) : businessTypes.map(bt => {
+                const on = form.business_type_ids.includes(bt.id);
+                return (
+                  <button key={bt.id} type="button" onClick={() => toggleBt(bt.id)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition ${on ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+                    data-testid={`plan-bt-toggle-${bt.id}`}>
+                    {bt.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Na tela de cadastro pública (/landing), ao escolher um desses tipos o cliente verá este plano.</p>
+          </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.is_active} onChange={(e) => set('is_active', e.target.checked)} />
-            Plano ativo (disponível para atribuição)
+            Plano ativo (disponível para venda)
           </label>
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
@@ -577,255 +648,243 @@ const PlanModal = ({ initial, onClose, onSave }) => {
   );
 };
 
-// ─── BILLING CLIENTS (manual financial) ───────────────────────────────────────
-const BillingClientsTab = () => {
-  const [data, setData] = useState({ items: [], total: 0, total_value: 0 });
+
+// ─── FINANCIAL TAB (invoices + suspension control) ──────────────────────────
+const FinancialTab = ({ companies }) => {
+  const [data, setData] = useState({ items: [], total: 0, totals: { pending: 0, paid: 0, overdue: 0 } });
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(null);
-  const [showModal, setShowModal] = useState(false);
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterCompany, setFilterCompany] = useState('');
+  const [showNew, setShowNew] = useState(false);
+  const [running, setRunning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: d } = await api.get('/super-admin/billing-clients');
+      const params = {};
+      if (filterCompany) params.company_id = filterCompany;
+      if (filterStatus) params.status_filter = filterStatus;
+      const { data: d } = await api.get('/super-admin/invoices', { params });
       setData(d);
-    } catch (e) { toast.error('Erro ao carregar clientes financeiros'); }
+    } catch (e) { toast.error('Erro ao carregar faturas'); }
     finally { setLoading(false); }
-  }, []);
+  }, [filterCompany, filterStatus]);
   useEffect(() => { load(); }, [load]);
 
-  const handleSave = async (form) => {
+  const markPaid = async (inv) => {
     try {
-      if (editing?.id) await api.put(`/super-admin/billing-clients/${editing.id}`, form);
-      else await api.post('/super-admin/billing-clients', form);
-      toast.success(editing?.id ? 'Atualizado' : 'Criado');
-      setShowModal(false); setEditing(null);
+      await api.put(`/super-admin/invoices/${inv.id}`, { status: 'paid' });
+      toast.success('Fatura marcada como paga');
       await load();
-    } catch (e) { toast.error('Erro: ' + (e?.response?.data?.detail || e.message)); }
+    } catch (e) { toast.error('Erro ao atualizar'); }
   };
-  const handleDelete = async (c) => {
-    if (!window.confirm(`Excluir "${c.name}"?`)) return;
-    await api.delete(`/super-admin/billing-clients/${c.id}`);
+
+  const del = async (inv) => {
+    if (!window.confirm('Excluir esta fatura?')) return;
+    await api.delete(`/super-admin/invoices/${inv.id}`);
     await load();
   };
 
+  const runSuspension = async () => {
+    if (!window.confirm('Rodar verificação de inadimplência? Empresas com atraso > grace_days serão suspensas.')) return;
+    setRunning(true);
+    try {
+      const { data: r } = await api.post('/super-admin/invoices/run-suspension-check');
+      toast.success(`${r.marked_overdue} faturas marcadas como vencidas, ${r.companies_suspended} empresa(s) suspensa(s)`);
+      await load();
+    } catch (e) { toast.error('Erro na rotina'); }
+    finally { setRunning(false); }
+  };
+
   return (
-    <div className="space-y-4" data-testid="billing-clients-tab">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <p className="text-sm text-slate-600">{data.total} cliente(s) cadastrado(s)</p>
-          <p className="text-xs text-slate-400">Total recorrente: <span className="font-bold text-emerald-600">R$ {(data.total_value || 0).toFixed(2)}</span></p>
-        </div>
-        <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary text-sm flex items-center gap-2" data-testid="add-billing-btn">
-          <Plus className="w-4 h-4" /> Novo Cliente Financeiro
+    <div className="space-y-4" data-testid="financial-tab">
+      <div className="grid grid-cols-3 gap-3">
+        <div className="card p-3"><p className="text-xs text-slate-500">A Receber</p><p className="text-lg font-bold text-amber-600">R$ {(data.totals?.pending || 0).toFixed(2)}</p></div>
+        <div className="card p-3"><p className="text-xs text-slate-500">Vencido</p><p className="text-lg font-bold text-red-600">R$ {(data.totals?.overdue || 0).toFixed(2)}</p></div>
+        <div className="card p-3"><p className="text-xs text-slate-500">Pago</p><p className="text-lg font-bold text-emerald-600">R$ {(data.totals?.paid || 0).toFixed(2)}</p></div>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <select value={filterCompany} onChange={(e) => setFilterCompany(e.target.value)} className="px-3 py-2 border border-slate-300 rounded text-sm" data-testid="financial-filter-company">
+          <option value="">— Todas empresas —</option>
+          {(companies || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-2 border border-slate-300 rounded text-sm" data-testid="financial-filter-status">
+          <option value="">— Todos status —</option>
+          <option value="pending">A receber</option>
+          <option value="overdue">Vencido</option>
+          <option value="paid">Pago</option>
+          <option value="canceled">Cancelado</option>
+        </select>
+        <button onClick={() => setShowNew(true)} className="btn-primary text-sm flex items-center gap-2" data-testid="add-invoice-btn"><Plus className="w-4 h-4" /> Nova fatura</button>
+        <button onClick={runSuspension} disabled={running} className="px-3 py-2 text-sm rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-60" data-testid="run-suspension-btn">
+          {running ? 'Rodando…' : 'Rodar inadimplência'}
         </button>
       </div>
       {loading ? (
         <div className="py-12 text-center text-slate-400 text-sm">Carregando…</div>
       ) : data.items.length === 0 ? (
-        <div className="py-12 text-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
-          Nenhum cliente cadastrado.
-        </div>
+        <div className="py-12 text-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">Sem faturas.</div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="text-left px-4 py-2.5">Nome</th>
-                <th className="text-right px-4 py-2.5">Licenças</th>
-                <th className="text-right px-4 py-2.5">Valor Unit.</th>
-                <th className="text-right px-4 py-2.5">Total</th>
-                <th className="text-left px-4 py-2.5">Notas</th>
+                <th className="text-left px-4 py-2.5">Empresa</th>
+                <th className="text-left px-4 py-2.5">Descrição</th>
+                <th className="text-left px-4 py-2.5">Vencimento</th>
+                <th className="text-right px-4 py-2.5">Valor</th>
+                <th className="text-left px-4 py-2.5">Status</th>
                 <th className="px-4 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
-              {data.items.map(c => (
-                <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50" data-testid={`billing-row-${c.id}`}>
-                  <td className="px-4 py-2.5 font-medium text-slate-900">{c.name}</td>
-                  <td className="px-4 py-2.5 text-right">{c.licenses}</td>
-                  <td className="px-4 py-2.5 text-right">R$ {(c.unit_price || 0).toFixed(2)}</td>
-                  <td className="px-4 py-2.5 text-right font-bold text-emerald-700">R$ {(c.total_value || 0).toFixed(2)}</td>
-                  <td className="px-4 py-2.5 text-xs text-slate-500 truncate max-w-[200px]">{c.notes || '—'}</td>
-                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                    <button onClick={() => { setEditing(c); setShowModal(true); }} className="p-1.5 rounded hover:bg-slate-100" data-testid={`edit-billing-${c.id}`}>
-                      <Pencil className="w-3.5 h-3.5 text-slate-500" />
-                    </button>
-                    <button onClick={() => handleDelete(c)} className="p-1.5 rounded hover:bg-red-50 text-red-500" data-testid={`delete-billing-${c.id}`}>
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {data.items.map(inv => {
+                const statusClr = inv.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
+                  : inv.status === 'overdue' ? 'bg-red-100 text-red-700'
+                  : inv.status === 'canceled' ? 'bg-slate-100 text-slate-500'
+                  : 'bg-amber-100 text-amber-700';
+                return (
+                  <tr key={inv.id} className="border-t border-slate-100 hover:bg-slate-50" data-testid={`invoice-row-${inv.id}`}>
+                    <td className="px-4 py-2.5 font-medium text-slate-900">{inv.company_name}</td>
+                    <td className="px-4 py-2.5 text-slate-600">{inv.description || '—'}</td>
+                    <td className="px-4 py-2.5 text-slate-600">{inv.due_date}</td>
+                    <td className="px-4 py-2.5 text-right font-bold">R$ {(inv.amount || 0).toFixed(2)}</td>
+                    <td className="px-4 py-2.5"><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${statusClr}`}>{inv.status?.toUpperCase()}</span></td>
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      {inv.status !== 'paid' && (
+                        <button onClick={() => markPaid(inv)} className="text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 mr-1" data-testid={`mark-paid-${inv.id}`}>Pago</button>
+                      )}
+                      <button onClick={() => del(inv)} className="p-1.5 rounded hover:bg-red-50 text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
-      {showModal && (
-        <BillingClientModal
-          initial={editing}
-          onClose={() => { setShowModal(false); setEditing(null); }}
-          onSave={handleSave}
+      {showNew && (
+        <NewInvoiceModal
+          companies={companies}
+          onClose={() => setShowNew(false)}
+          onSaved={async () => { setShowNew(false); await load(); }}
         />
       )}
     </div>
   );
 };
 
-const BillingClientModal = ({ initial, onClose, onSave }) => {
-  const [form, setForm] = useState({
-    name: initial?.name || '',
-    licenses: initial?.licenses ?? 1,
-    unit_price: initial?.unit_price ?? 0,
-    notes: initial?.notes || '',
-  });
-  const total = (form.licenses || 0) * (form.unit_price || 0);
-  const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+const NewInvoiceModal = ({ companies, onClose, onSaved }) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({ company_id: '', amount: 0, due_date: today, description: '' });
+  const save = async () => {
+    if (!form.company_id) return toast.error('Selecione uma empresa');
+    try {
+      await api.post('/super-admin/invoices', form);
+      toast.success('Fatura criada');
+      onSaved();
+    } catch (e) { toast.error('Erro ao criar fatura'); }
+  };
   return (
     <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()} data-testid="billing-modal">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()} data-testid="new-invoice-modal">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <h3 className="text-lg font-bold">{initial ? 'Editar Cliente' : 'Novo Cliente Financeiro'}</h3>
+          <h3 className="text-lg font-bold">Nova Fatura Manual</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-5 space-y-3">
           <div>
-            <label className="text-xs font-medium text-slate-700 mb-1 block">Nome *</label>
-            <input value={form.name} onChange={(e) => set('name', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="billing-name-input" />
+            <label className="text-xs font-medium text-slate-700 mb-1 block">Empresa *</label>
+            <select value={form.company_id} onChange={(e) => setForm({ ...form, company_id: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="invoice-company-select">
+              <option value="">— Selecione —</option>
+              {(companies || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-slate-700 mb-1 block">Licenças</label>
-              <input type="number" min={0} value={form.licenses} onChange={(e) => set('licenses', parseInt(e.target.value, 10) || 0)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="billing-licenses-input" />
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Valor (R$)</label>
+              <input type="number" min={0} step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="invoice-amount-input" />
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-700 mb-1 block">Valor unit. (R$)</label>
-              <input type="number" min={0} step="0.01" value={form.unit_price} onChange={(e) => set('unit_price', parseFloat(e.target.value) || 0)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="billing-unit-price-input" />
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Vencimento</label>
+              <input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="invoice-due-input" />
             </div>
           </div>
-          <div className="px-3 py-2.5 bg-emerald-50 border border-emerald-200 rounded text-sm">
-            Total: <span className="font-bold text-emerald-700">R$ {total.toFixed(2)}</span>
-          </div>
           <div>
-            <label className="text-xs font-medium text-slate-700 mb-1 block">Notas</label>
-            <textarea value={form.notes} onChange={(e) => set('notes', e.target.value)} rows={2} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+            <label className="text-xs font-medium text-slate-700 mb-1 block">Descrição</label>
+            <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
           </div>
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded border border-slate-300 hover:bg-white">Cancelar</button>
-          <button
-            onClick={() => onSave(form)}
-            disabled={!form.name?.trim()}
-            className="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
-            data-testid="save-billing-btn"
-          >
-            Salvar
-          </button>
+          <button onClick={save} disabled={!form.company_id} className="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50" data-testid="save-invoice-btn">Salvar</button>
         </div>
       </div>
     </div>
   );
 };
 
-// ─── COMPANY CLIENTS BROWSER (read-only) ──────────────────────────────────────
-const CompanyClientsTab = ({ companies }) => {
-  const [companyId, setCompanyId] = useState('');
-  const [search, setSearch] = useState('');
-  const [data, setData] = useState({ company_name: '', total: 0, clients: [] });
-  const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!companyId) { setData({ company_name: '', total: 0, clients: [] }); return; }
-    setLoading(true);
+const SettingsTab = ({ companies }) => {
+  const [settings, setSettings] = useState({ financial_manager_company_id: '' });
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get('/super-admin/settings');
+        setSettings({ financial_manager_company_id: data.financial_manager_company_id || '' });
+      } catch (e) { /* first access: no doc yet */ }
+      finally { setLoading(false); }
+    })();
+  }, []);
+  const save = async () => {
+    setSaving(true);
     try {
-      const { data: d } = await api.get(`/super-admin/companies/${companyId}/clients`, {
-        params: { q: search || undefined, limit: 500 }
-      });
-      setData(d);
-    } catch (e) { toast.error('Erro ao carregar clientes da empresa'); }
-    finally { setLoading(false); }
-  }, [companyId, search]);
-  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
-
+      await api.put('/super-admin/settings', settings);
+      toast.success('Configurações salvas');
+    } catch (e) { toast.error('Falha ao salvar configurações'); }
+    finally { setSaving(false); }
+  };
   return (
-    <div className="space-y-4" data-testid="company-clients-tab">
-      <div className="flex flex-col md:flex-row gap-2">
-        <select
-          value={companyId}
-          onChange={(e) => setCompanyId(e.target.value)}
-          className="md:w-72 px-3 py-2 border border-slate-300 rounded text-sm"
-          data-testid="select-company-clients"
-        >
-          <option value="">— Selecione uma empresa —</option>
-          {(companies || []).map(c => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar por nome, telefone ou e-mail…"
-            className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded text-sm"
-            disabled={!companyId}
-            data-testid="search-company-clients"
-          />
-        </div>
-      </div>
-      {!companyId ? (
-        <div className="py-12 text-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
-          Selecione uma empresa para ver seus clientes.
-        </div>
-      ) : loading ? (
-        <div className="py-12 text-center text-slate-400 text-sm">Carregando…</div>
+    <div className="animate-fade-in card max-w-2xl" data-testid="settings-tab">
+      <h3 className="text-lg font-semibold font-heading text-slate-900 mb-4">Configuracoes Globais</h3>
+      {loading ? (
+        <p className="text-sm text-slate-400">Carregando…</p>
       ) : (
-        <>
-          <p className="text-xs text-slate-500">
-            <span className="font-bold text-slate-900">{data.company_name}</span> · {data.total} cliente(s)
-          </p>
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="text-left px-4 py-2.5">Nome</th>
-                  <th className="text-left px-4 py-2.5">Telefone</th>
-                  <th className="text-left px-4 py-2.5">E-mail</th>
-                  <th className="text-left px-4 py-2.5">Tags</th>
-                  <th className="text-left px-4 py-2.5">Cadastro</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.clients.map(c => (
-                  <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50" data-testid={`row-client-${c.id}`}>
-                    <td className="px-4 py-2.5 font-medium text-slate-900">{c.name || '—'}</td>
-                    <td className="px-4 py-2.5 text-slate-600">{c.phone || '—'}</td>
-                    <td className="px-4 py-2.5 text-slate-600">{c.email || '—'}</td>
-                    <td className="px-4 py-2.5 text-xs">
-                      {(c.tags || []).slice(0, 3).map((t, i) => (
-                        <span key={i} className="inline-block px-1.5 py-0.5 mr-1 bg-slate-100 text-slate-700 rounded">{t}</span>
-                      ))}
-                      {(c.tags || []).length > 3 && <span className="text-slate-400">+{(c.tags || []).length - 3}</span>}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-500">{(c.created_at || '').slice(0, 10)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">
+              Empresa Gestora Financeira (opcional)
+            </label>
+            <select
+              value={settings.financial_manager_company_id}
+              onChange={(e) => setSettings({ ...settings, financial_manager_company_id: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+              data-testid="settings-financial-mgr-select"
+            >
+              <option value="">— Nenhuma (SuperAdmin gerencia) —</option>
+              {(companies || []).map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500 mt-1">
+              Essa empresa terá acesso a um menu especial "Gestão SuperAdmin" com as faturas e clientes da plataforma.
+            </p>
           </div>
-        </>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="btn-primary text-sm"
+            data-testid="save-settings-btn"
+          >
+            {saving ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
       )}
     </div>
   );
 };
-
-
-const SettingsTab = () => (
-  <div className="animate-fade-in card max-w-2xl">
-    <h3 className="text-lg font-semibold font-heading text-slate-900 mb-4">Configuracoes Globais</h3>
-    <p className="text-sm text-slate-500">Em breve: configuracoes globais do sistema, integrações, notificacoes.</p>
-  </div>
-);
 
 /* ========== INDOOR TAB (Super Admin) ========== */
 const CompanyLinksDropdown = ({ company }) => {

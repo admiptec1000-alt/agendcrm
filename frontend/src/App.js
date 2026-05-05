@@ -12,6 +12,7 @@ import CompanyDashboard from './pages/Company/Dashboard';
 import PublicBooking from './pages/Public/BookingPage';
 import IndoorDisplay from './pages/Public/IndoorDisplay';
 import CompanyLoginPage from './pages/Public/CompanyLoginPage';
+import ImpersonateHandler from './pages/ImpersonateHandler';
 import './index.css';
 
 const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
@@ -63,6 +64,7 @@ const AppRoutes = () => {
       <Route path="/landing" element={<LandingPage />} />
       <Route path="/admin-login" element={<AdminLoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/__impersonate__" element={<ImpersonateHandler />} />
 
       {/* Protected */}
       <Route path="/super-admin/*" element={<PrivateRoute requireSuperAdmin={true}><SuperAdminDashboard /></PrivateRoute>} />
