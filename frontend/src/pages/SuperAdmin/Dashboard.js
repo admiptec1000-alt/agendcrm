@@ -152,9 +152,12 @@ const SuperAdminDashboard = () => {
               onImpersonate={async (c) => {
                 try {
                   const { data } = await api.post(`/super-admin/companies/${c.id}/impersonate`);
-                  // Open a fresh tab for the client's dashboard — the new
-                  // tab gets its own access token via query string which
-                  // the AuthContext will consume and stash into localStorage.
+                  // Open a fresh tab for the client's dashboard. The new
+                  // tab consumes the token via ImpersonateHandler which
+                  // stores it in **sessionStorage** (per-tab) so the
+                  // SuperAdmin's localStorage token in this tab is NOT
+                  // overwritten — preventing permission errors when the
+                  // SuperAdmin keeps managing global resources here.
                   const url = `${window.location.origin}/__impersonate__?token=${encodeURIComponent(data.access_token)}&slug=${encodeURIComponent(data.company_slug || '')}`;
                   window.open(url, '_blank');
                 } catch (e) {

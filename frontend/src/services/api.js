@@ -34,8 +34,18 @@ api.interceptors.response.use(
       // Don't redirect on login endpoints - let the component handle the error
       const url = error.config?.url || '';
       if (!url.includes('/auth/login') && !url.includes('/auth/super-admin/login')) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
+        // Only clear the storage that owns the current tab's session. An
+        // impersonated tab uses sessionStorage; clearing localStorage here
+        // would log the SuperAdmin out of the original tab.
+        const isImpersonatedTab = !!sessionStorage.getItem('token');
+        if (isImpersonatedTab) {
+          sessionStorage.removeItem('token');
+          sessionStorage.removeItem('user');
+          sessionStorage.removeItem('impersonating');
+        } else {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+        }
         // Redirect to the company login based on current URL
         const slug = window.location.pathname.split('/')[1];
         if (slug && slug !== 'super-admin' && slug !== 'admin-login' && slug !== 'landing') {

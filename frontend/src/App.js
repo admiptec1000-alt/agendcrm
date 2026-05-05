@@ -18,8 +18,10 @@ import './index.css';
 const PrivateRoute = ({ children, requireSuperAdmin = false }) => {
   const { isAuthenticated, isSuperAdmin, loading, user } = useAuth();
 
-  // Also check localStorage as fallback during state hydration
-  const hasToken = !!localStorage.getItem('token');
+  // Also check storage as fallback during state hydration. Impersonated
+  // tabs keep their token in sessionStorage; the SuperAdmin tab in
+  // localStorage. Either one means we're authenticated.
+  const hasToken = !!(sessionStorage.getItem('token') || localStorage.getItem('token'));
 
   if (loading) {
     return (

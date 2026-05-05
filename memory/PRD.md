@@ -9,6 +9,17 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+
+### 2026-05-05 — Fix P0: Conflito de Token Super Admin × Impersonação
+- **Bug**: Após o SuperAdmin clicar em "Gestão" para impersonar uma empresa (abre nova aba), o token clonado era gravado em `localStorage.token`, sobrescrevendo o token do SuperAdmin. Voltando à aba original, qualquer ação privilegiada (ex.: salvar Nicho de Negócio) falhava com 401/403.
+- **Fix**:
+  - `pages/ImpersonateHandler.js`: token de impersonação agora é gravado **APENAS em `sessionStorage`** (per-tab), nunca em `localStorage`. Flag `sessionStorage.impersonating='1'` marca a aba.
+  - `services/api.js`: interceptor de requisição já preferia `sessionStorage` sobre `localStorage`. Interceptor 401 atualizado para limpar somente o storage que contém o token corrente (impede deslogar o SuperAdmin se a aba impersonada perder a sessão).
+  - `context/AuthContext.js`: refatorado com helpers `readToken/readUser/getAuthStorage`. `loadUser()` cacheia o user no storage correto; `logout()` limpa apenas o próprio storage; expõe `isImpersonating` e `refreshUser`.
+  - `App.js`: `hasToken` agora inclui `sessionStorage` para hidratação correta de abas impersonadas.
+- **Validado via Playwright**: SuperAdmin login → setItem fake token em sessionStorage → `localStorage.token` permanece intacto; após clear da session, SuperAdmin segue logado.
+
+
 ## What's been implemented (latest first)
 
 ### 2026-05-04 — Super-Admin v2: impersonação, planos por tipo de negócio, módulo financeiro
