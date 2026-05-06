@@ -10,6 +10,29 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 (cont.) — Flow Engine: Logging + Debug Endpoints + Hardening + Modal memo
+
+**Bug raiz reconfirmado**: a versão antiga do `_trigger_flow_for_ticket` usava `data.label` como fallback para o texto enviado, fazendo com que o bot só mandasse "Inicio" (label do nó start) e nunca avançasse. O motor real (`flow_engine.py`) já corrige isso skipando o nó `start`. Em produção (`agentcrm.8ip.com.br`), o redeploy é OBRIGATÓRIO para o fix entrar em ação.
+
+**O que foi feito nesta sessão**:
+- **Logging detalhado em `flow_engine.advance_flow`** — cada hop (visit, type, branching) emite INFO log. Erros (orphan node, http error, hop limit) emitem WARNING. `_save_state` loga `matched/modified` para diagnosticar persistência travada.
+- **Hardening**:
+  - Orphan node (estado salvo refere-se a node inexistente após edição do fluxo) agora limpa o estado ao invés de retornar silenciosamente.
+  - `dry_run=True` agora honrado em TODOS os caminhos (não só no `_emit`); retorna mensagens previstas sem persistir nem chamar WhatsApp.
+  - Nó `ticket/queue/transfer` agora retorna `sent` (era `return` cru — TypeError potencial em chamador que faça `len(...)`).
+  - `_save_state` consulta o ticket existente antes de regravar `flow_started_at` (não mais regravado a cada save).
+- **3 endpoints de debug** (admin/owner-only, prefixados `/api/crm/`):
+  - `GET /tickets/{id}/flow-state` — mostra `active_flow_id/node_id`, `flow_vars`, `flow_started_at` + nó atual completo do fluxo.
+  - `POST /tickets/{id}/reset-flow` — limpa todo o estado de fluxo do ticket (uso: cliente travado, fluxo editado).
+  - `POST /tickets/{id}/test-flow` `{incoming_text?, is_initial?}` — DRY-RUN advance_flow no estado atual; retorna mensagens previstas. Não persiste nem envia WhatsApp.
+- **Frontend**: `ConnectionFlowModal` agora é `React.memo` com comparator estrito (`conn.id` + `conn.default_flow_id`) e o `useEffect` de carregar fluxos tem cleanup com flag `active` (evita setState após unmount). `loadData` em `ConexoesPage` virou `useCallback([])` para reduzir re-renders descendentes. Esses ajustes endurecem contra o flicker reportado pelo usuário (não reproduzível em preview, mas aplicado defensivamente).
+- **Testes**: novo `/app/backend/tests/test_flow_engine.py` com 7 cases pytest cobrindo: trigger inicial (welcome+menu), reply de menu (branch), reply inválido (re-prompt), nó ticket/queue (encerra fluxo), dry_run (não persiste), orphan node (limpa estado), start com texto malicioso (skipado). **7/7 passing**.
+- **Validação E2E em preview**: criei conexão + fluxo via `/api/crm/flows/import`, ataquei `default_flow_id`, simulei `POST /api/channels/webhook/message` 2x. Confirmado:
+  1. Primeira msg: cria ticket, dispara welcome + menu. Logs trace cada hop. Estado salvo: `active_flow_node_id="menu1"`.
+  2. Reply "1": resolve idx=0, envia "Plano Basico", encerra fluxo (`active_flow_node_id=None`).
+
+
+
 ### 2026-05-06 — Hotfix P0: Bot só respondia "Início" no fluxo importado
 **Causa raiz**: `_trigger_flow_for_ticket` (em `crm_routes.py`) era um **MOCK**. O comentário no código admitia: *"The full flow execution engine (branching, conditions, AI nodes) is a separate roadmap item; this fires off the welcome reply so the customer gets an instant acknowledgement"*. Resultado: cliente mandava mensagem → bot enviava só o nó de início e parava. Os menus, branches, HTTP nodes (SGP) e ticket-queues nunca eram executados.
 

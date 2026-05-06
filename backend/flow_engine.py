@@ -247,7 +247,11 @@ async def advance_flow(
     vars_["customer_phone"] = ticket.get("customer_phone") or ""
     vars_["number"] = ticket.get("customer_phone") or ""
 
-    async def _emit(text: str):
+    tid = ticket.get("id")
+    logger.info(f"[flow_engine] advance start flow={flow_id} ticket={tid} is_initial={is_initial} incoming_text={(incoming_text or '')[:80]!r} prev_node={ticket.get('active_flow_node_id')!r}")
+
+    async def _emit_and_persist(text: str):
+        """Send text outbound and persist as agent message. Honours dry_run."""
         sent.append(text)
         if dry_run:
             return
@@ -260,18 +264,20 @@ async def advance_flow(
     if is_initial:
         entry = _entry_node(nodes)
         if not entry:
-            logger.warning(f"[flow_engine] flow {flow_id}: no entry node")
+            logger.warning(f"[flow_engine] flow {flow_id}: no entry node — flow has {len(nodes)} nodes")
             return sent
         current_id = entry["id"]
-        logger.info(f"[flow_engine] flow {flow_id} initial trigger ticket={ticket.get('id')} entry={entry['id']}")
+        logger.info(f"[flow_engine] flow {flow_id} initial trigger ticket={tid} entry={entry['id']!r} type={_node_type(entry)!r}")
     else:
         prev_id = ticket.get("active_flow_node_id")
         if not prev_id:
-            logger.info(f"[flow_engine] ticket {ticket.get('id')} has no active_flow_node_id; ignoring reply")
+            logger.info(f"[flow_engine] ticket {tid} has no active_flow_node_id; ignoring reply")
             return sent
         prev = _node_by_id(nodes, prev_id)
         if not prev:
-            logger.warning(f"[flow_engine] previous node {prev_id} missing from flow")
+            logger.warning(f"[flow_engine] previous node {prev_id!r} missing from flow {flow_id} — clearing state")
+            if not dry_run:
+                await _save_state(db, ticket["id"], flow_id, None, vars_)
             return sent
         # Process customer reply for menu nodes
         if _node_type(prev) == "menu":
@@ -279,20 +285,24 @@ async def advance_flow(
             opts = cfg.get("options") or []
             choice_idx = _resolve_menu_choice(incoming_text, opts)
             if choice_idx is None:
+                logger.info(f"[flow_engine] menu {prev_id} got invalid reply {incoming_text!r}; re-prompting")
                 txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."
-                await _emit(txt)
+                await _emit_and_persist(txt)
                 return sent
             branch_handle = f"option-{choice_idx}"
             cap = cfg.get("capture_var")
             if cap and choice_idx < len(opts):
                 vars_[cap] = opts[choice_idx].get("label") or opts[choice_idx].get("key") or incoming_text
+            logger.info(f"[flow_engine] menu {prev_id} resolved to idx={choice_idx} handle={branch_handle}")
         else:
             cfg = (prev.get("data") or {}).get("config") or {}
             cap = cfg.get("capture_var")
             if cap and incoming_text:
                 vars_[cap] = incoming_text.strip()
+                logger.info(f"[flow_engine] captured {cap}={incoming_text.strip()!r} from node {prev_id}")
         nxt_edge = _next_edge(edges, prev_id, branch_handle)
         if not nxt_edge:
+            logger.info(f"[flow_engine] no edge from {prev_id} (handle={branch_handle}); ending flow")
             if not dry_run:
                 await _save_state(db, ticket["id"], flow_id, None, vars_)
             return sent
@@ -305,37 +315,45 @@ async def advance_flow(
         hops += 1
         node = _node_by_id(nodes, current_id)
         if not node:
+            logger.warning(f"[flow_engine] referenced node {current_id!r} not found — breaking")
             break
         nt = _node_type(node)
+        logger.info(f"[flow_engine] hop={hops} visiting node {current_id!r} type={nt!r}")
 
-        if nt in ("start",):
+        if nt in ("start", "trigger"):
             # No output, just advance
             edge = _next_edge(edges, current_id)
+            if not edge:
+                logger.warning(f"[flow_engine] start node {current_id} has no outgoing edge — flow ends silently")
             current_id = edge["target"] if edge else None
             continue
 
-        if nt in ("message", "welcome", "send_message"):
+        if nt in ("message", "welcome", "send_message", "text"):
             text = _node_text(node, vars_)
             if text:
-                await _persist_outgoing(db, ticket["id"], text, flow_id)
-                await _send_whatsapp(ticket, text)
+                await _emit_and_persist(text)
+            else:
+                logger.info(f"[flow_engine] node {current_id} ({nt}) has no text — skipping emit")
             edge = _next_edge(edges, current_id)
             current_id = edge["target"] if edge else None
             continue
 
         if nt == "menu":
             text = _node_text(node, vars_) or "Escolha uma opcao:"
-            await _persist_outgoing(db, ticket["id"], text, flow_id)
-            await _send_whatsapp(ticket, text)
+            await _emit_and_persist(text)
             pending_node_id = current_id
             current_id = None
+            logger.info(f"[flow_engine] menu {pending_node_id} posted; waiting for customer reply")
             break
 
         if nt in ("http", "request", "api", "http_request"):
+            logger.info(f"[flow_engine] executing http node {current_id}")
             result = await _execute_http_node(node, vars_, company_id)
             # Merge result into vars so subsequent message nodes can interpolate
             for k, v in result.items():
                 vars_[k] = v
+            if "_http_error" in result:
+                logger.warning(f"[flow_engine] http node {current_id} error: {result['_http_error']}")
             edge = _next_edge(edges, current_id)
             current_id = edge["target"] if edge else None
             continue
@@ -349,18 +367,26 @@ async def advance_flow(
                      "flow_vars": vars_}
             if queue:
                 patch["queue"] = queue
-            await db.tickets.update_one({"id": ticket["id"]}, {"$set": patch})
-            return  # flow ends here — human pickup
+            if not dry_run:
+                await db.tickets.update_one({"id": ticket["id"]}, {"$set": patch})
+            logger.info(f"[flow_engine] flow ended at ticket/queue node {current_id} queue={queue!r}")
+            return sent  # flow ends here — human pickup
 
         # Unknown node type: try to send text then advance
+        logger.info(f"[flow_engine] unknown node type {nt!r}; treating as message")
         text = _node_text(node, vars_)
         if text:
-            await _persist_outgoing(db, ticket["id"], text, flow_id)
-            await _send_whatsapp(ticket, text)
+            await _emit_and_persist(text)
         edge = _next_edge(edges, current_id)
         current_id = edge["target"] if edge else None
 
-    await _save_state(db, ticket["id"], flow_id, pending_node_id, vars_)
+    if hops >= HOP_LIMIT:
+        logger.warning(f"[flow_engine] hop limit reached on flow {flow_id} ticket {tid}")
+
+    if not dry_run:
+        await _save_state(db, ticket["id"], flow_id, pending_node_id, vars_)
+    logger.info(f"[flow_engine] advance done ticket={tid} sent_count={len(sent)} pending_node={pending_node_id!r}")
+    return sent
 
 
 def _resolve_menu_choice(text: Optional[str], options: list) -> Optional[int]:
@@ -396,9 +422,13 @@ async def _save_state(db, ticket_id: str, flow_id: str, pending_node_id: Optiona
         "flow_vars": vars_,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    if pending_node_id and not vars_.get("_flow_started"):
-        patch["flow_started_at"] = datetime.now(timezone.utc).isoformat()
-    await db.tickets.update_one({"id": ticket_id}, {"$set": patch})
+    if pending_node_id:
+        # First time entering a wait state — record start timestamp once.
+        existing = await db.tickets.find_one({"id": ticket_id}, {"_id": 0, "flow_started_at": 1})
+        if not (existing or {}).get("flow_started_at"):
+            patch["flow_started_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.tickets.update_one({"id": ticket_id}, {"$set": patch})
+    logger.info(f"[flow_engine] save_state ticket={ticket_id} pending_node={pending_node_id!r} matched={getattr(res, 'matched_count', '?')}")
 
 
 async def is_flow_active(ticket: dict) -> bool:

@@ -3179,7 +3179,7 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
     const interval = setInterval(() => { checkHealth(); checkVersion(); }, 60000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [conns, tmpls] = await Promise.all([channelsAPI.getConnections(), channelsAPI.getTemplates()]);
@@ -3191,7 +3191,7 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
       setTemplates(merged);
     } catch (e) { toast.error('Erro ao carregar dados'); }
     finally { setLoading(false); }
-  };
+  }, []);
 
   const handleConnect = async (connId) => {
     try { await channelsAPI.connectChannel(connId); loadData(); toast.success('Conectando...'); }
@@ -3420,12 +3420,17 @@ const EditableConnectionName = ({ conn, onSaved }) => {
 // === Modal: configura o Flowbuilder atrelado a uma conexao WhatsApp ===
 // O fluxo selecionado eh disparado automaticamente na PRIMEIRA mensagem
 // que um cliente novo enviar para essa conexao (Feature 3). Empty = sem fluxo.
-const ConnectionFlowModal = ({ conn, onClose, onSaved }) => {
+const ConnectionFlowModal = React.memo(({ conn, onClose, onSaved }) => {
   const [flowId, setFlowId] = useState(conn?.default_flow_id || '');
   const [flows, setFlows] = useState([]);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    crmAPI.getFlows().then(r => setFlows(r.data || [])).catch(() => setFlows([]));
+    let active = true;
+    crmAPI.getFlows()
+      .then(r => { if (active) setFlows(r.data || []); })
+      .catch(() => { if (active) setFlows([]); });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const save = async () => {
     setSaving(true);
@@ -3438,7 +3443,7 @@ const ConnectionFlowModal = ({ conn, onClose, onSaved }) => {
     } finally { setSaving(false); }
   };
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose} data-testid="connection-flow-modal">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold font-heading flex items-center gap-2">
@@ -3468,7 +3473,7 @@ const ConnectionFlowModal = ({ conn, onClose, onSaved }) => {
       </div>
     </div>
   );
-};
+}, (prev, next) => prev.conn?.id === next.conn?.id && prev.conn?.default_flow_id === next.conn?.default_flow_id);
 
 const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) => {
   const [qrData, setQrData] = useState(null);

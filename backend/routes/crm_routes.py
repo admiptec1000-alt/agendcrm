@@ -1491,6 +1491,96 @@ async def _trigger_flow_for_ticket(db: AsyncIOMotorDatabase, company_id: str, fl
     await advance_flow(db, ticket, flow, is_initial=True)
 
 
+# === Flow debug endpoints (admin/owner) — useful for troubleshooting why a
+# ticket is "stuck" on a node in production. ===
+@router.get("/tickets/{ticket_id}/flow-state")
+async def get_flow_state(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    t = await db.tickets.find_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"_id": 0, "id": 1, "ticket_number": 1, "customer_name": 1, "customer_phone": 1,
+         "connection_id": 1, "active_flow_id": 1, "active_flow_node_id": 1,
+         "flow_started_at": 1, "flow_vars": 1, "status": 1},
+    )
+    if not t:
+        raise HTTPException(404, "Ticket nao encontrado")
+    flow_summary = None
+    if t.get("active_flow_id"):
+        f = await db.flow_builders.find_one({"id": t["active_flow_id"], "company_id": user["company_id"]}, {"_id": 0, "name": 1, "nodes": 1, "edges": 1})
+        if f:
+            cur_node = next((n for n in (f.get("nodes") or []) if n.get("id") == t.get("active_flow_node_id")), None)
+            flow_summary = {
+                "name": f.get("name"),
+                "node_count": len(f.get("nodes") or []),
+                "edge_count": len(f.get("edges") or []),
+                "current_node": cur_node,
+            }
+    return {"ticket": t, "flow": flow_summary}
+
+
+@router.post("/tickets/{ticket_id}/reset-flow")
+async def reset_flow(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Clear flow state on a ticket. Useful when a flow gets stuck or the
+    flow definition has changed and the saved node id no longer exists."""
+    res = await db.tickets.update_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"$set": {
+            "active_flow_id": None,
+            "active_flow_node_id": None,
+            "flow_started_at": None,
+            "flow_vars": {},
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Ticket nao encontrado")
+    return {"ok": True, "modified": res.modified_count}
+
+
+class _FlowTestPayload(BaseModel):
+    incoming_text: Optional[str] = None
+    is_initial: Optional[bool] = None
+
+
+@router.post("/tickets/{ticket_id}/test-flow")
+async def test_flow_advance(
+    ticket_id: str,
+    payload: _FlowTestPayload,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """DRY-RUN advance the flow against this ticket's current state. Returns
+    the messages that WOULD be sent and the projected next node — without
+    persisting state or pushing to WhatsApp.
+    """
+    t = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Ticket nao encontrado")
+    flow_id = t.get("active_flow_id")
+    is_initial = payload.is_initial if payload.is_initial is not None else (not flow_id)
+    if not flow_id:
+        # Try to get the connection's default flow
+        if t.get("connection_id"):
+            conn = await db.channel_connections.find_one({"id": t["connection_id"], "company_id": user["company_id"]}, {"_id": 0, "default_flow_id": 1})
+            if conn and conn.get("default_flow_id"):
+                flow_id = conn["default_flow_id"]
+    if not flow_id:
+        raise HTTPException(400, "Ticket nao tem fluxo ativo nem conexao com fluxo padrao")
+    flow = await db.flow_builders.find_one({"id": flow_id, "company_id": user["company_id"]}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    from flow_engine import advance_flow
+    sent = await advance_flow(db, t, flow, incoming_text=payload.incoming_text, is_initial=is_initial, dry_run=True)
+    return {"messages_sent": sent, "is_initial": is_initial, "flow_name": flow.get("name")}
+
+
 # === TAGS ===
 from pydantic import BaseModel as _BM
 
