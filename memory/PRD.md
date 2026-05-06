@@ -10,6 +10,16 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Refator UX SGP: feature passa a ser company-side (refeito conforme feedback)
+- **Removido**: botão violeta "Importar SGP" da tabela de Empresas no Super Admin; card SGP do `ConfigPage` da empresa.
+- **Adicionado**:
+  - Página `IntegracoesPage` em `/app/frontend/src/pages/Company/Dashboard.js` (route `'integrações'`) que hospeda o `SgpConfigCard`. Aparece no menu lateral da empresa quando o feature `integrações` está habilitado no Tipo de Negócio.
+  - Botão "Importar SGP" (`Globe` violet pill) no header da tela de Fluxos do FlowBuilder (`/app/frontend/src/pages/CRM/FlowBuilderPage.js`), ao lado de "Novo Fluxo".
+  - Backend: novo endpoint `POST /api/sgp/import-flow` (company-side, usa `user.company_id`); endpoint legado `POST /api/sgp/super-admin/import-flow/{id}` mantido para compatibilidade.
+- **Bugfix de roteamento FastAPI**: o catch-all `POST /api/sgp/{action}` (proxy) era declarado ANTES de `/import-flow`, então engolia a chamada e retornava "Acao desconhecida: import-flow". Movido para o final do arquivo (única posição válida) — agora `/import-flow`, `/config`, `/config/test`, `/super-admin/import-flow/{id}` resolvem antes do catch-all.
+
+
+
 ### 2026-05-06 — SGP Integration + BT enhancements (Duplicar, show_on_landing)
 **Bloco 4 — Tipo de Negócio:**
 - Novo campo `show_on_landing` (default `False`) e endpoint público `/api/auth/business-types` agora filtra por esse flag — só aparece na Landing quem foi explicitamente marcado.
@@ -31,9 +41,10 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 
 **Como usar em produção (`adm@web.com` na agentcrm.8ip.com.br):**
 1. Faça redeploy desta versão preview → produção.
-2. Como Super Admin em produção, vá em **Empresas**, clique no ícone violeta (GitBranch) ao lado da empresa "Web Internet". Confirme — o fluxo "SGP — Atendimento Web Internet" será criado desativado.
-3. Acesse a empresa via "Gestão" (impersonação) → **Configurações** → preencha o card "Integração SGP" (base_url=`https://web.sgp.net.br`, token gerado em https://bit.ly/token-api-ura, app=`8ip`).
-4. Em **Flowbuilder**, abra o fluxo importado, ajuste textos/queues conforme necessário e ative.
+2. Garanta que o **Tipo de Negócio da empresa Web Internet** tenha a feature `integrações` ativa (Super Admin → Tipos de Negocio → editar BT).
+3. Logue como admin da empresa (ou via "Gestão" no Super Admin). Vá em **Flowbuilder → "Importar SGP"**. O fluxo "SGP — Atendimento Web Internet" será criado desativado.
+4. Vá em **Integrações** (menu lateral) e preencha o card SGP: `base_url=https://web.sgp.net.br`, `app=8ip`, token gerado em https://bit.ly/token-api-ura. Clique **Testar conexão**.
+5. Volte ao Flowbuilder, abra o fluxo importado, ajuste textos/queues e ative.
 
 
 

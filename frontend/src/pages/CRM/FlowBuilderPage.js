@@ -6,6 +6,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { crmAPI, aiAPI } from '../../services/api';
+import api from '../../services/api';
 import { toast } from 'sonner';
 import {
   Save, Plus, Trash2, X, MessageSquare, MenuSquare, Edit2,
@@ -203,6 +204,22 @@ const FlowBuilderPage = () => {
     }
   };
 
+  const importSgpFlow = async () => {
+    if (!window.confirm('Importar fluxo de atendimento SGP?\n\nSerá criado um fluxo "SGP — Atendimento Web Internet" desativado, com nós já apontando para o proxy interno (sem token hardcoded).\n\nLembre de configurar a integração SGP em Integrações antes de ativar.')) return;
+    try {
+      const { data } = await api.post('/sgp/import-flow');
+      if (data.created) {
+        toast.success('Fluxo SGP criado!');
+        reload();
+      } else {
+        toast.info('Fluxo SGP já existe — abrindo...');
+        reload();
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro ao importar');
+    }
+  };
+
   const saveFlow = async () => {
     if (!currentFlow) return;
     try {
@@ -244,7 +261,12 @@ const FlowBuilderPage = () => {
       <div className="p-4 lg:p-6 animate-fade-in" data-testid="flows-list-page">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold font-page-title">Fluxos de Conversa</h2>
-          <button onClick={newFlow} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-flow-btn"><Plus className="w-4 h-4" /> Novo Fluxo</button>
+          <div className="flex items-center gap-2">
+            <button onClick={importSgpFlow} className="text-sm flex items-center gap-1.5 px-3 py-2 rounded-lg border border-violet-300 text-violet-700 hover:bg-violet-50" data-testid="import-sgp-flow-btn" title="Importar fluxo pré-pronto SGP (ISP)">
+              <Globe className="w-4 h-4" /> Importar SGP
+            </button>
+            <button onClick={newFlow} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-flow-btn"><Plus className="w-4 h-4" /> Novo Fluxo</button>
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           {flows.length === 0 ? (

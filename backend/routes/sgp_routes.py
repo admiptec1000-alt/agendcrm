@@ -106,44 +106,46 @@ async def test_sgp_config(
         raise HTTPException(502, f"Falha de conexao com SGP: {e}")
 
 
-# ---------- Proxy ----------
-@router.post("/{action}")
-async def sgp_proxy(
-    action: str,
-    data: SgpProxyIn,
+# ---------- Proxy declared at END of file (see comment at file head) ----------
+
+
+# ---------- One-shot import: company-side. The currently logged-in company
+#           admin / user can install the SGP chatflow into their own
+#           Flowbuilder. SuperAdmin uses the same path via impersonation. ----
+@router.post("/import-flow")
+async def import_sgp_flow_self(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
-    """Generic proxy: Flowbuilder calls `POST /api/sgp/consultacliente` with
-    `params: {cpfcnpj: "..."}` and we forward to the configured SGP base_url
-    with token+app injected. Returns the SGP JSON response verbatim."""
-    if action not in SGP_ACTIONS:
-        raise HTTPException(400, f"Acao desconhecida: {action}. Disponiveis: {list(SGP_ACTIONS)}")
-    cfg = await db.sgp_configs.find_one({"company_id": user["company_id"]}, {"_id": 0})
-    if not cfg or not cfg.get("enabled") or not cfg.get("base_url") or not cfg.get("token"):
-        raise HTTPException(400, "Integracao SGP nao configurada para esta empresa")
+    """Generates a ready-to-edit Flowbuilder flow for the CALLER's company,
+    pre-wired to call this server's SGP proxy (no hardcoded SGP token, no
+    n8n indirection). Idempotent: if a flow with the same name already exists
+    we return its id without creating a duplicate.
+    """
+    company_id = user["company_id"]
+    flow_name = "SGP — Atendimento Web Internet"
+    existing = await db.flow_builders.find_one({"company_id": company_id, "name": flow_name}, {"_id": 0})
+    if existing:
+        return {"created": False, "flow_id": existing["id"], "message": "Fluxo ja existe"}
 
-    spec = SGP_ACTIONS[action]
-    url = cfg["base_url"].rstrip("/") + spec["path"]
-    body = {**(data.params or {}), "token": cfg["token"], "app": cfg.get("app") or "8ip"}
-
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as cli:
-            if spec["method"] == "GET":
-                r = await cli.get(url, params=body)
-            else:
-                r = await cli.post(url, json=body)
-        try:
-            payload = r.json()
-        except Exception:
-            payload = {"raw": r.text}
-        return {"status": r.status_code, "ok": r.status_code < 400, "data": payload}
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"Erro ao chamar SGP: {e}")
+    nodes, edges = _build_sgp_chatflow_skeleton()
+    import uuid as _uuid
+    flow = {
+        "id": str(_uuid.uuid4()),
+        "company_id": company_id,
+        "name": flow_name,
+        "description": "Fluxo de atendimento ISP (consulta cliente, 2via boleto, suporte, liberação por confiança). Use o nó SGP do CRM/proxy para chamadas API.",
+        "nodes": nodes,
+        "edges": edges,
+        "trigger_type": "manual",
+        "is_active": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.flow_builders.insert_one(flow)
+    return {"created": True, "flow_id": flow["id"], "name": flow_name}
 
 
-# ---------- One-shot import: seed the official Web Internet 100% Fibra
-#           chatflow into a target company. Called from SuperAdmin UI. ----
+# ---------- One-shot import (LEGACY — kept for any tool already calling this path) ----------
 @router.post("/super-admin/import-flow/{company_id}")
 async def import_sgp_flow(
     company_id: str,
@@ -334,3 +336,42 @@ def _build_sgp_chatflow_skeleton():
     edge("main_menu", "contract_queue", "option-3")
 
     return n, e
+
+
+# ---------- Proxy ----------
+# Declared at the END of the module so the {action} catch-all does NOT match
+# concrete routes like /import-flow, /config, /config/test, /super-admin/...
+# FastAPI matches routes in declaration order.
+@router.post("/{action}")
+async def sgp_proxy(
+    action: str,
+    data: SgpProxyIn,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Generic proxy: Flowbuilder calls `POST /api/sgp/consultacliente` with
+    `params: {cpfcnpj: "..."}` and we forward to the configured SGP base_url
+    with token+app injected. Returns the SGP JSON response verbatim."""
+    if action not in SGP_ACTIONS:
+        raise HTTPException(400, f"Acao desconhecida: {action}. Disponiveis: {list(SGP_ACTIONS)}")
+    cfg = await db.sgp_configs.find_one({"company_id": user["company_id"]}, {"_id": 0})
+    if not cfg or not cfg.get("enabled") or not cfg.get("base_url") or not cfg.get("token"):
+        raise HTTPException(400, "Integracao SGP nao configurada para esta empresa")
+
+    spec = SGP_ACTIONS[action]
+    url = cfg["base_url"].rstrip("/") + spec["path"]
+    body = {**(data.params or {}), "token": cfg["token"], "app": cfg.get("app") or "8ip"}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as cli:
+            if spec["method"] == "GET":
+                r = await cli.get(url, params=body)
+            else:
+                r = await cli.post(url, json=body)
+        try:
+            payload = r.json()
+        except Exception:
+            payload = {"raw": r.text}
+        return {"status": r.status_code, "ok": r.status_code < 400, "data": payload}
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Erro ao chamar SGP: {e}")

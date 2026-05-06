@@ -336,20 +336,6 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                         className="p-2 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors" title="Gestão (acessar como admin)">
                         <Headphones className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={async () => {
-                          if (!window.confirm(`Importar fluxos de atendimento SGP para "${company.name}"? Será criado um fluxo "SGP — Atendimento Web Internet" desativado para você revisar antes de publicar.`)) return;
-                          try {
-                            const { data } = await api.post(`/sgp/super-admin/import-flow/${company.id}`);
-                            if (data.created) toast.success('Fluxo SGP criado! Acesse Flowbuilder na empresa.');
-                            else toast.info('Fluxo SGP já existia para esta empresa.');
-                          } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao importar fluxo'); }
-                        }}
-                        data-testid={`import-sgp-${company.id}`}
-                        className="p-2 rounded-lg hover:bg-violet-50 text-violet-600 transition-colors"
-                        title="Importar fluxos SGP">
-                        <GitBranch className="w-4 h-4" />
-                      </button>
                       <button onClick={() => onEdit(company)} data-testid={`edit-company-${company.id}`}
                         className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
                         <Pencil className="w-4 h-4" />

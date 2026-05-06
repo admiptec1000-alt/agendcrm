@@ -629,6 +629,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'notificacoes': return <ConexoesPage initialTab="notificacoes" />;
     case 'relatorios': return <FinanceiroPage />;
     case 'configuracoes': return <ConfigPage />;
+    case 'integrações': return <IntegracoesPage />;
     case 'indoor': return <IndoorSettingsPage />;
     case 'usuarios': return <UsuariosPage />;
     case 'perfis_acesso': return <PerfisAcessoPage />;
@@ -5723,9 +5724,6 @@ const ConfigPage = () => {
     <div className="animate-fade-in" data-testid="config-page">
       {/* Mobile Preferences */}
       <MobilePreferencesCard />
-
-      {/* SGP Integration (ISP) */}
-      <SgpConfigCard />
 
       {/* Logo Global */}
       <div className="card max-w-2xl mb-6" data-testid="config-logo-section">
