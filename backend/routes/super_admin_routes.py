@@ -27,7 +27,9 @@ ALL_FEATURES = [
     {"feature_key": "campanhas", "label": "Campanhas", "category": "crm", "icon": "Megaphone"},
     {"feature_key": "flowbuilder", "label": "Flowbuilder", "category": "crm", "icon": "GitBranch"},
     {"feature_key": "informativos", "label": "Informativos", "category": "crm", "icon": "Info"},
-    {"feature_key": "api", "label": "API", "category": "crm", "icon": "Code"},
+    # NOTE: legacy "api" feature merged into "integrações" — single menu
+    # "API e Integrações" handles both API explorer and 3rd-party integrations
+    # (SGP, Asaas, etc). Keeping a stub here is unnecessary.
     {"feature_key": "usuarios", "label": "Usuarios", "category": "administracao", "icon": "UserCog"},
     {"feature_key": "perfis_acesso", "label": "Perfis de Acesso", "category": "administracao", "icon": "Shield"},
     {"feature_key": "filas_chatbot", "label": "Filas & Chatbot", "category": "crm", "icon": "Bot"},
@@ -50,7 +52,7 @@ ALL_FEATURES = [
     {"feature_key": "notificacoes", "label": "Notificacoes", "category": "scheduling", "icon": "Bell"},
     # Shared Features
     {"feature_key": "configuracoes", "label": "Configuracoes", "category": "shared", "icon": "Settings"},
-    {"feature_key": "integrações", "label": "API e Integracoes", "category": "shared", "icon": "Puzzle"},
+    {"feature_key": "integrações", "label": "API e Integrações", "category": "shared", "icon": "Puzzle"},
     {"feature_key": "relatorios", "label": "Relatorios", "category": "shared", "icon": "BarChart3"},
     {"feature_key": "suporte", "label": "Suporte", "category": "shared", "icon": "LifeBuoy"},
     {"feature_key": "indoor", "label": "Indoor / TV", "category": "scheduling", "icon": "Monitor"},

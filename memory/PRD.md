@@ -10,6 +10,16 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Consolidação dos menus "API" + "Integrações" → "API e Integrações"
+**Problema relatado**: no Tipo de Negócio do SuperAdmin existiam 2 features (`api` em CRM + `integrações` em Config Empresa), mas para o cliente apareciam dois itens diferentes ("API" sem página → tela em branco; "Integrações" com SGP). Confuso e quebrado.
+**Fix**:
+- Removido `api` do `FEATURE_REGISTRY` (`super_admin_routes.py`) e do `FEATURE_META` (`Company/Dashboard.js`).
+- Renomeado label de `integrações`: "API e Integracoes" → **"API e Integrações"** (com acento, consistente em todo lugar).
+- **Migração one-shot no startup** (`server.py::backfill_feature_keys`): toda BT/Company com `api` ativada recebe `integrações=enabled`, depois o entry standalone `api` é removido. Validado: 0 BTs e 0 Companies com `api` legado, 10 BTs + 2 Companies com `integrações` ativa.
+- Resultado: SuperAdmin e cliente final veem o MESMO item: **"API e Integrações"** (grupo Config Empresa). A página hospeda os cards **SGP** + **Asaas**.
+
+
+
 ### 2026-05-06 — Asaas + SuperAdmin "Todos os módulos" + Drag & Drop Agenda Pro
 
 **🟢 Integração Asaas (Banco / Cobranças BR)**

@@ -43,7 +43,8 @@ const FEATURE_META = {
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
-  api:                { icon: 'Code',             label: 'API', group: 'Administracao' },
+  // 'api' was a placeholder feature without page; merged into 'integrações'
+  // to match the customer-facing single menu "API e Integrações".
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
   filas_chatbot:      { icon: 'Bot',              label: 'Filas', group: 'CRM' },
   conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'Config Empresa' },
@@ -63,7 +64,7 @@ const FEATURE_META = {
   meu_site:           { icon: 'Globe',            label: 'Meu Site', group: 'Config Empresa' },
   // 'notificacoes' agora vive como aba dentro de Conexoes — nao aparece mais no menu lateral
   configuracoes:      { icon: 'Settings',         label: 'Configuracoes', group: 'Config Empresa' },
-  'integrações':      { icon: 'Puzzle',           label: 'Integracoes', group: 'Config Empresa' },
+  'integrações':      { icon: 'Puzzle',           label: 'API e Integrações', group: 'Config Empresa' },
   relatorios:         { icon: 'BarChart3',        label: 'Relatorios', group: 'Analise' },
   suporte:            { icon: 'LifeBuoy',         label: 'Suporte', group: 'Config Empresa' },
   indoor:             { icon: 'Monitor',          label: 'Indoor / TV', group: 'Config Empresa' },

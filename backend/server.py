@@ -279,6 +279,30 @@ async def backfill_feature_keys(db):
             }
         },
     )
+    # Consolidate legacy "api" feature into "integrações". The customer-facing
+    # menu is a single "API e Integrações" item — having two separate features
+    # ("api" without a page + "integrações") only created a blank screen
+    # for end users. Migrate-then-delete:
+    #   1. Where a BT/company has `api` enabled, ensure `integrações` is enabled too.
+    #   2. Pull the standalone `api` entry afterwards.
+    async def _consolidate_api_feature(coll):
+        async for doc in coll.find(
+            {"features.feature_key": "api"},
+            {"_id": 1, "features": 1},
+        ):
+            feats = doc.get("features") or []
+            had_api_enabled = any(f.get("feature_key") == "api" and f.get("enabled") for f in feats)
+            new_feats = [f for f in feats if f.get("feature_key") != "api"]
+            if had_api_enabled and not any(f.get("feature_key") == "integrações" for f in new_feats):
+                new_feats.append({"feature_key": "integrações", "enabled": True})
+            elif had_api_enabled:
+                # Already has integrações — flip it on if currently off
+                for f in new_feats:
+                    if f.get("feature_key") == "integrações":
+                        f["enabled"] = True
+            await coll.update_one({"_id": doc["_id"]}, {"$set": {"features": new_feats}})
+    await _consolidate_api_feature(db.business_types)
+    await _consolidate_api_feature(db.companies)
 
 
 async def backfill_ticket_client_links(db):
