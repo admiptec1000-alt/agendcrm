@@ -221,7 +221,8 @@ async def advance_flow(
     flow: dict,
     incoming_text: Optional[str] = None,
     is_initial: bool = False,
-) -> None:
+    dry_run: bool = False,
+) -> List[str]:
     """Walk the flow graph from the ticket's current position, sending any
     output messages and updating the ticket's `active_flow_node_id` when we
     reach a node that needs user input (currently: `menu`).
@@ -229,59 +230,72 @@ async def advance_flow(
     `is_initial` = True means the caller is `/webhook/message` after creating
     the ticket — we begin at the entry node. Otherwise, `incoming_text` holds
     the customer's reply to the previously-posted menu/prompt.
+
+    `dry_run` = True returns the list of would-be-sent messages WITHOUT
+    persisting or calling WhatsApp. Used by the /test endpoint.
     """
+    sent: List[str] = []
     nodes = flow.get("nodes") or []
     edges = flow.get("edges") or []
-    if not nodes: return
+    if not nodes:
+        logger.warning(f"[flow_engine] flow {flow.get('id')} has no nodes")
+        return sent
     flow_id = flow["id"]
     company_id = ticket["company_id"]
     vars_: dict = ticket.get("flow_vars") or {}
-    # Seed variables every hop so latest customer info is available
     vars_["nome"] = ticket.get("customer_name") or ""
     vars_["customer_phone"] = ticket.get("customer_phone") or ""
     vars_["number"] = ticket.get("customer_phone") or ""
+
+    async def _emit(text: str):
+        sent.append(text)
+        if dry_run:
+            return
+        await _persist_outgoing(db, ticket["id"], text, flow_id)
+        await _send_whatsapp(ticket, text)
 
     # Determine starting node + branch
     current_id: Optional[str] = None
     branch_handle: Optional[str] = None
     if is_initial:
         entry = _entry_node(nodes)
-        if not entry: return
+        if not entry:
+            logger.warning(f"[flow_engine] flow {flow_id}: no entry node")
+            return sent
         current_id = entry["id"]
+        logger.info(f"[flow_engine] flow {flow_id} initial trigger ticket={ticket.get('id')} entry={entry['id']}")
     else:
         prev_id = ticket.get("active_flow_node_id")
         if not prev_id:
-            return  # ticket isn't waiting on the flow
+            logger.info(f"[flow_engine] ticket {ticket.get('id')} has no active_flow_node_id; ignoring reply")
+            return sent
         prev = _node_by_id(nodes, prev_id)
         if not prev:
-            return
+            logger.warning(f"[flow_engine] previous node {prev_id} missing from flow")
+            return sent
         # Process customer reply for menu nodes
         if _node_type(prev) == "menu":
             cfg = (prev.get("data") or {}).get("config") or {}
             opts = cfg.get("options") or []
             choice_idx = _resolve_menu_choice(incoming_text, opts)
             if choice_idx is None:
-                # invalid input — re-prompt
                 txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."
-                await _persist_outgoing(db, ticket["id"], txt, flow_id)
-                await _send_whatsapp(ticket, txt)
-                return
+                await _emit(txt)
+                return sent
             branch_handle = f"option-{choice_idx}"
-            # If previous node has capture_var, store the selected label
             cap = cfg.get("capture_var")
             if cap and choice_idx < len(opts):
                 vars_[cap] = opts[choice_idx].get("label") or opts[choice_idx].get("key") or incoming_text
         else:
-            # Generic capture: if previous node had capture_var, store reply
             cfg = (prev.get("data") or {}).get("config") or {}
             cap = cfg.get("capture_var")
             if cap and incoming_text:
                 vars_[cap] = incoming_text.strip()
-        # Walk to next node
         nxt_edge = _next_edge(edges, prev_id, branch_handle)
         if not nxt_edge:
-            await _save_state(db, ticket["id"], flow_id, None, vars_)
-            return
+            if not dry_run:
+                await _save_state(db, ticket["id"], flow_id, None, vars_)
+            return sent
         current_id = nxt_edge["target"]
 
     # Linear execution loop
