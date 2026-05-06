@@ -57,7 +57,6 @@ const SuperAdminDashboard = () => {
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { key: 'companies', label: 'Empresas', icon: Building },
     { key: 'business-types', label: 'Tipos de Negocio', icon: Briefcase },
-    { key: 'plans', label: 'Planos', icon: Package },
     { key: 'financial', label: 'Financeiro', icon: Receipt },
     { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
@@ -654,7 +653,35 @@ const PlanModal = ({ initial, onClose, onSave }) => {
 
 // ─── FINANCIAL TAB (invoices + suspension control) ──────────────────────────
 const FinancialTab = ({ companies }) => {
+  const [subTab, setSubTab] = useState('invoices');
+  return (
+    <div className="space-y-4" data-testid="financial-tab">
+      <div className="flex gap-2 border-b border-slate-200">
+        <button
+          data-testid="financial-subtab-invoices"
+          onClick={() => setSubTab('invoices')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            subTab === 'invoices' ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}>
+          Faturas
+        </button>
+        <button
+          data-testid="financial-subtab-external"
+          onClick={() => setSubTab('external')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            subTab === 'external' ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}>
+          Clientes Externos
+        </button>
+      </div>
+      {subTab === 'invoices' ? <InvoicesPanel companies={companies} /> : <ExternalClientsPanel />}
+    </div>
+  );
+};
+
+const InvoicesPanel = ({ companies }) => {
   const [data, setData] = useState({ items: [], total: 0, totals: { pending: 0, paid: 0, overdue: 0 } });
+  const [externals, setExternals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('');
   const [filterCompany, setFilterCompany] = useState('');
@@ -667,8 +694,12 @@ const FinancialTab = ({ companies }) => {
       const params = {};
       if (filterCompany) params.company_id = filterCompany;
       if (filterStatus) params.status_filter = filterStatus;
-      const { data: d } = await api.get('/super-admin/invoices', { params });
+      const [{ data: d }, { data: ex }] = await Promise.all([
+        api.get('/super-admin/invoices', { params }),
+        api.get('/super-admin/external-clients'),
+      ]);
       setData(d);
+      setExternals(ex || []);
     } catch (e) { toast.error('Erro ao carregar faturas'); }
     finally { setLoading(false); }
   }, [filterCompany, filterStatus]);
@@ -700,7 +731,7 @@ const FinancialTab = ({ companies }) => {
   };
 
   return (
-    <div className="space-y-4" data-testid="financial-tab">
+    <div className="space-y-4">
       <div className="grid grid-cols-3 gap-3">
         <div className="card p-3"><p className="text-xs text-slate-500">A Receber</p><p className="text-lg font-bold text-amber-600">R$ {(data.totals?.pending || 0).toFixed(2)}</p></div>
         <div className="card p-3"><p className="text-xs text-slate-500">Vencido</p><p className="text-lg font-bold text-red-600">R$ {(data.totals?.overdue || 0).toFixed(2)}</p></div>
@@ -732,7 +763,8 @@ const FinancialTab = ({ companies }) => {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="text-left px-4 py-2.5">Empresa</th>
+                <th className="text-left px-4 py-2.5">Cliente</th>
+                <th className="text-left px-4 py-2.5">Tipo</th>
                 <th className="text-left px-4 py-2.5">Descrição</th>
                 <th className="text-left px-4 py-2.5">Vencimento</th>
                 <th className="text-right px-4 py-2.5">Valor</th>
@@ -746,9 +778,15 @@ const FinancialTab = ({ companies }) => {
                   : inv.status === 'overdue' ? 'bg-red-100 text-red-700'
                   : inv.status === 'canceled' ? 'bg-slate-100 text-slate-500'
                   : 'bg-amber-100 text-amber-700';
+                const isExternal = inv.client_kind === 'external';
                 return (
                   <tr key={inv.id} className="border-t border-slate-100 hover:bg-slate-50" data-testid={`invoice-row-${inv.id}`}>
-                    <td className="px-4 py-2.5 font-medium text-slate-900">{inv.company_name}</td>
+                    <td className="px-4 py-2.5 font-medium text-slate-900">{inv.client_name || inv.company_name}</td>
+                    <td className="px-4 py-2.5">
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isExternal ? 'bg-violet-100 text-violet-700' : 'bg-blue-100 text-blue-700'}`}>
+                        {isExternal ? 'AVULSO' : 'EMPRESA'}
+                      </span>
+                    </td>
                     <td className="px-4 py-2.5 text-slate-600">{inv.description || '—'}</td>
                     <td className="px-4 py-2.5 text-slate-600">{inv.due_date}</td>
                     <td className="px-4 py-2.5 text-right font-bold">R$ {(inv.amount || 0).toFixed(2)}</td>
@@ -769,6 +807,7 @@ const FinancialTab = ({ companies }) => {
       {showNew && (
         <NewInvoiceModal
           companies={companies}
+          externals={externals}
           onClose={() => setShowNew(false)}
           onSaved={async () => { setShowNew(false); await load(); }}
         />
@@ -777,16 +816,189 @@ const FinancialTab = ({ companies }) => {
   );
 };
 
-const NewInvoiceModal = ({ companies, onClose, onSaved }) => {
-  const today = new Date().toISOString().slice(0, 10);
-  const [form, setForm] = useState({ company_id: '', amount: 0, due_date: today, description: '' });
-  const save = async () => {
-    if (!form.company_id) return toast.error('Selecione uma empresa');
+const ExternalClientsPanel = () => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      await api.post('/super-admin/invoices', form);
+      const { data } = await api.get('/super-admin/external-clients');
+      setItems(data || []);
+    } catch (e) { toast.error('Erro ao carregar clientes externos'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const remove = async (cli) => {
+    if (!window.confirm(`Remover "${cli.name}"?`)) return;
+    try {
+      await api.delete(`/super-admin/external-clients/${cli.id}`);
+      toast.success('Cliente removido');
+      await load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao remover'); }
+  };
+
+  return (
+    <div className="space-y-4" data-testid="external-clients-panel">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-600">
+          Clientes que <strong>não usam o sistema</strong> mas você cobra mensalmente (consultorias, contratos avulsos, etc).
+        </p>
+        <button
+          data-testid="add-external-btn"
+          onClick={() => { setEditing(null); setShowModal(true); }}
+          className="btn-primary text-sm flex items-center gap-2">
+          <Plus className="w-4 h-4" /> Novo cliente externo
+        </button>
+      </div>
+      {loading ? (
+        <div className="py-12 text-center text-slate-400 text-sm">Carregando…</div>
+      ) : items.length === 0 ? (
+        <div className="py-12 text-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
+          Nenhum cliente externo cadastrado ainda.
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="text-left px-4 py-2.5">Nome</th>
+                <th className="text-left px-4 py-2.5">CNPJ</th>
+                <th className="text-left px-4 py-2.5">E-mail</th>
+                <th className="text-left px-4 py-2.5">Telefone</th>
+                <th className="text-left px-4 py-2.5">Notas</th>
+                <th className="px-4 py-2.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(c => (
+                <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50" data-testid={`external-row-${c.id}`}>
+                  <td className="px-4 py-2.5 font-medium text-slate-900">{c.name}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{c.cnpj || '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{c.email || '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{c.phone || '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-600 truncate max-w-[200px]">{c.notes || '—'}</td>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <button
+                      data-testid={`edit-external-${c.id}`}
+                      onClick={() => { setEditing(c); setShowModal(true); }}
+                      className="p-1.5 rounded hover:bg-slate-100 text-slate-600 mr-1">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      data-testid={`delete-external-${c.id}`}
+                      onClick={() => remove(c)}
+                      className="p-1.5 rounded hover:bg-red-50 text-red-500">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {showModal && (
+        <ExternalClientModal
+          client={editing}
+          onClose={() => setShowModal(false)}
+          onSaved={async () => { setShowModal(false); await load(); }}
+        />
+      )}
+    </div>
+  );
+};
+
+const ExternalClientModal = ({ client, onClose, onSaved }) => {
+  const [form, setForm] = useState({
+    name: client?.name || '',
+    cnpj: client?.cnpj || '',
+    email: client?.email || '',
+    phone: client?.phone || '',
+    notes: client?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!form.name.trim()) return toast.error('Nome obrigatório');
+    setSaving(true);
+    try {
+      if (client?.id) {
+        await api.put(`/super-admin/external-clients/${client.id}`, form);
+        toast.success('Cliente atualizado');
+      } else {
+        await api.post('/super-admin/external-clients', form);
+        toast.success('Cliente criado');
+      }
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao salvar'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()} data-testid="external-modal">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <h3 className="text-lg font-bold">{client ? 'Editar' : 'Novo'} Cliente Externo</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">Nome *</label>
+            <input data-testid="external-name-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">CNPJ</label>
+              <input data-testid="external-cnpj-input" value={form.cnpj} onChange={(e) => setForm({ ...form, cnpj: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Telefone</label>
+              <input data-testid="external-phone-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">E-mail</label>
+            <input data-testid="external-email-input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">Notas</label>
+            <textarea data-testid="external-notes-input" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" rows={3} />
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded border border-slate-300 hover:bg-white">Cancelar</button>
+          <button onClick={save} disabled={saving} className="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50" data-testid="save-external-btn">
+            {saving ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const NewInvoiceModal = ({ companies, externals, onClose, onSaved }) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const [kind, setKind] = useState('company'); // 'company' | 'external'
+  const [form, setForm] = useState({ company_id: '', external_client_id: '', amount: 0, due_date: today, description: '' });
+  const save = async () => {
+    if (kind === 'company' && !form.company_id) return toast.error('Selecione uma empresa');
+    if (kind === 'external' && !form.external_client_id) return toast.error('Selecione um cliente externo');
+    try {
+      const payload = {
+        amount: form.amount,
+        due_date: form.due_date,
+        description: form.description,
+      };
+      if (kind === 'company') payload.company_id = form.company_id;
+      else payload.external_client_id = form.external_client_id;
+      await api.post('/super-admin/invoices', payload);
       toast.success('Fatura criada');
       onSaved();
-    } catch (e) { toast.error('Erro ao criar fatura'); }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao criar fatura'); }
   };
   return (
     <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onClick={onClose}>
@@ -796,13 +1008,40 @@ const NewInvoiceModal = ({ companies, onClose, onSaved }) => {
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-5 space-y-3">
-          <div>
-            <label className="text-xs font-medium text-slate-700 mb-1 block">Empresa *</label>
-            <select value={form.company_id} onChange={(e) => setForm({ ...form, company_id: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="invoice-company-select">
-              <option value="">— Selecione —</option>
-              {(companies || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <div className="flex gap-2">
+            <button
+              data-testid="kind-company-btn"
+              onClick={() => setKind('company')}
+              className={`flex-1 px-3 py-2 text-sm rounded border ${kind === 'company' ? 'border-primary bg-primary/10 text-primary font-semibold' : 'border-slate-300 text-slate-600'}`}>
+              Empresa do sistema
+            </button>
+            <button
+              data-testid="kind-external-btn"
+              onClick={() => setKind('external')}
+              className={`flex-1 px-3 py-2 text-sm rounded border ${kind === 'external' ? 'border-primary bg-primary/10 text-primary font-semibold' : 'border-slate-300 text-slate-600'}`}>
+              Cliente externo (avulso)
+            </button>
           </div>
+          {kind === 'company' ? (
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Empresa *</label>
+              <select value={form.company_id} onChange={(e) => setForm({ ...form, company_id: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="invoice-company-select">
+                <option value="">— Selecione —</option>
+                {(companies || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Cliente Externo *</label>
+              <select value={form.external_client_id} onChange={(e) => setForm({ ...form, external_client_id: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="invoice-external-select">
+                <option value="">— Selecione —</option>
+                {(externals || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              {(!externals || externals.length === 0) && (
+                <p className="text-xs text-amber-600 mt-1">Nenhum cliente externo cadastrado. Cadastre na aba "Clientes Externos".</p>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-slate-700 mb-1 block">Valor (R$)</label>
@@ -820,7 +1059,7 @@ const NewInvoiceModal = ({ companies, onClose, onSaved }) => {
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded border border-slate-300 hover:bg-white">Cancelar</button>
-          <button onClick={save} disabled={!form.company_id} className="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50" data-testid="save-invoice-btn">Salvar</button>
+          <button onClick={save} className="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50" data-testid="save-invoice-btn">Salvar</button>
         </div>
       </div>
     </div>
@@ -1436,6 +1675,12 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
     description: businessType?.description || '',
     icon: businessType?.icon || 'Building',
     base_type: businessType?.base_type || 'both',
+    monthly_price: businessType?.monthly_price ?? 0,
+    billing_cycle: businessType?.billing_cycle || 'monthly',
+    installments: businessType?.installments ?? 1,
+    grace_days: businessType?.grace_days ?? 5,
+    max_connections: businessType?.max_connections ?? 1,
+    max_users: businessType?.max_users ?? 1,
   });
   const [features, setFeatures] = useState(businessType?.features || []);
   const [mobileBottomNav, setMobileBottomNav] = useState(businessType?.mobile_bottom_nav || []);
@@ -1529,6 +1774,72 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Descricao</label>
             <input data-testid="bt-description-input" value={form.description} onChange={e => setForm({...form, description: e.target.value})} className="input-field" />
+          </div>
+
+          <div className="border-t border-slate-200 pt-5">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-1">Plano e Cobranca</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Estes valores sao aplicados automaticamente quando uma empresa for vinculada a este Tipo de Negocio. As faturas sao geradas no cadastro da empresa.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Valor mensal (R$)</label>
+                <input
+                  type="number" min={0} step="0.01"
+                  data-testid="bt-monthly-price"
+                  value={form.monthly_price}
+                  onChange={e => setForm({...form, monthly_price: parseFloat(e.target.value) || 0})}
+                  className="input-field" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Ciclo</label>
+                <select
+                  data-testid="bt-billing-cycle"
+                  value={form.billing_cycle}
+                  onChange={e => setForm({...form, billing_cycle: e.target.value})}
+                  className="input-field">
+                  <option value="monthly">Mensal</option>
+                  <option value="yearly">Anual</option>
+                  <option value="one_time">Avulso</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Parcelas</label>
+                <input
+                  type="number" min={1} max={60}
+                  data-testid="bt-installments"
+                  value={form.installments}
+                  onChange={e => setForm({...form, installments: Math.max(1, parseInt(e.target.value) || 1)})}
+                  className="input-field" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Carencia (dias)</label>
+                <input
+                  type="number" min={0} max={90}
+                  data-testid="bt-grace-days"
+                  value={form.grace_days}
+                  onChange={e => setForm({...form, grace_days: Math.max(0, parseInt(e.target.value) || 0)})}
+                  className="input-field" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Max. conexoes</label>
+                <input
+                  type="number" min={0} max={50}
+                  data-testid="bt-max-connections"
+                  value={form.max_connections}
+                  onChange={e => setForm({...form, max_connections: Math.max(0, parseInt(e.target.value) || 0)})}
+                  className="input-field" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Max. usuarios</label>
+                <input
+                  type="number" min={0} max={500}
+                  data-testid="bt-max-users"
+                  value={form.max_users}
+                  onChange={e => setForm({...form, max_users: Math.max(0, parseInt(e.target.value) || 0)})}
+                  className="input-field" />
+              </div>
+            </div>
           </div>
 
           <div>

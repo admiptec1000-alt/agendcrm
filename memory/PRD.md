@@ -10,6 +10,22 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Super Admin Simplification: Plano fundido ao Tipo de Negócio
+**Refatoração** pedida pelo usuário (escolhas: 1a migrar plans, 2a esconder aba Planos, 3a Landing usa BT.monthly_price):
+- **Tipo de Negócio agora carrega permissões + comercial em um único objeto:** novos campos `monthly_price`, `billing_cycle` (monthly/yearly/one_time), `installments`, `grace_days`, `max_connections`, `max_users` em `BusinessTypeCreate/Update` (`models.py`) e expostos no endpoint público `/api/auth/business-types`.
+- **Auto-faturamento via Tipo de Negócio:** `POST /api/super-admin/companies` gera as parcelas a partir do BT quando `monthly_price > 0` (sem `plan_id`). Path legado com `plan_id` continua funcionando.
+- **Aba "Planos" removida** do menu Super Admin (endpoints permanecem como legado).
+- **Clientes Externos (avulsos):** nova collection `external_billing_clients` + CRUD `/api/super-admin/external-clients`.
+- **Faturas avulsas:** `POST /api/super-admin/invoices` aceita `company_id` OU `external_client_id` (mutuamente exclusivos, validação 400). `GET /api/super-admin/invoices` resolve `client_name` e `client_kind` (`company`/`external`).
+- **Aba Financeiro com sub-abas:** "Faturas" (com coluna TIPO mostrando AVULSO/EMPRESA) e "Clientes Externos" (CRUD na UI).
+- **Modal "Nova Fatura"** com toggle Empresa do sistema / Cliente externo.
+- **Migração:** `POST /api/super-admin/migrate-plans-to-business-types` (idempotente). Backfill auto de defaults zero no startup (`server.py::backfill_feature_keys`).
+- **Suspension check** usa `grace_days` do BT quando empresa não tem `plan_id`.
+- **Landing Page** mostra preço a partir de `business_type.monthly_price` (R$ 999,90 / mês|ano|avulso).
+- **Validado:** 14/14 testes pytest em `/app/backend/tests/test_iteration_49.py`.
+
+
+
 ### 2026-05-05 — Fix P0: Conflito de Token Super Admin × Impersonação
 - **Bug**: Após o SuperAdmin clicar em "Gestão" para impersonar uma empresa (abre nova aba), o token clonado era gravado em `localStorage.token`, sobrescrevendo o token do SuperAdmin. Voltando à aba original, qualquer ação privilegiada (ex.: salvar Nicho de Negócio) falhava com 401/403.
 - **Fix**:

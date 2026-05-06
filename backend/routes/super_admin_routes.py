@@ -118,6 +118,12 @@ async def create_business_type(
         "base_type": data.base_type,
         "features": data.features,
         "mobile_bottom_nav": (data.mobile_bottom_nav or [])[:4],
+        "monthly_price": max(0.0, float(data.monthly_price or 0.0)),
+        "billing_cycle": (data.billing_cycle or "monthly").lower(),
+        "installments": max(1, int(data.installments or 1)),
+        "grace_days": max(0, int(data.grace_days or 5)),
+        "max_connections": max(0, int(data.max_connections or 1)),
+        "max_users": max(0, int(data.max_users or 1)),
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -246,11 +252,26 @@ async def create_company(
     }
     await db.companies.insert_one(company)
 
-    # Auto-generate invoices for the newly assigned plan (if any)
+    # Auto-generate invoices. Priority: explicit plan_id (legacy) > business_type
+    # billing config (new unified model). Either path generates monthly/yearly
+    # installments based on the chosen billing_cycle.
+    billing_source = None
     if data.plan_id:
-        plan_doc = await db.subscription_plans.find_one({"id": data.plan_id}, {"_id": 0})
-        if plan_doc:
-            await _generate_invoices_for_company(db, company_id, plan_doc)
+        billing_source = await db.subscription_plans.find_one({"id": data.plan_id}, {"_id": 0})
+    if not billing_source and data.business_type_id:
+        bt_full = await db.business_types.find_one({"id": data.business_type_id}, {"_id": 0})
+        if bt_full and float(bt_full.get("monthly_price") or 0) > 0:
+            # Wrap BT into the same shape `_generate_invoices_for_company` expects.
+            billing_source = {
+                "id": bt_full["id"],
+                "name": bt_full.get("name") or "Tipo de Negócio",
+                "monthly_price": bt_full.get("monthly_price") or 0,
+                "billing_cycle": bt_full.get("billing_cycle") or "monthly",
+                "installments": bt_full.get("installments") or 1,
+                "grace_days": bt_full.get("grace_days") or 5,
+            }
+    if billing_source:
+        await _generate_invoices_for_company(db, company_id, billing_source)
 
     # Create admin user for this company
     admin_user = {
@@ -668,7 +689,8 @@ async def delete_plan(
 
 # === SUPER-ADMIN: FINANCIAL MODULE (invoices + auto-suspend) =================
 class InvoiceIn(BaseModel):
-    company_id: str
+    company_id: Optional[str] = None
+    external_client_id: Optional[str] = None
     amount: float
     due_date: str  # ISO YYYY-MM-DD
     description: Optional[str] = None
@@ -683,9 +705,12 @@ class InvoiceUpdate(BaseModel):
 
 
 async def _generate_invoices_for_company(db, company_id: str, plan: dict, start_date: Optional[str] = None) -> list:
-    """Create auto-invoices for a newly assigned plan. Called from:
+    """Create auto-invoices for a newly assigned plan/business-type. Called from:
       * `POST /api/super-admin/companies` right after company creation
       * `PUT /api/super-admin/companies/{id}/plan` (plan switch)
+    `plan` accepts either a subscription_plans document OR a business_types
+    document — both share the same billing fields (monthly_price, billing_cycle,
+    installments, grace_days) so the generator works uniformly.
     Rules:
       * `installments` invoices are created, spaced by `billing_cycle`.
       * First due_date = start_date (default: today).
@@ -730,19 +755,31 @@ async def _generate_invoices_for_company(db, company_id: str, plan: dict, start_
 @router.get("/invoices")
 async def list_invoices(
     company_id: Optional[str] = None,
+    external_client_id: Optional[str] = None,
     status_filter: Optional[str] = None,
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
     q: dict = {}
     if company_id: q["company_id"] = company_id
+    if external_client_id: q["external_client_id"] = external_client_id
     if status_filter: q["status"] = status_filter
     rows = await db.invoices.find(q, {"_id": 0}).sort("due_date", 1).to_list(2000)
     cmap: dict = {}
     for c in await db.companies.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(1000):
         cmap[c["id"]] = c["name"]
+    emap: dict = {}
+    for e in await db.external_billing_clients.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(1000):
+        emap[e["id"]] = e["name"]
     for r in rows:
-        r["company_name"] = cmap.get(r["company_id"], "—")
+        if r.get("external_client_id"):
+            r["client_name"] = emap.get(r["external_client_id"], "—")
+            r["client_kind"] = "external"
+        else:
+            r["client_name"] = cmap.get(r.get("company_id") or "", "—")
+            r["client_kind"] = "company"
+        # Backward compat: keep "company_name" so existing UI rows still render.
+        r["company_name"] = r["client_name"]
     agg = {"pending": 0.0, "paid": 0.0, "overdue": 0.0}
     for r in rows:
         agg[r["status"]] = agg.get(r["status"], 0.0) + float(r.get("amount") or 0.0)
@@ -755,11 +792,17 @@ async def create_invoice(
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
-    if not await db.companies.find_one({"id": data.company_id}, {"_id": 0, "id": 1}):
+    # Exactly one client identifier must be provided.
+    if bool(data.company_id) == bool(data.external_client_id):
+        raise HTTPException(400, "Informe company_id OU external_client_id (um e somente um)")
+    if data.company_id and not await db.companies.find_one({"id": data.company_id}, {"_id": 0, "id": 1}):
         raise HTTPException(404, "Empresa nao encontrada")
+    if data.external_client_id and not await db.external_billing_clients.find_one({"id": data.external_client_id}, {"_id": 0, "id": 1}):
+        raise HTTPException(404, "Cliente externo nao encontrado")
     doc = {
         "id": str(uuid.uuid4()),
         "company_id": data.company_id,
+        "external_client_id": data.external_client_id,
         "plan_id": None,
         "amount": max(0.0, float(data.amount or 0)),
         "due_date": data.due_date,
@@ -817,7 +860,7 @@ async def run_suspension_check(
                 {"id": inv["id"]}, {"$set": {"status": "overdue", "updated_at": datetime.now(timezone.utc).isoformat()}}
             )
             overdue_upd += 1
-    async for company in db.companies.find({"status": {"$ne": "blocked"}}, {"_id": 0, "id": 1, "plan_id": 1}):
+    async for company in db.companies.find({"status": {"$ne": "blocked"}}, {"_id": 0, "id": 1, "plan_id": 1, "business_type_id": 1}):
         oldest = await db.invoices.find_one(
             {"company_id": company["id"], "status": "overdue"},
             {"_id": 0, "due_date": 1},
@@ -825,8 +868,15 @@ async def run_suspension_check(
         )
         if not oldest:
             continue
+        # Resolve grace_days: prefer plan_id (legacy), fall back to business_type.
+        grace = 5
         plan = await db.subscription_plans.find_one({"id": company.get("plan_id") or ""}, {"_id": 0, "grace_days": 1})
-        grace = int((plan or {}).get("grace_days") or 5)
+        if plan and plan.get("grace_days") is not None:
+            grace = int(plan.get("grace_days") or 5)
+        else:
+            bt = await db.business_types.find_one({"id": company.get("business_type_id") or ""}, {"_id": 0, "grace_days": 1})
+            if bt and bt.get("grace_days") is not None:
+                grace = int(bt.get("grace_days") or 5)
         try:
             due = datetime.fromisoformat(oldest["due_date"]).date()
         except Exception:
@@ -866,3 +916,119 @@ async def update_super_admin_settings(
         {"_id": "singleton"}, {"$set": payload}, upsert=True
     )
     return await db.super_admin_settings.find_one({"_id": "singleton"}, {"_id": 0}) or {}
+
+
+# === SUPER-ADMIN: EXTERNAL BILLING CLIENTS ===================================
+# Standalone clients that exist only in the financial module — they are NOT
+# tenants of the SaaS, just external entities the SuperAdmin tracks invoices
+# for (e.g. consultancy, agency contracts, outsourced services).
+class ExternalClientIn(BaseModel):
+    name: str
+    cnpj: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.get("/external-clients")
+async def list_external_clients(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    rows = await db.external_billing_clients.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+    return rows
+
+
+@router.post("/external-clients")
+async def create_external_client(
+    data: ExternalClientIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": data.name.strip(),
+        "cnpj": (data.cnpj or "").strip() or None,
+        "email": (data.email or "").strip() or None,
+        "phone": (data.phone or "").strip() or None,
+        "notes": (data.notes or "").strip() or None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.external_billing_clients.insert_one(doc)
+    return await db.external_billing_clients.find_one({"id": doc["id"]}, {"_id": 0})
+
+
+@router.put("/external-clients/{cid}")
+async def update_external_client(
+    cid: str,
+    data: ExternalClientIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    update = {
+        "name": data.name.strip(),
+        "cnpj": (data.cnpj or "").strip() or None,
+        "email": (data.email or "").strip() or None,
+        "phone": (data.phone or "").strip() or None,
+        "notes": (data.notes or "").strip() or None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.external_billing_clients.update_one({"id": cid}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Cliente externo nao encontrado")
+    return await db.external_billing_clients.find_one({"id": cid}, {"_id": 0})
+
+
+@router.delete("/external-clients/{cid}")
+async def delete_external_client(
+    cid: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    in_use = await db.invoices.count_documents({"external_client_id": cid})
+    if in_use > 0:
+        raise HTTPException(409, f"Cliente externo possui {in_use} cobranca(s). Remova-as antes.")
+    r = await db.external_billing_clients.delete_one({"id": cid})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Cliente externo nao encontrado")
+    return {"message": "Cliente externo removido"}
+
+
+# === SUPER-ADMIN: ONE-TIME MIGRATION (Plans → BusinessTypes) =================
+@router.post("/migrate-plans-to-business-types")
+async def migrate_plans_to_business_types(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    """One-time migration: copy commercial fields (price, cycle, installments,
+    grace_days, max_*) from `subscription_plans` into the `business_types`
+    they reference (via `business_type_ids`). Idempotent — only fills fields
+    that are missing or zero on the BusinessType side.
+    """
+    migrated = 0
+    skipped = 0
+    plans = await db.subscription_plans.find({}, {"_id": 0}).to_list(1000)
+    for p in plans:
+        for bt_id in (p.get("business_type_ids") or []):
+            bt = await db.business_types.find_one({"id": bt_id}, {"_id": 0})
+            if not bt:
+                continue
+            patch: dict = {}
+            if not float(bt.get("monthly_price") or 0):
+                patch["monthly_price"] = float(p.get("monthly_price") or 0)
+            if not bt.get("billing_cycle"):
+                patch["billing_cycle"] = (p.get("billing_cycle") or "monthly").lower()
+            if not int(bt.get("installments") or 0):
+                patch["installments"] = max(1, int(p.get("installments") or 1))
+            if bt.get("grace_days") is None:
+                patch["grace_days"] = max(0, int(p.get("grace_days") or 5))
+            if not int(bt.get("max_connections") or 0):
+                patch["max_connections"] = max(0, int(p.get("max_connections") or 1))
+            if not int(bt.get("max_users") or 0):
+                patch["max_users"] = max(0, int(p.get("max_users") or 1))
+            if patch:
+                await db.business_types.update_one({"id": bt_id}, {"$set": patch})
+                migrated += 1
+            else:
+                skipped += 1
+    return {"migrated_business_types": migrated, "already_filled": skipped, "plans_scanned": len(plans)}

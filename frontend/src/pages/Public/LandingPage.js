@@ -91,6 +91,16 @@ const LandingPage = () => {
                   </div>
                   <h4 className="text-xl font-bold font-heading text-slate-900 mb-2">{bt.name}</h4>
                   <p className="text-sm text-slate-600 mb-4">{bt.description}</p>
+                  {bt.monthly_price > 0 && (
+                    <div className="mb-3" data-testid={`plan-price-${bt.id}`}>
+                      <span className="text-3xl font-bold font-heading text-slate-900">
+                        R$ {Number(bt.monthly_price).toFixed(2).replace('.', ',')}
+                      </span>
+                      <span className="text-sm text-slate-500 ml-1">
+                        {bt.billing_cycle === 'yearly' ? '/ ano' : bt.billing_cycle === 'one_time' ? 'avulso' : '/ mes'}
+                      </span>
+                    </div>
+                  )}
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${bt.base_type === 'both' ? 'bg-violet-100 text-violet-700' : bt.base_type === 'crm' ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'}`}>
                     {bt.base_type === 'both' ? 'CRM + Agendamento' : bt.base_type === 'crm' ? 'CRM' : 'Agendamento'}
                   </span>

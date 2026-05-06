@@ -52,6 +52,15 @@ class BusinessTypeCreate(BaseModel):
     base_type: PlanType  # crm, scheduling, both
     features: List[Dict[str, Any]] = []  # Lista de features habilitadas
     mobile_bottom_nav: List[str] = []    # Até 4 feature_keys para barra inferior mobile
+    # Billing & limits — embedded so the Tipo de Negócio fully describes
+    # both feature permissions AND commercial terms. When a company is
+    # assigned this BT, invoices are auto-generated from these fields.
+    monthly_price: float = 0.0
+    billing_cycle: str = "monthly"   # monthly | yearly | one_time
+    installments: int = 1
+    grace_days: int = 5
+    max_connections: int = 1
+    max_users: int = 1
 
 class BusinessTypeUpdate(BaseModel):
     name: Optional[str] = None
@@ -61,6 +70,12 @@ class BusinessTypeUpdate(BaseModel):
     features: Optional[List[Dict[str, Any]]] = None
     mobile_bottom_nav: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    monthly_price: Optional[float] = None
+    billing_cycle: Optional[str] = None
+    installments: Optional[int] = None
+    grace_days: Optional[int] = None
+    max_connections: Optional[int] = None
+    max_users: Optional[int] = None
 
 # Auth Models
 class LoginRequest(BaseModel):

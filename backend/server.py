@@ -203,6 +203,20 @@ async def backfill_feature_keys(db):
          "features.feature_key": {"$ne": "orcamentos"}},
         {"$addToSet": {"features": {"feature_key": "orcamentos", "enabled": True}}}
     )
+    # Backfill the unified billing fields on business_types created before
+    # the Plan→BusinessType merge. Defaults to free (price 0) so admins can
+    # opt-in by editing the BT in the SuperAdmin UI.
+    await db.business_types.update_many(
+        {"monthly_price": {"$exists": False}},
+        {"$set": {
+            "monthly_price": 0.0,
+            "billing_cycle": "monthly",
+            "installments": 1,
+            "grace_days": 5,
+            "max_connections": 1,
+            "max_users": 1,
+        }}
+    )
 
 
 async def backfill_ticket_client_links(db):
