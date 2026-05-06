@@ -61,6 +61,7 @@ class BusinessTypeCreate(BaseModel):
     grace_days: int = 5
     max_connections: int = 1
     max_users: int = 1
+    show_on_landing: bool = False    # If True, exposed as a plan card in /landing
 
 class BusinessTypeUpdate(BaseModel):
     name: Optional[str] = None
@@ -76,6 +77,7 @@ class BusinessTypeUpdate(BaseModel):
     grace_days: Optional[int] = None
     max_connections: Optional[int] = None
     max_users: Optional[int] = None
+    show_on_landing: Optional[bool] = None
 
 # Auth Models
 class LoginRequest(BaseModel):

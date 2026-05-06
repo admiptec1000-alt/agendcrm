@@ -172,6 +172,13 @@ const SuperAdminDashboard = () => {
               allFeatures={allFeatures}
               onAdd={() => { setEditingType(null); setShowTypeModal(true); }}
               onEdit={(bt) => { setEditingType(bt); setShowTypeModal(true); }}
+              onDuplicate={async (bt) => {
+                try {
+                  await api.post(`/super-admin/business-types/${bt.id}/duplicate`);
+                  toast.success('Tipo duplicado!');
+                  loadAll();
+                } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao duplicar'); }
+              }}
               onDelete={async (id) => {
                 if (window.confirm('Tem certeza que deseja deletar este tipo?')) {
                   await superAdminAPI.deleteBusinessType(id);
@@ -329,6 +336,20 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                         className="p-2 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors" title="Gestão (acessar como admin)">
                         <Headphones className="w-4 h-4" />
                       </button>
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm(`Importar fluxos de atendimento SGP para "${company.name}"? Será criado um fluxo "SGP — Atendimento Web Internet" desativado para você revisar antes de publicar.`)) return;
+                          try {
+                            const { data } = await api.post(`/sgp/super-admin/import-flow/${company.id}`);
+                            if (data.created) toast.success('Fluxo SGP criado! Acesse Flowbuilder na empresa.');
+                            else toast.info('Fluxo SGP já existia para esta empresa.');
+                          } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao importar fluxo'); }
+                        }}
+                        data-testid={`import-sgp-${company.id}`}
+                        className="p-2 rounded-lg hover:bg-violet-50 text-violet-600 transition-colors"
+                        title="Importar fluxos SGP">
+                        <GitBranch className="w-4 h-4" />
+                      </button>
                       <button onClick={() => onEdit(company)} data-testid={`edit-company-${company.id}`}
                         className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
                         <Pencil className="w-4 h-4" />
@@ -353,7 +374,7 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
 };
 
 /* ========== BUSINESS TYPES TAB ========== */
-const BusinessTypesTab = ({ businessTypes, allFeatures, onAdd, onEdit, onDelete }) => (
+const BusinessTypesTab = ({ businessTypes, allFeatures, onAdd, onEdit, onDuplicate, onDelete }) => (
   <div className="animate-fade-in">
     <div className="flex items-center justify-between mb-6">
       <p className="text-slate-600">Configure os tipos de negocio e suas funcionalidades</p>
@@ -370,18 +391,29 @@ const BusinessTypesTab = ({ businessTypes, allFeatures, onAdd, onEdit, onDelete 
                 <Briefcase className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-900">{bt.name}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-slate-900">{bt.name}</h3>
+                  {bt.show_on_landing && (
+                    <span className="text-[9px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded" data-testid={`bt-landing-badge-${bt.id}`}>
+                      Landing
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500">{bt.description}</p>
               </div>
             </div>
             <div className="flex gap-1">
-              <button onClick={() => onEdit(bt)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"><Pencil className="w-4 h-4" /></button>
-              <button onClick={() => onDelete(bt.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-500"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => onEdit(bt)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-600" title="Editar" data-testid={`edit-bt-${bt.id}`}><Pencil className="w-4 h-4" /></button>
+              <button onClick={() => onDuplicate(bt)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-600" title="Duplicar" data-testid={`duplicate-bt-${bt.id}`}><Copy className="w-4 h-4" /></button>
+              <button onClick={() => onDelete(bt.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-500" title="Excluir" data-testid={`delete-bt-${bt.id}`}><Trash2 className="w-4 h-4" /></button>
             </div>
           </div>
           <div className="flex items-center gap-2 mb-3">
             <PlanBadge planType={bt.base_type} />
             <span className="text-xs text-slate-500">{bt.features?.length || 0} funcionalidades</span>
+            {bt.monthly_price > 0 && (
+              <span className="text-xs font-semibold text-emerald-700">R$ {Number(bt.monthly_price).toFixed(2)}/{bt.billing_cycle === 'yearly' ? 'ano' : bt.billing_cycle === 'one_time' ? 'avulso' : 'mes'}</span>
+            )}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {(bt.features || []).filter(f => f.enabled).slice(0, 8).map(f => (
@@ -1681,6 +1713,7 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
     grace_days: businessType?.grace_days ?? 5,
     max_connections: businessType?.max_connections ?? 1,
     max_users: businessType?.max_users ?? 1,
+    show_on_landing: businessType?.show_on_landing || false,
   });
   const [features, setFeatures] = useState(businessType?.features || []);
   const [mobileBottomNav, setMobileBottomNav] = useState(businessType?.mobile_bottom_nav || []);
@@ -1840,6 +1873,15 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
                   className="input-field" />
               </div>
             </div>
+            <label className="mt-4 flex items-center gap-2 cursor-pointer p-3 rounded-lg border border-slate-200 hover:border-primary/40">
+              <input
+                type="checkbox"
+                data-testid="bt-show-on-landing"
+                checked={form.show_on_landing}
+                onChange={e => setForm({...form, show_on_landing: e.target.checked})}
+                className="w-4 h-4 text-primary border-slate-300 rounded" />
+              <span className="text-sm font-medium text-slate-700">Exibir como plano na Landing Page (página de venda)</span>
+            </label>
           </div>
 
           <div>

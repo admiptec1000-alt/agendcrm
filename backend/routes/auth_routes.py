@@ -240,9 +240,12 @@ async def get_current_user_info(
 async def list_public_business_types(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    """Public endpoint for landing page to list available business types"""
+    """Public endpoint for landing page to list available business types
+    that are explicitly flagged as `show_on_landing=True`. Filtering on the
+    server avoids leaking internal-only BTs (operational catalogs, white-label
+    setups, etc.) into the public sales page."""
     types = await db.business_types.find(
-        {"is_active": True},
+        {"is_active": True, "show_on_landing": True},
         {"_id": 0, "features": 0}
     ).to_list(1000)
     return types

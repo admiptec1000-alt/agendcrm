@@ -124,11 +124,38 @@ async def create_business_type(
         "grace_days": max(0, int(data.grace_days or 5)),
         "max_connections": max(0, int(data.max_connections or 1)),
         "max_users": max(0, int(data.max_users or 1)),
+        "show_on_landing": bool(data.show_on_landing),
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.business_types.insert_one(bt)
     return {k: v for k, v in bt.items() if k != "_id"}
+
+
+@router.post("/business-types/{type_id}/duplicate")
+async def duplicate_business_type(
+    type_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Clone a BusinessType (features + billing config) under a new name.
+    The clone starts with `is_active=True` and `show_on_landing=False` so the
+    SuperAdmin can review/edit before exposing it publicly."""
+    src = await db.business_types.find_one({"id": type_id}, {"_id": 0})
+    if not src:
+        raise HTTPException(status_code=404, detail="Tipo de negocio nao encontrado")
+    clone = {
+        **src,
+        "id": str(uuid.uuid4()),
+        "name": f"{src.get('name', 'Tipo')} (cópia)",
+        "show_on_landing": False,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    clone.pop("updated_at", None)
+    clone.pop("_id", None)
+    await db.business_types.insert_one(clone)
+    return await db.business_types.find_one({"id": clone["id"]}, {"_id": 0})
 
 @router.put("/business-types/{type_id}")
 async def update_business_type(

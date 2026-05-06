@@ -10,6 +10,33 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — SGP Integration + BT enhancements (Duplicar, show_on_landing)
+**Bloco 4 — Tipo de Negócio:**
+- Novo campo `show_on_landing` (default `False`) e endpoint público `/api/auth/business-types` agora filtra por esse flag — só aparece na Landing quem foi explicitamente marcado.
+- `POST /api/super-admin/business-types/{id}/duplicate` cria cópia inativa-na-landing (nome + " (cópia)").
+- UI: badge verde "Landing" no card; botões Editar / Duplicar / Excluir no card do BT; toggle "Exibir como plano na Landing Page" no modal.
+
+**Bloco 1 — Integração SGP genérica (qualquer empresa pode configurar):**
+- Novo arquivo `/app/backend/routes/sgp_routes.py` com:
+  - `GET/PUT /api/sgp/config` — credenciais por empresa (`base_url`, `token`, `app`, `enabled`); token é mascarado na resposta (`token_masked`) e nunca pré-preenchido na UI.
+  - `POST /api/sgp/config/test` — bate em `/api/ura/manutencao/list/` para validar conexão.
+  - `POST /api/sgp/<acao>` — proxy whitelisted para 5 ações: `consultacliente`, `fatura2via`, `verificaacesso`, `manutencao`, `liberacaopromessa`. Token e app são INJETADOS server-side; o body do flow só carrega `params: {}` específicos da ação (CPF, contrato, etc).
+- UI: card "Integração SGP (Provedores)" em **Configurações da Empresa** (`SgpConfigCard`) com base_url, token, app, toggle Ativa, botão Testar, link da documentação SGP.
+
+**Bloco 2 — Importar fluxos SGP:**
+- `POST /api/sgp/super-admin/import-flow/{company_id}` — gera fluxo "SGP — Atendimento Web Internet" pronto, com nós HTTP apontando para o proxy `/api/sgp/<acao>` (sem token hardcoded, sem n8n). 18 nós: menu principal, identificação por CPF (consultacliente), submenu cliente (2ª via, suporte, atendente, liberação por confiança), branches não-cliente/manutenção/contratar plano. Idempotente: re-importação retorna o flow existente.
+- UI: botão violeta "Importar SGP" em cada linha da tabela de Empresas no Super Admin (ícone GitBranch). Confirmação antes de criar.
+
+**Validação:** curl E2E confirmou: BT show_on_landing filtra público (Public BTs só com flag true), duplicate cria cópia com flag False, import flow cria + idempotência, 404 para empresa inexistente. UI confirmada via Playwright (10 botões duplicar, 2 botões SGP, toggle landing presente).
+
+**Como usar em produção (`adm@web.com` na agentcrm.8ip.com.br):**
+1. Faça redeploy desta versão preview → produção.
+2. Como Super Admin em produção, vá em **Empresas**, clique no ícone violeta (GitBranch) ao lado da empresa "Web Internet". Confirme — o fluxo "SGP — Atendimento Web Internet" será criado desativado.
+3. Acesse a empresa via "Gestão" (impersonação) → **Configurações** → preencha o card "Integração SGP" (base_url=`https://web.sgp.net.br`, token gerado em https://bit.ly/token-api-ura, app=`8ip`).
+4. Em **Flowbuilder**, abra o fluxo importado, ajuste textos/queues conforme necessário e ative.
+
+
+
 ### 2026-05-06 — Super Admin Simplification: Plano fundido ao Tipo de Negócio
 **Refatoração** pedida pelo usuário (escolhas: 1a migrar plans, 2a esconder aba Planos, 3a Landing usa BT.monthly_price):
 - **Tipo de Negócio agora carrega permissões + comercial em um único objeto:** novos campos `monthly_price`, `billing_cycle` (monthly/yearly/one_time), `installments`, `grace_days`, `max_connections`, `max_users` em `BusinessTypeCreate/Update` (`models.py`) e expostos no endpoint público `/api/auth/business-types`.

@@ -5535,6 +5535,134 @@ const MobilePreferencesCard = () => {
 };
 
 
+const SgpConfigCard = () => {
+  const [cfg, setCfg] = useState({ base_url: '', token: '', app: '8ip', enabled: false });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [tokenMasked, setTokenMasked] = useState('');
+
+  useEffect(() => {
+    api.get('/sgp/config')
+      .then(r => {
+        const d = r.data || {};
+        setCfg({
+          base_url: d.base_url || '',
+          token: '', // never pre-fill the actual token
+          app: d.app || '8ip',
+          enabled: !!d.enabled,
+        });
+        setTokenMasked(d.token_masked || '');
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    if (!cfg.base_url.trim() || !cfg.token.trim()) {
+      return toast.error('Informe Base URL e Token');
+    }
+    setSaving(true);
+    try {
+      await api.put('/sgp/config', cfg);
+      toast.success('Integração SGP salva');
+      setTokenMasked(cfg.token.slice(0, 4) + '••••••••' + cfg.token.slice(-4));
+      setCfg(c => ({ ...c, token: '' }));
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao salvar'); }
+    finally { setSaving(false); }
+  };
+
+  const test = async () => {
+    setTesting(true);
+    try {
+      const { data } = await api.post('/sgp/config/test');
+      if (data.ok) toast.success(`Conexão OK (${data.status})`);
+      else toast.error(`Falha: status ${data.status}`);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao testar'); }
+    finally { setTesting(false); }
+  };
+
+  if (loading) return null;
+
+  return (
+    <div className="card max-w-2xl mb-6" data-testid="sgp-config-card">
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <h3 className="font-semibold text-slate-900">Integração SGP (Provedores)</h3>
+          <p className="text-xs text-slate-500">Conecte seu ISP ao Flowbuilder. Use os nós HTTP que apontam para <code>/api/sgp/&lt;acao&gt;</code> — o sistema injeta token e app automaticamente, sem expô-los no fluxo.</p>
+        </div>
+        <label className="flex items-center gap-2 text-xs cursor-pointer">
+          <input
+            type="checkbox"
+            data-testid="sgp-enabled-toggle"
+            checked={cfg.enabled}
+            onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })}
+            className="w-4 h-4 text-primary border-slate-300 rounded" />
+          <span className={cfg.enabled ? 'text-emerald-700 font-semibold' : 'text-slate-500'}>
+            {cfg.enabled ? 'Ativa' : 'Inativa'}
+          </span>
+        </label>
+      </div>
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs font-medium text-slate-700 mb-1 block">Base URL *</label>
+          <input
+            data-testid="sgp-base-url-input"
+            value={cfg.base_url}
+            onChange={(e) => setCfg({ ...cfg, base_url: e.target.value })}
+            placeholder="https://web.sgp.net.br"
+            className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">
+              Token * {tokenMasked && <span className="ml-1 text-[10px] font-mono text-slate-400">({tokenMasked} salvo)</span>}
+            </label>
+            <input
+              data-testid="sgp-token-input"
+              type="password"
+              value={cfg.token}
+              onChange={(e) => setCfg({ ...cfg, token: e.target.value })}
+              placeholder={tokenMasked ? 'Deixe em branco para manter' : 'Cole o token gerado no SGP'}
+              className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">App identifier</label>
+            <input
+              data-testid="sgp-app-input"
+              value={cfg.app}
+              onChange={(e) => setCfg({ ...cfg, app: e.target.value })}
+              placeholder="8ip"
+              className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 pt-2">
+          <button
+            onClick={save}
+            disabled={saving}
+            data-testid="sgp-save-btn"
+            className="btn-primary text-sm">
+            {saving ? 'Salvando…' : 'Salvar'}
+          </button>
+          <button
+            onClick={test}
+            disabled={testing || !tokenMasked}
+            data-testid="sgp-test-btn"
+            className="px-4 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 disabled:opacity-50">
+            {testing ? 'Testando…' : 'Testar conexão'}
+          </button>
+          <a
+            href="https://bookstack.sgp.net.br/books/api/page/autenticacoes-via-api"
+            target="_blank" rel="noopener noreferrer"
+            className="ml-auto text-xs text-primary hover:underline">
+            Como gerar token? ↗
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const ConfigPage = () => {
   const { user } = useAuth();
   const [businessHours, setBusinessHours] = useState(null);
@@ -5595,6 +5723,9 @@ const ConfigPage = () => {
     <div className="animate-fade-in" data-testid="config-page">
       {/* Mobile Preferences */}
       <MobilePreferencesCard />
+
+      {/* SGP Integration (ISP) */}
+      <SgpConfigCard />
 
       {/* Logo Global */}
       <div className="card max-w-2xl mb-6" data-testid="config-logo-section">
