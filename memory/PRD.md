@@ -10,6 +10,31 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Hotfix P0: Bot só respondia "Início" no fluxo importado
+**Causa raiz**: `_trigger_flow_for_ticket` (em `crm_routes.py`) era um **MOCK**. O comentário no código admitia: *"The full flow execution engine (branching, conditions, AI nodes) is a separate roadmap item; this fires off the welcome reply so the customer gets an instant acknowledgement"*. Resultado: cliente mandava mensagem → bot enviava só o nó de início e parava. Os menus, branches, HTTP nodes (SGP) e ticket-queues nunca eram executados.
+
+**Fix**: Implementado **Flowbuilder Runtime Engine** completo em `/app/backend/flow_engine.py` (~280 linhas). Funcionalidades:
+- Walker do grafo respeitando `edges` (incluindo `sourceHandle` para branches de menu, ex: `option-0`, `option-1`).
+- Tipos de nó suportados: `start` (skip+advance), `message`/`welcome` (envia texto + advance), `menu` (envia opções + espera reply), `http`/`request`/`api` (executa chamada HTTP, mescla `response.*` em variáveis), `ticket`/`queue`/`transfer` (move ticket pra fila e finaliza fluxo).
+- **Interpolação `{{var}}`** com path dotted (`{{response.data.nome}}`) — variáveis seedadas automaticamente: `nome`, `customer_phone`, `number`.
+- **Captura de input**: nós com `capture_var` salvam a resposta do cliente em `flow_vars`.
+- **Resolução de menu choice**: aceita key exato ("1"), número (`1` → idx 0), ou label fuzzy contains.
+- **Re-prompt em input inválido** (não avança o estado).
+- **HTTP node SGP**: detecta URL `/api/sgp/<acao>` e chama o proxy interno in-process (sem HTTP loop) injetando `token`+`app` do `sgp_configs` da empresa. Falha graciosa se SGP não configurado.
+- **Hop limit** (25) contra runaway loops + **Flow timeout** (24h) contra travas.
+- Estado persistido no ticket: `active_flow_id`, `active_flow_node_id`, `flow_vars`, `flow_started_at`.
+
+**Hooks**:
+- `routes/crm_routes.py::_trigger_flow_for_ticket` agora delega ao `flow_engine.advance_flow(is_initial=True)`.
+- `routes/channels_routes.py` (webhook de mensagem inbound): após persistir a mensagem do cliente, se `is_flow_active(ticket)` chama `advance_flow(incoming_text=text, is_initial=False)`.
+
+**Validado** com `/tmp/test_flow_engine.py` (3 testes):
+1. Trigger inicial envia welcome + menu, marca `pending_node=menu`. ✅
+2. Cliente responde "1" → envia próximo nó e finaliza fluxo. ✅
+3. Resposta inválida re-pergunta sem avançar estado. ✅
+
+
+
 ### 2026-05-06 — Hotfix P0: Toggle "Todos os módulos" vazando para clientes finais
 **Problema**: o toggle âmbar "Todos os módulos" estava aparecendo para QUALQUER cliente que tivesse `sessionStorage.impersonating='1'` setado de alguma sessão anterior. O `sessionStorage` é per-tab mas se o cliente abrir o painel num tab que antes foi usado pelo Super Admin para impersonação, a flag persiste — o cliente ganha o toggle indevidamente.
 

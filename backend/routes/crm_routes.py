@@ -1478,90 +1478,17 @@ async def delete_flow(
 
 # === FLOW EXECUTION (auto-trigger when WhatsApp connection has default_flow_id) ===
 async def _trigger_flow_for_ticket(db: AsyncIOMotorDatabase, company_id: str, flow_id: str, ticket: dict) -> None:
-    """Sends the WELCOME / FIRST-MESSAGE node of a Flowbuilder flow as the
-    initial automated reply on a brand-new ticket.
-
-    Minimal initial implementation: looks for the FIRST node of type
-    `message` (or any node with a `message`/`text` data field) and posts
-    its content as an outgoing agent message. The full flow execution
-    engine (branching, conditions, AI nodes) is a separate roadmap item;
-    this fires off the welcome reply so the customer gets an instant
-    acknowledgement when they hit a connection that has a flow attached.
-
-    We persist `active_flow_id` and `flow_started_at` on the ticket so
-    a future executor can pick up where this leaves off.
+    """Kicks off the Flowbuilder runtime on a brand-new ticket. The runtime
+    walks the flow graph, sending message/menu/http nodes as outgoing
+    WhatsApp messages, and persists the current node id on the ticket so
+    subsequent customer replies can advance the flow.
+    See `flow_engine.py` for the full state machine.
     """
     flow = await db.flow_builders.find_one({"id": flow_id, "company_id": company_id}, {"_id": 0})
-    if not flow:
+    if not flow or not (flow.get("nodes") or []):
         return
-    nodes = flow.get("nodes") or []
-    if not nodes:
-        return
-
-    # Pick the entry node: prefer one explicitly marked as `start`/`trigger`,
-    # fallback to the first node that has a usable text payload.
-    def _node_text(n):
-        d = n.get("data") or {}
-        for k in ("message", "text", "label", "content"):
-            v = d.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-        # Some nodes nest under data.config.message
-        cfg = (d.get("config") or {})
-        for k in ("message", "text"):
-            v = cfg.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-        return None
-
-    entry = next((n for n in nodes if (n.get("type") or "").lower() in ("start", "trigger", "message", "welcome")), None)
-    if not entry:
-        entry = next((n for n in nodes if _node_text(n)), None)
-    if not entry:
-        return
-    welcome_text = _node_text(entry)
-    if not welcome_text:
-        return
-
-    # Render simple placeholders against the ticket's customer
-    welcome_text = (welcome_text
-                    .replace("{{nome}}", ticket.get("customer_name") or "")
-                    .replace("{{name}}", ticket.get("customer_name") or "")
-                    .replace("{{ticket_number}}", str(ticket.get("ticket_number") or "")))
-
-    # Send via WhatsApp (fire-and-forget) and persist as outgoing message
-    new_msg = {
-        "id": str(uuid.uuid4()),
-        "ticket_id": ticket["id"],
-        "content": welcome_text,
-        "sender_type": "agent",  # marks it as a system/auto reply
-        "sender_id": None,
-        "channel": "whatsapp",
-        "wa_message_id": None,
-        "auto_flow_id": flow_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.tickets.update_one(
-        {"id": ticket["id"]},
-        {"$push": {"messages": new_msg},
-         "$set": {"active_flow_id": flow_id,
-                  "flow_started_at": datetime.now(timezone.utc).isoformat(),
-                  "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
-
-    # Forward to microservice (best-effort)
-    try:
-        import httpx as _httpx
-        wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
-        target_phone = ticket.get("lid_jid") if ticket.get("pending_lid_resolution") else ticket.get("customer_phone")
-        if ticket.get("connection_id") and target_phone:
-            async with _httpx.AsyncClient(timeout=15.0) as client:
-                await client.post(
-                    f"{wa_url}/instances/{ticket['connection_id']}/send",
-                    json={"phone": target_phone, "message": welcome_text}
-                )
-    except Exception:
-        pass
+    from flow_engine import advance_flow
+    await advance_flow(db, ticket, flow, is_initial=True)
 
 
 # === TAGS ===

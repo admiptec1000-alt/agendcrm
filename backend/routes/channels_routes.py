@@ -815,6 +815,20 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             {"$push": {"messages": new_message},
              "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
         )
+        # Reload ticket to pick up flow state and advance the runtime if it's
+        # waiting on this customer reply.
+        try:
+            from flow_engine import advance_flow, is_flow_active
+            updated = await db.tickets.find_one({"id": ticket["id"]}, {"_id": 0})
+            if updated and await is_flow_active(updated):
+                flow_doc = await db.flow_builders.find_one(
+                    {"id": updated["active_flow_id"], "company_id": updated["company_id"]},
+                    {"_id": 0},
+                )
+                if flow_doc:
+                    await advance_flow(db, updated, flow_doc, incoming_text=text, is_initial=False)
+        except Exception as e:
+            logger.warning(f"[webhook/message] flow advance failed: {e}")
 
     return {"ok": True}
 
