@@ -225,6 +225,58 @@ async def backfill_feature_keys(db):
         {"show_on_landing": {"$exists": False}},
         {"$set": {"show_on_landing": False}}
     )
+    # Auto-enable the "integrações" feature on every existing BT that has
+    # any other feature enabled. Without this, after the SGP/Integrations
+    # work, customers' Tipo de Negócio would silently miss the new menu
+    # item (since the feature was added later).
+    await db.business_types.update_many(
+        {
+            "features": {
+                "$elemMatch": {"feature_key": {"$ne": "integrações"}}
+            },
+            "features.feature_key": {"$ne": "integrações"},
+        },
+        {
+            "$addToSet": {
+                "features": {"feature_key": "integrações", "enabled": True}
+            }
+        },
+    )
+    await db.companies.update_many(
+        {
+            "features": {"$exists": True, "$ne": []},
+            "features.feature_key": {"$ne": "integrações"},
+        },
+        {
+            "$addToSet": {
+                "features": {"feature_key": "integrações", "enabled": True}
+            }
+        },
+    )
+    # Add agenda_pro as a NEW feature on every BT/Company that already has the
+    # legacy "agenda" feature enabled. Default ENABLED=False so admins must opt-in.
+    await db.business_types.update_many(
+        {
+            "features.feature_key": "agenda",
+            "features.feature_key": {"$ne": "agenda_pro"},
+        },
+        {
+            "$addToSet": {
+                "features": {"feature_key": "agenda_pro", "enabled": False}
+            }
+        },
+    )
+    await db.companies.update_many(
+        {
+            "features.feature_key": "agenda",
+            "features.feature_key": {"$ne": "agenda_pro"},
+        },
+        {
+            "$addToSet": {
+                "features": {"feature_key": "agenda_pro", "enabled": False}
+            }
+        },
+    )
 
 
 async def backfill_ticket_client_links(db):

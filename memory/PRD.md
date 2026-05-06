@@ -10,6 +10,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Fase 1+2+3 (Bugfixes + Pagamentos + Agenda Pro)
+
+**🔴 FASE 1 — Bugfixes P0**
+- **Fix tela em branco "Lançamentos"**: faltava `useCallback` no `import` de `Company/Dashboard.js` (linha 1) — causava `ReferenceError: useCallback is not defined` ao montar `LancamentosView`.
+- **Auto-enable feature `integrações`** em todos os BTs e Companies que tenham qualquer outra feature (backfill no startup `server.py`). Sem isso, o menu "API e Integrações" não aparecia em empresas existentes.
+
+**🟠 FASE 2 — Reestruturação Financeira**
+- **Backend** (`scheduling_routes.py`):
+  - CRUD `/scheduling/financial/payment-methods` — auto-seed de 6 métodos padrão (Dinheiro, Pix, Débito, Crédito, Transferência, Cortesia) na primeira leitura.
+  - `ConcludeAppointment` aceita `payment_method_id`, `discount_amount` (R$), `discount_pct` (%) e `is_courtesy`. Cortesia zera valor mas mantém transação no histórico.
+  - Transação financeira gerada inclui descrição "(Cortesia)" ou "(desconto R$ X)" para rastreabilidade.
+- **Frontend** (`Company/Dashboard.js`):
+  - Aba **"Taxas"** removida → substituída por sub-aba **"Formas de Pagamento"** com cards CRUD (criar/editar/excluir, com Tipo, Taxa%, Taxa fixa, Parcelas, Cortesia, Ativa).
+  - Modal "Concluir Agendamento" agora carrega métodos de pagamento dinamicamente; campos de **desconto R$** e **% off**; botão Cortesia em destaque verde.
+
+**🟢 FASE 3 — Agenda Pro (NOVA feature)**
+- Novo arquivo `/app/frontend/src/pages/Scheduling/AgendaProPage.js` (~330 linhas).
+- Feature key `agenda_pro` registrada no `FEATURE_REGISTRY` (backend) e `FEATURE_META` (frontend, ícone `CalendarDays`, grupo Operacional).
+- **Visão Diária**: timeline 07:00→22:00 em slots de 30min, colunas por profissional. Horários ocupados aparecem como cards coloridos por status (pendente=âmbar, confirmado=verde, em_atendimento=azul, concluído=cinza, cancelado=rosa-tracejado).
+- **Visão Semanal**: 7 colunas (Dom-Sáb) para 1 profissional selecionado.
+- Click em slot vazio → abre `QuickBookModal` pré-preenchido (data + hora + profissional).
+- Click em agendamento existente → mesmo modal em modo edição (com select de status + botão Excluir).
+- Toolbar com ◀ Hoje ▶, label do range, seletor de profissional (visão semanal), botão **+ Novo**.
+- Reusa a mesma collection `appointments` (mesma fonte da Agenda legada — confirme `2a` do user).
+
+**Validação**:
+- Backend: curl confirmou auto-seed de 6 formas, criação de "Boleto Bancário" custom, total 7.
+- Frontend: Playwright capturou 3 telas: vista diária, semanal e modal de novo agendamento — todas funcionando.
+
+
+
 ### 2026-05-06 — Importar Fluxo genérico (JSON do computador)
 - **Antes**: o botão "Importar SGP" só criava o esqueleto SGP.
 - **Agora**: três botões no header da lista de fluxos:

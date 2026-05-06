@@ -379,9 +379,13 @@ async def send_appointment_reminder(
 
 # === CONCLUDE APPOINTMENT WITH PAYMENT ===
 class ConcludeAppointment(BaseModel):
-    payment_method: str  # dinheiro, pix, cartao_debito, cartao_credito
+    payment_method: str  # legacy free-form key (dinheiro/pix/cartao_*) — kept
+    payment_method_id: Optional[str] = None  # FK to /payment-methods doc
     notes: Optional[str] = None
-    final_price: Optional[float] = None  # override final price at conclusion
+    final_price: Optional[float] = None       # override final price at conclusion
+    discount_amount: Optional[float] = None   # absolute R$ discount (BRL)
+    discount_pct: Optional[float] = None      # OR percentage off (0-100)
+    is_courtesy: Optional[bool] = False       # zeros final amount; transaction kept for history
 
 @router.put("/appointments/{appointment_id}/conclude")
 async def conclude_appointment(
@@ -410,13 +414,29 @@ async def conclude_appointment(
         if "edit_appointment_price" not in perms:
             raise HTTPException(status_code=403, detail="Sem permissao para alterar o valor")
 
-    final_amount = float(data.final_price) if data.final_price is not None else apt.get("price", 0)
+    base_amount = float(data.final_price) if data.final_price is not None else float(apt.get("price", 0) or 0)
+
+    # Apply discount (absolute first, then percentage)
+    discount_value = 0.0
+    if data.discount_amount and data.discount_amount > 0:
+        discount_value += float(data.discount_amount)
+    if data.discount_pct and data.discount_pct > 0:
+        discount_value += base_amount * (float(data.discount_pct) / 100.0)
+    discount_value = min(discount_value, base_amount)
+
+    # Cortesia zeros the final amount but we still keep the transaction so
+    # it shows up in financial reports as "Cortesia R$ 0,00".
+    courtesy = bool(data.is_courtesy)
+    final_amount = 0.0 if courtesy else max(0.0, base_amount - discount_value)
 
     update = {
         "status": "concluido",
-        "payment_method": data.payment_method,
+        "payment_method": "cortesia" if courtesy else data.payment_method,
+        "payment_method_id": data.payment_method_id,
         "payment_status": "pago",
         "price": final_amount,
+        "discount_amount": round(discount_value, 2),
+        "is_courtesy": courtesy,
         "concluded_at": datetime.now(timezone.utc).isoformat(),
         "concluded_by": user["id"]
     }
@@ -428,6 +448,10 @@ async def conclude_appointment(
     await db.appointments.update_one({"id": appointment_id}, {"$set": update})
 
     # Record financial transaction
+    desc_parts = [apt.get('service_name', '') or 'Atendimento']
+    if apt.get("customer_name"): desc_parts.append(apt["customer_name"])
+    if courtesy: desc_parts.append("(Cortesia)")
+    elif discount_value > 0: desc_parts.append(f"(desconto R$ {discount_value:.2f})")
     transaction = {
         "id": str(uuid.uuid4()),
         "company_id": user["company_id"],
@@ -436,8 +460,11 @@ async def conclude_appointment(
         "direction": "entrada",
         "status": "pago",
         "amount": final_amount,
-        "payment_method": data.payment_method,
-        "description": f"{apt.get('service_name','')} - {apt.get('customer_name','')}",
+        "discount_amount": round(discount_value, 2),
+        "is_courtesy": courtesy,
+        "payment_method": "cortesia" if courtesy else data.payment_method,
+        "payment_method_id": data.payment_method_id,
+        "description": " - ".join(desc_parts),
         "category": "servico",
         "professional_id": apt.get("professional_id"),
         "professional_name": apt.get("professional_name"),
@@ -662,6 +689,124 @@ async def update_payment_fees(
         doc = {"id": str(uuid.uuid4()), "company_id": user["company_id"], **_empty_fees(), **payload}
         await db.payment_fees.insert_one(doc)
     return await _get_payment_fees(db, user["company_id"])
+
+
+# ============================================================
+# PAYMENT METHODS (Formas de Pagamento) — replaces flat fees model
+# ============================================================
+# Per-company list of payment methods. Each entry carries optional fee
+# settings, max installments (credit), and a `is_courtesy` flag that the
+# /conclude endpoint honors to zero out the price while still recording the
+# financial transaction for history/reporting.
+
+DEFAULT_PAYMENT_METHODS = [
+    {"name": "Dinheiro",          "type": "dinheiro",       "fee_pct": 0.0, "fee_fixed": 0.0, "max_installments": 1, "is_courtesy": False, "enabled": True},
+    {"name": "Pix",               "type": "pix",            "fee_pct": 0.0, "fee_fixed": 0.0, "max_installments": 1, "is_courtesy": False, "enabled": True},
+    {"name": "Cartão de Débito",  "type": "cartao_debito",  "fee_pct": 0.0, "fee_fixed": 0.0, "max_installments": 1, "is_courtesy": False, "enabled": True},
+    {"name": "Cartão de Crédito", "type": "cartao_credito", "fee_pct": 0.0, "fee_fixed": 0.0, "max_installments": 12,"is_courtesy": False, "enabled": True},
+    {"name": "Transferência",     "type": "transferencia",  "fee_pct": 0.0, "fee_fixed": 0.0, "max_installments": 1, "is_courtesy": False, "enabled": True},
+    {"name": "Cortesia",          "type": "cortesia",       "fee_pct": 0.0, "fee_fixed": 0.0, "max_installments": 1, "is_courtesy": True,  "enabled": True},
+]
+
+
+class PaymentMethodIn(BaseModel):
+    name: str
+    type: str  # dinheiro|pix|cartao_credito|cartao_debito|transferencia|cortesia|outros
+    fee_pct: float = 0.0
+    fee_fixed: float = 0.0
+    max_installments: int = 1
+    is_courtesy: bool = False
+    enabled: bool = True
+
+
+async def _ensure_default_payment_methods(db: AsyncIOMotorDatabase, company_id: str):
+    """Auto-seed the default 6 payment methods on first read so existing
+    tenants get a usable list without admin intervention."""
+    has_any = await db.payment_methods.find_one({"company_id": company_id}, {"_id": 0, "id": 1})
+    if has_any:
+        return
+    docs = [
+        {**pm, "id": str(uuid.uuid4()), "company_id": company_id,
+         "created_at": datetime.now(timezone.utc).isoformat()}
+        for pm in DEFAULT_PAYMENT_METHODS
+    ]
+    await db.payment_methods.insert_many(docs)
+
+
+@router.get("/financial/payment-methods")
+async def list_payment_methods(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    await _ensure_default_payment_methods(db, user["company_id"])
+    rows = await db.payment_methods.find(
+        {"company_id": user["company_id"]}, {"_id": 0}
+    ).sort("name", 1).to_list(200)
+    return rows
+
+
+@router.post("/financial/payment-methods")
+async def create_payment_method(
+    data: PaymentMethodIn,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    if not data.name.strip():
+        raise HTTPException(400, "Nome obrigatorio")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": data.name.strip(),
+        "type": data.type,
+        "fee_pct": max(0.0, float(data.fee_pct or 0)),
+        "fee_fixed": max(0.0, float(data.fee_fixed or 0)),
+        "max_installments": max(1, int(data.max_installments or 1)),
+        "is_courtesy": bool(data.is_courtesy) or data.type == "cortesia",
+        "enabled": bool(data.enabled),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.payment_methods.insert_one(doc)
+    return await db.payment_methods.find_one({"id": doc["id"]}, {"_id": 0})
+
+
+@router.put("/financial/payment-methods/{pm_id}")
+async def update_payment_method(
+    pm_id: str,
+    data: PaymentMethodIn,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    update = {
+        "name": data.name.strip(),
+        "type": data.type,
+        "fee_pct": max(0.0, float(data.fee_pct or 0)),
+        "fee_fixed": max(0.0, float(data.fee_fixed or 0)),
+        "max_installments": max(1, int(data.max_installments or 1)),
+        "is_courtesy": bool(data.is_courtesy) or data.type == "cortesia",
+        "enabled": bool(data.enabled),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.payment_methods.update_one(
+        {"id": pm_id, "company_id": user["company_id"]},
+        {"$set": update}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(404, "Forma de pagamento nao encontrada")
+    return await db.payment_methods.find_one({"id": pm_id}, {"_id": 0})
+
+
+@router.delete("/financial/payment-methods/{pm_id}")
+async def delete_payment_method(
+    pm_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    r = await db.payment_methods.delete_one(
+        {"id": pm_id, "company_id": user["company_id"]}
+    )
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Forma de pagamento nao encontrada")
+    return {"ok": True}
 
 @router.get("/client-subscription-lookup")
 async def lookup_client_subscription(

@@ -36,6 +36,7 @@ ALL_FEATURES = [
     # Scheduling Features
     {"feature_key": "calendario", "label": "Calendario", "category": "scheduling", "icon": "Calendar"},
     {"feature_key": "agenda", "label": "Agenda", "category": "scheduling", "icon": "CalendarCheck"},
+    {"feature_key": "agenda_pro", "label": "Agenda Pro", "category": "scheduling", "icon": "CalendarDays"},
     {"feature_key": "agendamentos", "label": "Agendamento de Mensagens", "category": "scheduling", "icon": "Clock"},
     {"feature_key": "clientes", "label": "Clientes", "category": "scheduling", "icon": "UserCheck"},
     {"feature_key": "categorias", "label": "Categorias", "category": "scheduling", "icon": "FolderOpen"},

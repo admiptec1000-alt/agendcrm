@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { crmAPI, schedulingAPI, uploadAPI, reportsAPI, notificationsAPI, channelsAPI } from '../../services/api';
 import api from '../../services/api';
+import AgendaProPage from '../Scheduling/AgendaProPage';
 import { useCompanyBranding } from '../../hooks/useCompanyBranding';
 import { toast } from 'sonner';
 import {
   LogOut, LayoutDashboard, Headphones, Zap, Columns3, Users, Tag,
   MessageSquare, Megaphone, GitBranch, Info, Code, UserCog, Bot, Link,
-  Sparkles, Calendar, CalendarCheck, UserCheck, FolderOpen, Scissors,
+  Sparkles, Calendar, CalendarCheck, CalendarDays, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
   ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText
@@ -49,6 +50,7 @@ const FEATURE_META = {
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
   agenda:             { icon: 'CalendarCheck',    label: 'Agenda', group: 'Operacional' },
+  agenda_pro:         { icon: 'CalendarDays',     label: 'Agenda Pro', group: 'Operacional' },
   agendamentos:       { icon: 'Clock',            label: 'Agendamento Msg', group: 'Operacional' },
   clientes:           { icon: 'UserCheck',        label: 'Clientes / Leads', group: 'Operacional' },
   categorias:         { icon: 'FolderOpen',       label: 'Categorias', group: 'Catalogo' },
@@ -616,6 +618,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'filas_chatbot': return <QueuesPage />;
     case 'calendario': return <CalendarPageFull />;
     case 'agenda': return <AgendaPage />;
+    case 'agenda_pro': return <AgendaProPage />;
     case 'agendamentos': return <MessageSchedulingPage />;
     case 'clientes': return <ClientsPage />;
     case 'servicos_produtos': return <ServicesPageFull />;
@@ -1860,6 +1863,10 @@ const AgendaPage = () => {
   const [filter, setFilter] = useState('hoje');
   const [concludeApt, setConcludeApt] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState('');
+  const [paymentMethodId, setPaymentMethodId] = useState('');
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [discountAmount, setDiscountAmount] = useState('');
+  const [discountPct, setDiscountPct] = useState('');
   const [finalPrice, setFinalPrice] = useState('');
   const [editApt, setEditApt] = useState(null);
 
@@ -1924,20 +1931,41 @@ const AgendaPage = () => {
   const openConclude = (a) => {
     setConcludeApt(a);
     setPaymentMethod('');
+    setPaymentMethodId('');
+    setDiscountAmount('');
+    setDiscountPct('');
     setFinalPrice(String((a.price || 0).toFixed(2)));
+    // Lazy-load payment methods on first open
+    if (paymentMethods.length === 0) {
+      api.get('/scheduling/financial/payment-methods')
+        .then(r => setPaymentMethods((r.data || []).filter(m => m.enabled)))
+        .catch(() => {});
+    }
   };
 
   const handleConclude = async () => {
-    if (!paymentMethod) { toast.error('Selecione pagamento'); return; }
+    if (!paymentMethodId) { toast.error('Selecione a forma de pagamento'); return; }
+    const selected = paymentMethods.find(m => m.id === paymentMethodId);
     try {
-      const payload = { payment_method: paymentMethod };
+      const payload = {
+        payment_method: selected?.type || 'outros',
+        payment_method_id: paymentMethodId,
+        is_courtesy: !!selected?.is_courtesy,
+      };
       const numericPrice = parseFloat(finalPrice);
       if (canEditPrice && !isNaN(numericPrice) && numericPrice !== (concludeApt.price || 0)) {
         payload.final_price = numericPrice;
       }
+      const dAmt = parseFloat(discountAmount);
+      if (!isNaN(dAmt) && dAmt > 0) payload.discount_amount = dAmt;
+      const dPct = parseFloat(discountPct);
+      if (!isNaN(dPct) && dPct > 0) payload.discount_pct = dPct;
       await schedulingAPI.concludeAppointment(concludeApt.id, payload);
       toast.success('Concluido!');
-      setConcludeApt(null); setPaymentMethod(''); setFinalPrice(''); load();
+      setConcludeApt(null);
+      setPaymentMethod(''); setPaymentMethodId('');
+      setDiscountAmount(''); setDiscountPct(''); setFinalPrice('');
+      load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao concluir'); }
   };
 
@@ -2210,7 +2238,7 @@ const AgendaPage = () => {
             </div>
             <div className="flex gap-2 p-5 border-t border-slate-100">
               <button onClick={() => setConcludeApt(null)} className="btn-secondary flex-1 text-sm">Cancelar</button>
-              <button onClick={handleConclude} disabled={!paymentMethod} className="btn-primary flex-1 text-sm" data-testid="agenda-confirm-conclude-btn">Concluir</button>
+              <button onClick={handleConclude} disabled={!paymentMethodId} className="btn-primary flex-1 text-sm" data-testid="agenda-confirm-conclude-btn">Concluir</button>
             </div>
           </div>
         </div>
@@ -4105,6 +4133,186 @@ const TX_CATEGORIES = {
   ],
 };
 
+const PaymentMethodsManager = () => {
+  const [methods, setMethods] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/scheduling/financial/payment-methods');
+      setMethods(data || []);
+    } catch (e) { toast.error('Erro ao carregar formas de pagamento'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+
+  const remove = async (m) => {
+    if (!window.confirm(`Excluir "${m.name}"?`)) return;
+    try {
+      await api.delete(`/scheduling/financial/payment-methods/${m.id}`);
+      toast.success('Forma de pagamento removida');
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao excluir'); }
+  };
+
+  const TYPE_LABEL = {
+    dinheiro: 'Dinheiro', pix: 'Pix', cartao_credito: 'Cartão de Crédito',
+    cartao_debito: 'Cartão de Débito', transferencia: 'Transferência',
+    cortesia: 'Cortesia', outros: 'Outros',
+  };
+
+  return (
+    <div className="space-y-3" data-testid="payment-methods-manager">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-slate-500">Configure as formas de pagamento aceitas. Taxas aplicadas no cálculo do líquido. <strong>Cortesia</strong> zera o valor automaticamente.</p>
+        <button
+          onClick={() => { setEditing(null); setShowModal(true); }}
+          className="btn-primary text-sm flex items-center gap-1.5"
+          data-testid="add-payment-method-btn">
+          <Plus className="w-4 h-4" /> Nova
+        </button>
+      </div>
+      {loading ? (
+        <div className="py-12 text-center text-slate-400 text-sm">Carregando…</div>
+      ) : methods.length === 0 ? (
+        <div className="py-12 text-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
+          Nenhuma forma de pagamento. As padrões são criadas automaticamente.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {methods.map(m => (
+            <div key={m.id} className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3" data-testid={`pm-row-${m.id}`}>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-slate-900">{m.name}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 uppercase font-bold">{TYPE_LABEL[m.type] || m.type}</span>
+                  {m.is_courtesy && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold">CORTESIA</span>}
+                  {!m.enabled && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-500 font-bold">DESATIVADA</span>}
+                </div>
+                {!m.is_courtesy && (m.fee_pct > 0 || m.fee_fixed > 0) && (
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Taxa: {m.fee_pct > 0 ? `${m.fee_pct}%` : ''} {m.fee_fixed > 0 ? `+ R$ ${Number(m.fee_fixed).toFixed(2)}` : ''}
+                    {m.type === 'cartao_credito' && m.max_installments > 1 && ` • até ${m.max_installments}x`}
+                  </p>
+                )}
+              </div>
+              <button onClick={() => { setEditing(m); setShowModal(true); }} className="p-2 rounded hover:bg-slate-100 text-slate-500" data-testid={`edit-pm-${m.id}`}>
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => remove(m)} className="p-2 rounded hover:bg-red-50 text-red-500" data-testid={`delete-pm-${m.id}`}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {showModal && (
+        <PaymentMethodModal
+          method={editing}
+          onClose={() => setShowModal(false)}
+          onSaved={() => { setShowModal(false); reload(); }}
+        />
+      )}
+    </div>
+  );
+};
+
+const PaymentMethodModal = ({ method, onClose, onSaved }) => {
+  const [form, setForm] = useState({
+    name: method?.name || '',
+    type: method?.type || 'dinheiro',
+    fee_pct: method?.fee_pct ?? 0,
+    fee_fixed: method?.fee_fixed ?? 0,
+    max_installments: method?.max_installments ?? 1,
+    is_courtesy: method?.is_courtesy || false,
+    enabled: method?.enabled ?? true,
+  });
+  const [saving, setSaving] = useState(false);
+  const showsFee = ['pix', 'cartao_credito', 'cartao_debito', 'outros'].includes(form.type);
+  const showsInstallments = form.type === 'cartao_credito';
+
+  const save = async () => {
+    if (!form.name.trim()) return toast.error('Informe o nome');
+    setSaving(true);
+    try {
+      const payload = { ...form, is_courtesy: form.type === 'cortesia' || form.is_courtesy };
+      if (method?.id) {
+        await api.put(`/scheduling/financial/payment-methods/${method.id}`, payload);
+        toast.success('Atualizada');
+      } else {
+        await api.post('/scheduling/financial/payment-methods', payload);
+        toast.success('Forma criada');
+      }
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao salvar'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()} data-testid="payment-method-modal">
+        <div className="flex items-center justify-between p-4 border-b border-slate-200">
+          <h3 className="text-base font-bold">{method ? 'Editar' : 'Nova'} Forma de Pagamento</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Nome *</label>
+            <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="input-field text-sm" data-testid="pm-name-input" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Tipo</label>
+            <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value, is_courtesy: e.target.value === 'cortesia' })} className="input-field text-sm" data-testid="pm-type-select">
+              <option value="dinheiro">Dinheiro</option>
+              <option value="pix">Pix</option>
+              <option value="cartao_credito">Cartão de Crédito</option>
+              <option value="cartao_debito">Cartão de Débito</option>
+              <option value="transferencia">Transferência</option>
+              <option value="cortesia">Cortesia</option>
+              <option value="outros">Outros</option>
+            </select>
+          </div>
+          {showsFee && !form.is_courtesy && (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Taxa %</label>
+                <input type="number" step="0.01" min="0" value={form.fee_pct} onChange={e => setForm({ ...form, fee_pct: parseFloat(e.target.value) || 0 })} className="input-field text-sm" data-testid="pm-fee-pct" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Taxa fixa (R$)</label>
+                <input type="number" step="0.01" min="0" value={form.fee_fixed} onChange={e => setForm({ ...form, fee_fixed: parseFloat(e.target.value) || 0 })} className="input-field text-sm" data-testid="pm-fee-fixed" />
+              </div>
+            </div>
+          )}
+          {showsInstallments && (
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Máximo de parcelas</label>
+              <input type="number" min="1" max="24" value={form.max_installments} onChange={e => setForm({ ...form, max_installments: Math.max(1, parseInt(e.target.value) || 1) })} className="input-field text-sm" data-testid="pm-max-installments" />
+            </div>
+          )}
+          <label className="flex items-center gap-2 text-sm cursor-pointer p-2 rounded border border-slate-200 hover:border-slate-300">
+            <input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} className="w-4 h-4 rounded" data-testid="pm-enabled-toggle" />
+            <span>Ativa</span>
+          </label>
+          {form.is_courtesy && (
+            <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+              💡 Forma de cortesia: ao ser usada na conclusão do serviço, o valor é zerado automaticamente.
+            </p>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 p-4 border-t border-slate-200 bg-slate-50">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded border border-slate-300 hover:bg-white">Cancelar</button>
+          <button onClick={save} disabled={saving} className="btn-primary text-sm" data-testid="pm-save-btn">{saving ? 'Salvando…' : 'Salvar'}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 const LancamentosView = ({ startDate, endDate, filterMethod, fees, onChanged }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -4439,9 +4647,9 @@ const FinanceiroPage = () => {
         <div className="flex bg-slate-100 rounded-lg p-0.5 flex-wrap">
           <button onClick={() => setView('resumo')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='resumo'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-resumo">Resumo</button>
           <button onClick={() => setView('lancamentos')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='lancamentos'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-lancamentos">Lancamentos</button>
-          <button onClick={() => setView('taxas')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='taxas'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-taxas">Taxas</button>
+          <button onClick={() => setView('formas_pagamento')} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${view==='formas_pagamento'?'bg-white shadow-sm text-slate-900':'text-slate-500'}`} data-testid="fin-view-formas-pagamento">Formas de Pagamento</button>
         </div>
-        {view !== 'taxas' && (
+        {view !== 'formas_pagamento' && (
           <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${activeFilters > 0 ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-600'}`}>
             <Settings className="w-3.5 h-3.5" /> Filtros {activeFilters > 0 && <span className="w-4 h-4 rounded-full bg-primary text-white text-[10px] flex items-center justify-center">{activeFilters}</span>}
           </button>
@@ -4449,7 +4657,7 @@ const FinanceiroPage = () => {
       </div>
 
       {/* Collapsible filters */}
-      {showFilters && view !== 'taxas' && (
+      {showFilters && view !== 'formas_pagamento' && (
         <div className="rounded-xl border border-slate-200 bg-white p-3 mb-4 space-y-2 overflow-hidden">
           <div className="grid grid-cols-2 gap-2">
             <div className="min-w-0"><label className="text-[10px] font-bold uppercase text-slate-400">Inicio</label>
@@ -4476,63 +4684,8 @@ const FinanceiroPage = () => {
         </div>
       )}
 
-      {view === 'taxas' ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-4" data-testid="fin-fees-card">
-          <p className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-1">Taxas das formas de pagamento</p>
-          <p className="text-xs text-slate-500 mb-4">As taxas sao deduzidas automaticamente nos calculos do resumo financeiro (Bruto / Taxa / Liquido).</p>
-          {feesDraft && (
-            <div className="space-y-4">
-              {[
-                { key: 'pix', label: 'PIX', icon: '⚡', pctK: 'pix_pct', fixedK: 'pix_fixed' },
-                { key: 'credit', label: 'Cartao de Credito', icon: '💳', pctK: 'credit_pct', fixedK: 'credit_fixed' },
-                { key: 'debit', label: 'Cartao de Debito', icon: '💳', pctK: 'debit_pct', fixedK: 'debit_fixed' },
-              ].map(row => (
-                <div key={row.key} className="rounded-lg border border-slate-200 p-3" data-testid={`fee-row-${row.key}`}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-base">{row.icon}</span>
-                    <span className="text-sm font-semibold text-slate-900">{row.label}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-slate-400">Taxa %</label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={feesDraft[row.pctK] ?? 0}
-                          onChange={e => setFeesDraft({ ...feesDraft, [row.pctK]: parseFloat(e.target.value) || 0 })}
-                          className="input-field text-sm pr-6"
-                          data-testid={`fee-${row.key}-pct`}
-                        />
-                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">%</span>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-slate-400">Taxa fixa</label>
-                      <div className="relative">
-                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">R$</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={feesDraft[row.fixedK] ?? 0}
-                          onChange={e => setFeesDraft({ ...feesDraft, [row.fixedK]: parseFloat(e.target.value) || 0 })}
-                          className="input-field text-sm pl-8"
-                          data-testid={`fee-${row.key}-fixed`}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <div className="flex justify-end gap-2 pt-2">
-                <button onClick={() => setFeesDraft(fees)} className="btn-secondary text-sm" data-testid="fees-cancel">Cancelar</button>
-                <button onClick={saveFees} disabled={savingFees} className="btn-primary text-sm" data-testid="fees-save">{savingFees ? 'Salvando...' : 'Salvar Taxas'}</button>
-              </div>
-            </div>
-          )}
-        </div>
+      {view === 'formas_pagamento' ? (
+        <PaymentMethodsManager />
       ) : (
         <>
           {/* Revenue hero - Bruto / Taxa / Liquido */}
