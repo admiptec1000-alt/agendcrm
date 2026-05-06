@@ -10,6 +10,20 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Importar Fluxo genérico (JSON do computador)
+- **Antes**: o botão "Importar SGP" só criava o esqueleto SGP.
+- **Agora**: três botões no header da lista de fluxos:
+  - **"Importar Fluxo"** (Upload) — abre file picker `.json`, lê do PC do usuário, faz `POST /api/crm/flows/import`. Funciona com qualquer JSON exportado deste sistema.
+  - **"Modelo SGP"** (link violeta discreto) — mantido para criar o esqueleto pré-pronto SGP.
+  - **"Novo Fluxo"** (primário) — manteve.
+- **Backend**: novo endpoint `POST /api/crm/flows/import` (`crm_routes.py`) — valida `nodes` e `edges` como listas, força `is_active=False`, evita colisão de nome incrementando `(N)`. Strip de `id`/`company_id`/timestamps do JSON original.
+- **Validado curl**: importação OK (1), auto-rename para "(2)" (2), JSON inválido retorna 400 com mensagem clara (3), fluxo vazio aceito (4).
+
+### Confirmação: SGP só em Integrações
+- O `SgpConfigCard` foi removido de `ConfigPage` na iteração anterior. Confirmado via grep — só permanece dentro de `IntegracoesPage` (route `'integrações'`). O menu "API e Integracoes" só aparece quando o feature está habilitado no Tipo de Negócio (controle multi-tenant correto).
+
+
+
 ### 2026-05-06 — Refator UX SGP: feature passa a ser company-side (refeito conforme feedback)
 - **Removido**: botão violeta "Importar SGP" da tabela de Empresas no Super Admin; card SGP do `ConfigPage` da empresa.
 - **Adicionado**:

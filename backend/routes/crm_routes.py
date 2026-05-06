@@ -1400,6 +1400,47 @@ async def create_flow(
     await db.flow_builders.insert_one(flow)
     return {k: v for k, v in flow.items() if k != "_id"}
 
+
+@router.post("/flows/import")
+async def import_flow(
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Generic flow importer. Accepts the JSON exported from another tenant
+    (this very app's `/api/crm/flows`) or any structurally compatible file.
+    The frontend reads a .json from the user's computer and POSTs the parsed
+    object here. We strip metadata that must NOT carry over (id, company_id,
+    timestamps), keep nodes/edges, and force `is_active=False` so the admin
+    can review before publishing.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "JSON inválido — envie um objeto.")
+    nodes = payload.get("nodes")
+    edges = payload.get("edges")
+    if not isinstance(nodes, list) or not isinstance(edges, list):
+        raise HTTPException(400, "JSON inválido — esperado campos 'nodes' (lista) e 'edges' (lista). Exporte um fluxo deste sistema e tente novamente.")
+    base_name = (payload.get("name") or "Fluxo importado").strip() or "Fluxo importado"
+    # Collision-free name: append (N) if a flow with the same name already exists.
+    name = base_name
+    suffix = 1
+    while await db.flow_builders.find_one({"company_id": user["company_id"], "name": name}, {"_id": 0, "id": 1}):
+        suffix += 1
+        name = f"{base_name} ({suffix})"
+    flow = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": name,
+        "description": (payload.get("description") or "Fluxo importado de arquivo JSON")[:500],
+        "nodes": nodes,
+        "edges": edges,
+        "trigger_type": payload.get("trigger_type") or "manual",
+        "is_active": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.flow_builders.insert_one(flow)
+    return {k: v for k, v in flow.items() if k != "_id"}
+
 @router.put("/flows/{flow_id}")
 async def update_flow(
     flow_id: str,

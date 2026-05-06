@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ReactFlow, {
   Background, Controls, MiniMap,
   applyNodeChanges, applyEdgeChanges, addEdge,
@@ -11,7 +11,7 @@ import { toast } from 'sonner';
 import {
   Save, Plus, Trash2, X, MessageSquare, MenuSquare, Edit2,
   Shuffle, Clock, Ticket as TicketIcon, Tag, Bot, Globe, Zap,
-  ChevronLeft
+  ChevronLeft, Upload
 } from 'lucide-react';
 
 const NODE_TYPES = [
@@ -130,6 +130,7 @@ const FlowBuilderPage = () => {
   const reload = () => crmAPI.listFlows().then(r => setFlows(r.data)).catch(() => {});
   const [tagsList, setTagsList] = useState([]);
   const [queuesList, setQueuesList] = useState([]);
+  const importFileRef = useRef(null);
   useEffect(() => {
     reload();
     aiAPI.listAgents().then(r => setAiAgents(r.data)).catch(() => {});
@@ -262,8 +263,27 @@ const FlowBuilderPage = () => {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold font-page-title">Fluxos de Conversa</h2>
           <div className="flex items-center gap-2">
-            <button onClick={importSgpFlow} className="text-sm flex items-center gap-1.5 px-3 py-2 rounded-lg border border-violet-300 text-violet-700 hover:bg-violet-50" data-testid="import-sgp-flow-btn" title="Importar fluxo pré-pronto SGP (ISP)">
-              <Globe className="w-4 h-4" /> Importar SGP
+            <input
+              type="file"
+              accept=".json,application/json"
+              ref={importFileRef}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) importFlowFromFile(f);
+                e.target.value = ''; // allow re-importing the same file
+              }}
+              className="hidden"
+              data-testid="import-flow-file-input"
+            />
+            <button
+              onClick={() => importFileRef.current?.click()}
+              className="text-sm flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+              data-testid="import-flow-btn"
+              title="Importar fluxo de um arquivo JSON do computador">
+              <Upload className="w-4 h-4" /> Importar Fluxo
+            </button>
+            <button onClick={importSgpFlow} className="text-xs flex items-center gap-1 px-2 py-2 rounded-lg text-violet-700 hover:bg-violet-50" data-testid="import-sgp-flow-btn" title="Criar fluxo modelo pronto para integração SGP (ISP)">
+              <Globe className="w-3.5 h-3.5" /> Modelo SGP
             </button>
             <button onClick={newFlow} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-flow-btn"><Plus className="w-4 h-4" /> Novo Fluxo</button>
           </div>
