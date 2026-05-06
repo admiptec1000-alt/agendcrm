@@ -148,6 +148,24 @@ export default function AgendaProPage() {
 
   const handleAptClick = (a) => setOpenModal({ apt: a });
 
+  // Drag & drop: when an event card is dropped on a slot, recompute its
+  // (date, time, professional) target and PATCH the appointment via API.
+  const onDropApt = async (apt, col, slot) => {
+    if (!apt) return;
+    const newDate = view === 'day' ? isoDate(date) : col.id;
+    const newProfId = view === 'day' ? col.id : (apt.professional_id || activeProfId);
+    if (apt.date === newDate && apt.time === slot && apt.professional_id === newProfId) return;
+    try {
+      await schedulingAPI.updateAppointment(apt.id, {
+        date: newDate, time: slot, professional_id: newProfId,
+      });
+      toast.success('Agendamento movido');
+      loadAppts();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Falha ao mover');
+    }
+  };
+
   return (
     <div className="animate-fade-in" data-testid="agenda-pro-page">
       {/* Toolbar */}
@@ -218,7 +236,12 @@ export default function AgendaProPage() {
                   return (
                     <div
                       key={col.id}
-                      className={`border-l border-slate-100 ${c.bg} ${c.bd} ${c.tx} border-l-4 cursor-pointer hover:brightness-95 p-1 overflow-hidden`}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', aptStarting.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      className={`border-l border-slate-100 ${c.bg} ${c.bd} ${c.tx} border-l-4 cursor-move hover:brightness-95 p-1 overflow-hidden`}
                       style={{ gridRow: `span ${span}` }}
                       onClick={() => handleAptClick(aptStarting)}
                       data-testid={`agendapro-apt-${aptStarting.id}`}
@@ -234,6 +257,13 @@ export default function AgendaProPage() {
                     key={col.id}
                     className="border-b border-l border-slate-100 hover:bg-primary/5 cursor-pointer transition-colors min-h-[18px]"
                     onClick={() => handleSlotClick(col, slot)}
+                    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const aptId = e.dataTransfer.getData('text/plain');
+                      const draggedApt = appointments.find(x => x.id === aptId);
+                      if (draggedApt) onDropApt(draggedApt, col, slot);
+                    }}
                     data-testid={`agendapro-slot-${col.id}-${slot}`}
                   />
                 );

@@ -10,6 +10,33 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Asaas + SuperAdmin "Todos os módulos" + Drag & Drop Agenda Pro
+
+**🟢 Integração Asaas (Banco / Cobranças BR)**
+- Novo arquivo `/app/backend/routes/asaas_routes.py`:
+  - `GET/PUT /api/asaas/config` — config por empresa: `api_key`, `environment` (sandbox|production), `webhook_token`, `enabled`. API key mascarada na resposta.
+  - `POST /api/asaas/config/test` — bate em `/customers?limit=1` para validar conectividade.
+  - `POST /api/asaas/customers` — cria cliente no Asaas (mapeia local↔asaas via `asaas_customer_links`).
+  - `POST /api/asaas/charges` — cria cobrança Pix/Boleto/CartãoCrédito (`/payments` no Asaas). Loga em `asaas_charges`.
+  - `GET /api/asaas/charges/{id}` — consulta status.
+  - `POST /api/asaas/webhook/{company_id}` — endpoint público; valida `Asaas-Access-Token` header se config tem `webhook_token`. Idempotente (dedupe por event+payment.id em `asaas_webhook_events`). Atualiza espelho local da cobrança.
+- Auth: header `access_token: <api_key>` (formato Asaas oficial — NÃO `Bearer`).
+- Base URLs: `https://sandbox.asaas.com/api/v3` e `https://api.asaas.com/api/v3`.
+- UI: `AsaasConfigCard` em **Integrações** com passo a passo embutido (6 passos com URL do webhook gerada automaticamente do origin + company_id).
+
+**🟡 SuperAdmin "Todos os módulos"**
+- Toggle **âmbar no header** ("Todos os módulos") aparece quando `user.role === 'super_admin'` OU `sessionStorage.impersonating === '1'`.
+- Quando ativo, `enabledFeatures` retorna `Object.keys(FEATURE_META)` ignorando o filtro do BT da empresa. Permite o SuperAdmin configurar QUALQUER módulo sem precisar habilitar antes no BT.
+- Persistido em `localStorage` (sessão SuperAdmin direta) ou `sessionStorage` (sessão impersonada — per-tab).
+
+**🟢 Drag & Drop em Agenda Pro**
+- `AgendaProPage.js`: cards de agendamento agora têm `draggable=true` + `onDragStart` que carrega o ID via `dataTransfer`. Slots vazios têm `onDragOver`/`onDrop` que recalculam (date, time, professional_id) e fazem `PUT /scheduling/appointments/{id}`. Funciona tanto na visão diária (mover entre profissionais) quanto semanal (mover entre dias).
+- Implementação via HTML5 nativo — sem dependências adicionais.
+
+**Validação**: backend curl confirmou GET/PUT config Asaas + mascaramento + test connection (401 esperado com fake key) + create charge propaga erro do Asaas. Frontend Playwright capturou: toggle "Todos os módulos" funcionando + sidebar mostra ALL features + página Integrações com cards SGP+Asaas.
+
+
+
 ### 2026-05-06 — Fase 1+2+3 (Bugfixes + Pagamentos + Agenda Pro)
 
 **🔴 FASE 1 — Bugfixes P0**

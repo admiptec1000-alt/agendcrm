@@ -96,17 +96,29 @@ const CompanyDashboard = () => {
     themeColor: bookingPage?.primary_color,
   });
 
+  const isImpersonatedTab = (() => {
+    try { return sessionStorage.getItem('impersonating') === '1'; } catch { return false; }
+  })();
+  const showAllModulesToggle = user?.role === 'super_admin' || isImpersonatedTab;
+  const [allModulesMode, setAllModulesMode] = useState(() => {
+    try { return localStorage.getItem('super_all_modules') === '1' || sessionStorage.getItem('super_all_modules') === '1'; } catch { return false; }
+  });
+
   const enabledFeatures = useMemo(() => {
     const feats = user?.company?.features || [];
     const companyEnabled = feats.filter(f => f.enabled).map(f => f.feature_key);
-    // Admins see everything the company has enabled
     const isAdmin = user?.role === 'company_admin' || user?.role === 'super_admin';
     const perms = user?.permissions || [];
+    // Super-admin "All Modules" mode: show every feature in FEATURE_META,
+    // bypassing the company's BT filter. This lets the SuperAdmin configure
+    // anything regardless of the tenant's plan. Toggle is per-tab and
+    // persisted to localStorage so it survives reloads.
+    if (showAllModulesToggle && allModulesMode) {
+      return Object.keys(FEATURE_META);
+    }
     if (isAdmin || perms.includes('*')) return companyEnabled;
-    // Non-admins: intersection between company-enabled AND user's profile permissions.
-    // Fail-closed: if the user has no permission profile assigned, they see nothing.
     return companyEnabled.filter(k => perms.includes(k));
-  }, [user]);
+  }, [user, allModulesMode, showAllModulesToggle]);
 
   // Check onboarding status on mount
   useEffect(() => {
@@ -258,7 +270,24 @@ const CompanyDashboard = () => {
               {FEATURE_META[activePage]?.label || 'Início'}
             </h2>
           </div>
-          <UserHeaderMenu user={user} logout={logout} />
+          <div className="flex items-center gap-2">
+            {showAllModulesToggle && (
+              <label className="hidden md:flex items-center gap-1.5 text-[11px] cursor-pointer px-2 py-1 rounded-lg border border-amber-300 bg-amber-50 text-amber-700 font-semibold" title="Mostrar TODOS os módulos no menu (modo Super Admin)">
+                <input type="checkbox" data-testid="all-modules-toggle"
+                  checked={allModulesMode}
+                  onChange={(e) => {
+                    setAllModulesMode(e.target.checked);
+                    try {
+                      const storage = isImpersonatedTab ? sessionStorage : localStorage;
+                      storage.setItem('super_all_modules', e.target.checked ? '1' : '0');
+                    } catch {}
+                  }}
+                  className="w-3.5 h-3.5 rounded" />
+                <span>Todos os módulos</span>
+              </label>
+            )}
+            <UserHeaderMenu user={user} logout={logout} />
+          </div>
         </header>
 
         <div className={['flowbuilder', 'atendimentos'].includes(activePage) ? 'h-[calc(100vh-52px)] pb-16 lg:pb-0 overflow-hidden' : 'p-4 lg:p-6 pb-24 lg:pb-6 max-w-full overflow-x-hidden'}>
@@ -5811,6 +5840,134 @@ const SgpConfigCard = () => {
             className="ml-auto text-xs text-primary hover:underline">
             Como gerar token? ↗
           </a>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const IntegracoesPage = () => {
+  return (
+    <div className="animate-fade-in space-y-6" data-testid="integracoes-page">
+      <div>
+        <h2 className="text-2xl font-bold font-heading text-slate-900 mb-1">Integrações</h2>
+        <p className="text-sm text-slate-600">Conecte sistemas externos ao seu CRM. Cada integração é exclusiva da sua empresa.</p>
+      </div>
+      <SgpConfigCard />
+      <AsaasConfigCard />
+    </div>
+  );
+};
+
+const AsaasConfigCard = () => {
+  const [cfg, setCfg] = useState({ api_key: '', environment: 'sandbox', webhook_token: '', enabled: false });
+  const [masked, setMasked] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [showSteps, setShowSteps] = useState(false);
+
+  useEffect(() => {
+    api.get('/asaas/config').then(r => {
+      const d = r.data || {};
+      setCfg({ api_key: '', environment: d.environment || 'sandbox', webhook_token: '', enabled: !!d.enabled });
+      setMasked(d.api_key_masked || '');
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    if (!cfg.api_key.trim()) {
+      if (masked) return toast.info('Para alterar o token, digite o novo no campo API Key.');
+      return toast.error('Cole o API Key');
+    }
+    setSaving(true);
+    try {
+      await api.put('/asaas/config', cfg);
+      toast.success('Asaas configurado');
+      setMasked(cfg.api_key.slice(0, 6) + '••••••••' + cfg.api_key.slice(-4));
+      setCfg(c => ({ ...c, api_key: '', webhook_token: '' }));
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao salvar'); }
+    finally { setSaving(false); }
+  };
+
+  const test = async () => {
+    setTesting(true);
+    try {
+      const { data } = await api.post('/asaas/config/test');
+      if (data.ok) toast.success(`Conexão OK (${data.environment})`);
+      else toast.error(`Falha: status ${data.status}`);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao testar'); }
+    finally { setTesting(false); }
+  };
+
+  if (loading) return null;
+  const userObj = JSON.parse(localStorage.getItem('user') || sessionStorage.getItem('user') || '{}');
+  const webhookUrl = `${window.location.origin}/api/asaas/webhook/${userObj?.company_id || userObj?.company?.id || ''}`;
+
+  return (
+    <div className="card max-w-2xl" data-testid="asaas-config-card">
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <h3 className="font-semibold text-slate-900 flex items-center gap-2">
+            <span className="inline-flex w-6 h-6 rounded bg-emerald-500 text-white text-xs items-center justify-center font-bold">A</span>
+            Asaas (Banco / Cobranças)
+          </h3>
+          <p className="text-xs text-slate-500">Pix, Boleto e Cartão. Cobranças via API + webhook de confirmação automática.</p>
+        </div>
+        <label className="flex items-center gap-2 text-xs cursor-pointer">
+          <input type="checkbox" data-testid="asaas-enabled-toggle" checked={cfg.enabled}
+                 onChange={e => setCfg({ ...cfg, enabled: e.target.checked })}
+                 className="w-4 h-4 rounded" />
+          <span className={cfg.enabled ? 'text-emerald-700 font-semibold' : 'text-slate-500'}>{cfg.enabled ? 'Ativa' : 'Inativa'}</span>
+        </label>
+      </div>
+      <button onClick={() => setShowSteps(!showSteps)} className="text-xs text-primary hover:underline mb-2" data-testid="asaas-toggle-steps">
+        {showSteps ? '− Ocultar passo a passo' : '+ Ver passo a passo'}
+      </button>
+      {showSteps && (
+        <ol className="text-xs text-slate-600 list-decimal pl-4 mb-3 space-y-1 bg-slate-50 p-3 rounded-lg">
+          <li>Crie sua conta em <a className="text-primary underline" href="https://www.asaas.com" target="_blank" rel="noopener noreferrer">asaas.com</a> (use Sandbox para testes em <a className="text-primary underline" href="https://sandbox.asaas.com" target="_blank" rel="noopener noreferrer">sandbox.asaas.com</a>).</li>
+          <li>No painel Asaas: <strong>Integrações → API → Gerar Nova Chave</strong>. Copie o token.</li>
+          <li>Cole abaixo, escolha o ambiente (sandbox ou production) e salve.</li>
+          <li>Em <strong>Asaas → Notificações → Webhooks</strong>, adicione: <code className="text-[10px] bg-white px-1 py-0.5 rounded border break-all">{webhookUrl}</code>. Habilite eventos PAYMENT_RECEIVED, PAYMENT_CONFIRMED, PAYMENT_OVERDUE.</li>
+          <li>Defina um <strong>Token de autenticação</strong> no webhook do Asaas e cole no campo "Webhook token" abaixo.</li>
+          <li>Use <strong>Testar conexão</strong> antes de gerar cobranças reais.</li>
+        </ol>
+      )}
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs font-medium text-slate-700 mb-1 block">
+            API Key {masked && <span className="ml-1 text-[10px] font-mono text-slate-400">({masked} salvo)</span>}
+          </label>
+          <input data-testid="asaas-key-input" type="password" value={cfg.api_key}
+                 onChange={e => setCfg({ ...cfg, api_key: e.target.value })}
+                 placeholder={masked ? 'Deixe em branco para manter' : 'Cole o token gerado no Asaas'}
+                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">Ambiente</label>
+            <select value={cfg.environment} onChange={e => setCfg({ ...cfg, environment: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="asaas-env-select">
+              <option value="sandbox">Sandbox (testes)</option>
+              <option value="production">Produção (real)</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-700 mb-1 block">Webhook token</label>
+            <input data-testid="asaas-webhook-token-input" type="password" value={cfg.webhook_token}
+                   onChange={e => setCfg({ ...cfg, webhook_token: e.target.value })}
+                   placeholder="Token usado pelo webhook"
+                   className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 pt-1">
+          <button onClick={save} disabled={saving} data-testid="asaas-save-btn" className="btn-primary text-sm">{saving ? 'Salvando…' : 'Salvar'}</button>
+          <button onClick={test} disabled={testing || !masked} data-testid="asaas-test-btn"
+                  className="px-4 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 disabled:opacity-50">
+            {testing ? 'Testando…' : 'Testar conexão'}
+          </button>
+          <a href="https://docs.asaas.com" target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-primary hover:underline">Docs Asaas ↗</a>
         </div>
       </div>
     </div>
