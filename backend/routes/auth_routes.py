@@ -210,6 +210,13 @@ async def get_current_user_info(
     if user.get("role") == "super_admin":
         return user
 
+    # Surface the impersonation marker so the frontend can show the
+    # "Todos os módulos" SuperAdmin toggle ONLY on impersonated tabs —
+    # never on real client sessions (which would leak the toggle to
+    # everyone, like the bug reported on 2026-05-06).
+    if user.get("impersonated_by"):
+        user["is_impersonating"] = True
+
     # Get company info for regular users
     company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0})
     user["company"] = company

@@ -10,6 +10,20 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-06 — Hotfix P0: Toggle "Todos os módulos" vazando para clientes finais
+**Problema**: o toggle âmbar "Todos os módulos" estava aparecendo para QUALQUER cliente que tivesse `sessionStorage.impersonating='1'` setado de alguma sessão anterior. O `sessionStorage` é per-tab mas se o cliente abrir o painel num tab que antes foi usado pelo Super Admin para impersonação, a flag persiste — o cliente ganha o toggle indevidamente.
+
+**Fix (defesa em profundidade no backend)**:
+- `auth.py::get_current_user`: passa o claim JWT `impersonated_by` para o objeto `user` retornado.
+- `auth_routes.py::/auth/me`: quando `impersonated_by` está presente no token, retorna `is_impersonating=True`.
+- Frontend (`Company/Dashboard.js`): trocou a heurística baseada em `sessionStorage` por leitura direta de `user.is_impersonating` vinda do `/auth/me`. Token de cliente final NÃO tem o claim → flag nunca fica True → toggle nunca aparece.
+
+**Impacto de segurança**: agora a única forma de ver o toggle é possuir um JWT criado por `POST /super-admin/companies/{id}/impersonate`. Manipulação de sessionStorage não basta.
+
+**Validado curl**: `/auth/me` com token de impersonação → `is_impersonating=true, impersonated_by=<sa_id>`. Validado Playwright: toggle aparece em sessão impersonada e o `/auth/me` retorna a flag corretamente.
+
+
+
 ### 2026-05-06 — Consolidação dos menus "API" + "Integrações" → "API e Integrações"
 **Problema relatado**: no Tipo de Negócio do SuperAdmin existiam 2 features (`api` em CRM + `integrações` em Config Empresa), mas para o cliente apareciam dois itens diferentes ("API" sem página → tela em branco; "Integrações" com SGP). Confuso e quebrado.
 **Fix**:

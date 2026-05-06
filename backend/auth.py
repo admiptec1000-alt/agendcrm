@@ -72,7 +72,14 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
         )
-    
+
+    # Surface the JWT impersonation claim onto the loaded user record so
+    # downstream endpoints (e.g. /auth/me) can echo it to the frontend.
+    # Without this, the claim from POST /super-admin/companies/{id}/impersonate
+    # is silently dropped because we always re-hydrate from DB.
+    if payload.get("impersonated_by"):
+        user["impersonated_by"] = payload["impersonated_by"]
+
     return user
 
 async def require_super_admin(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:

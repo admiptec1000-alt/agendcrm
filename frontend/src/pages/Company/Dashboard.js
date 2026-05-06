@@ -97,9 +97,7 @@ const CompanyDashboard = () => {
     themeColor: bookingPage?.primary_color,
   });
 
-  const isImpersonatedTab = (() => {
-    try { return sessionStorage.getItem('impersonating') === '1'; } catch { return false; }
-  })();
+  const isImpersonatedTab = !!user?.is_impersonating;
   const showAllModulesToggle = user?.role === 'super_admin' || isImpersonatedTab;
   const [allModulesMode, setAllModulesMode] = useState(() => {
     try { return localStorage.getItem('super_all_modules') === '1' || sessionStorage.getItem('super_all_modules') === '1'; } catch { return false; }
