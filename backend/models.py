@@ -185,12 +185,15 @@ class AppointmentCreate(BaseModel):
     customer_name: str
     customer_phone: str
     customer_email: Optional[EmailStr] = None
-    service_id: str
+    service_id: Optional[str] = None
     professional_id: str
     date: str  # YYYY-MM-DD
     time: str  # HH:MM
     notes: Optional[str] = None
     use_subscription: Optional[bool] = False
+    is_block: Optional[bool] = False         # Agenda block (no service)
+    block_duration: Optional[int] = 30       # minutes (when is_block)
+    block_reason: Optional[str] = None
 
 class AppointmentUpdate(BaseModel):
     status: Optional[AppointmentStatus] = None

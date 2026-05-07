@@ -155,6 +155,41 @@ async def create_appointment(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    # === Agenda block path: simply reserve the slot for a professional, no
+    # service / customer logic. The professional sees a "blocked" event.
+    if getattr(data, "is_block", False):
+        professional = await db.professionals.find_one({"id": data.professional_id, "company_id": user["company_id"]})
+        if not professional:
+            raise HTTPException(status_code=404, detail="Profissional nao encontrado")
+        appointment_id = str(uuid.uuid4())
+        appointment = {
+            "id": appointment_id,
+            "company_id": user["company_id"],
+            "customer_name": data.customer_name or (data.block_reason or "Bloqueio"),
+            "customer_phone": data.customer_phone or "",
+            "service_id": None,
+            "service_name": data.block_reason or "Bloqueio de agenda",
+            "professional_id": data.professional_id,
+            "professional_name": professional["name"],
+            "date": data.date,
+            "time": data.time,
+            "duration": int(getattr(data, "block_duration", 30) or 30),
+            "price": 0.0,
+            "original_price": 0.0,
+            "subscription_applied": False,
+            "status": AppointmentStatus.CONFIRMADO,
+            "notes": data.notes or data.block_reason or "",
+            "is_block": True,
+            "block_reason": data.block_reason or "Indisponivel",
+            "confirm_token": str(uuid.uuid4()),
+            "cancel_token": str(uuid.uuid4()),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.appointments.insert_one(appointment)
+        return {k: v for k, v in appointment.items() if k != "_id"}
+
+    if not data.service_id:
+        raise HTTPException(status_code=400, detail="service_id obrigatorio para agendamento")
     service = await db.services.find_one({"id": data.service_id, "company_id": user["company_id"]})
     if not service:
         raise HTTPException(status_code=404, detail="Servico nao encontrado")

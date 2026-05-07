@@ -151,6 +151,66 @@ async def _persist_outgoing(db, ticket_id: str, text: str, flow_id: str):
     )
 
 
+def _flatten_sgp_response(action: str, data: Any) -> dict:
+    """Map common SGP URA response fields to friendly top-level vars so the
+    flow can use placeholders like `{{nome_cliente}}` directly without having
+    to know the exact JSON path. Tolerant: missing fields don't raise.
+    """
+    out: dict = {}
+    if not isinstance(data, dict):
+        return out
+    try:
+        if action == "consultacliente":
+            # Typical shape: {"clientes": [{"nome": ..., "cpfcnpj": ..., "contratos": [{...}]}]}
+            cli = (data.get("clientes") or [data])[0] if (data.get("clientes") or isinstance(data, dict)) else {}
+            if not isinstance(cli, dict):
+                return out
+            out["nome_cliente"] = cli.get("nome") or cli.get("razaosocial") or cli.get("razao_social") or ""
+            out["cpfcnpj_cliente"] = cli.get("cpfcnpj") or cli.get("cnpj") or cli.get("cpf") or ""
+            out["email_cliente"] = cli.get("email") or ""
+            contratos = cli.get("contratos") or []
+            if contratos and isinstance(contratos, list):
+                ct = contratos[0] if isinstance(contratos[0], dict) else {}
+                out["numero_contrato"] = str(ct.get("contrato") or ct.get("id") or "")
+                out["status_contrato"] = ct.get("status") or ct.get("statusexibicao") or ""
+                out["plano_cliente"] = ct.get("plano") or ct.get("planointernet") or ""
+                out["endereco_cliente"] = ct.get("endereco") or ""
+        elif action == "fatura2via":
+            # Typical shape: {"faturas": [{"link": ..., "linhadigitavel": ..., "valor": ..., "vencimento": ...}]}
+            faturas = data.get("faturas") or data.get("titulos") or []
+            if isinstance(faturas, list) and faturas and isinstance(faturas[0], dict):
+                f = faturas[0]
+                out["boleto_url"] = f.get("link") or f.get("url") or f.get("linkboleto") or ""
+                out["linha_digitavel"] = f.get("linhadigitavel") or f.get("linha_digitavel") or ""
+                out["valor_fatura"] = str(f.get("valor") or "")
+                out["vencimento_fatura"] = f.get("vencimento") or f.get("datavencimento") or ""
+            else:
+                out["boleto_url"] = data.get("link") or data.get("url") or ""
+                out["linha_digitavel"] = data.get("linhadigitavel") or ""
+        elif action == "verificaacesso":
+            # Typical shape: {"online": True, "status": "...", "mac": "..."}
+            online = data.get("online")
+            if online is None and "status" in data:
+                online = "online" in str(data.get("status", "")).lower()
+            out["status_online_offline"] = "Online" if online else "Offline"
+        elif action == "manutencao":
+            mans = data.get("manutencoes") or data.get("ocorrencias") or []
+            if isinstance(mans, list) and mans and isinstance(mans[0], dict):
+                m = mans[0]
+                out["descricao"] = m.get("descricao") or m.get("titulo") or ""
+                out["mensagem_central"] = m.get("mensagem") or m.get("mensagem_central") or ""
+                out["status"] = m.get("status") or "Em andamento"
+            else:
+                out["descricao"] = "Sem manutencoes ativas"
+                out["mensagem_central"] = "Nossa rede esta operando normalmente."
+                out["status"] = "OK"
+        elif action == "liberacaopromessa":
+            out["liberacao_status"] = data.get("status") or data.get("mensagem") or "OK"
+    except Exception as e:
+        logger.warning(f"[flow_engine] sgp flatten failed action={action}: {e}")
+    return out
+
+
 async def _execute_http_node(node: dict, vars_: dict, company_id: str) -> dict:
     """Execute an http/api node. Returns dict to merge into vars_.
     URL placeholders {{API_URL}}, {{token}} are stripped — we ALWAYS call
@@ -176,7 +236,7 @@ async def _execute_http_node(node: dict, vars_: dict, company_id: str) -> dict:
     if "/api/sgp/" in url:
         # Call the internal proxy directly (in-process import) with the
         # company config — this avoids needing a self-HTTP loop.
-        from routes.sgp_routes import sgp_proxy, SGP_ACTIONS, SgpProxyIn
+        from routes.sgp_routes import SGP_ACTIONS
         from database import get_database
         action = url.split("/api/sgp/")[-1].rstrip("/").split("?")[0]
         if action not in SGP_ACTIONS:
@@ -190,6 +250,7 @@ async def _execute_http_node(node: dict, vars_: dict, company_id: str) -> dict:
             api_url = cfg_doc["base_url"].rstrip("/") + spec["path"]
             params = (body.get("params") if isinstance(body, dict) else None) or {}
             payload = {**params, "token": cfg_doc["token"], "app": cfg_doc.get("app") or "8ip"}
+            logger.info(f"[flow_engine] SGP call action={action} payload_keys={list(params.keys())}")
             async with httpx.AsyncClient(timeout=15.0) as cli:
                 if spec["method"] == "GET":
                     r = await cli.get(api_url, params=payload)
@@ -197,8 +258,15 @@ async def _execute_http_node(node: dict, vars_: dict, company_id: str) -> dict:
                     r = await cli.post(api_url, json=payload)
             try: data = r.json()
             except Exception: data = {"raw": r.text}
-            return {"response": data, "_http_status": r.status_code}
+            logger.info(f"[flow_engine] SGP response action={action} status={r.status_code} keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
+            # Auto-flatten common SGP fields → top-level vars (e.g. nome_cliente)
+            flat = _flatten_sgp_response(action, data)
+            if flat:
+                logger.info(f"[flow_engine] SGP auto-flatten extracted: {list(flat.keys())}")
+            out = {"response": data, "_http_status": r.status_code, **flat}
+            return out
         except Exception as e:
+            logger.warning(f"[flow_engine] SGP error: {e}")
             return {"_http_error": str(e)}
 
     # Plain HTTP call

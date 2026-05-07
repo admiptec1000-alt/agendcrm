@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 49 — Tested all 4 features. Backend: 16/16 in test_iteration_50.py PASS. (a) _flatten_sgp_response: 7/7 unit cases for consultacliente (extracts nome/cpfcnpj/email/contrato/plano), fatura2via (boleto_url + linha_digitavel from list AND top-level fallback), verificaacesso (online/offline + status string parsing), manutencao (active list + empty fallback), and invalid-input safety. (b) Flow debug endpoints: /api/crm/tickets/{id}/flow-state returns ticket+flow summary with current_node='menu' after webhook; /test-flow dry-run for menu reply '1' previews 'Plano A'; /test-flow with is_initial=true previews welcome+menu (2 messages); /reset-flow clears active_flow_id+active_flow_node_id; 404 paths covered. (c) End-to-end webhook flow trigger: webhook with instance_id+phone+message creates ticket, advances to menu node, persists active_flow_id. (d) Appointment block: POST /api/scheduling/appointments {is_block:true, block_duration:60, block_reason:'Almoço'} succeeds without service_id; appears in list with is_block=true; non-block path still rejects missing service_id (400). Existing test_flow_engine.py 7/7 still PASS. Frontend smoke: AgendaProPage at /boss/painel sidebar 'Agenda Pro' → page renders, prof carousel renders (count=2: Equipe+Carlos), Bloquear modal opens with agendapro-mode-toggle/agendapro-block-reason/agendapro-block-duration all present, switching to mode-apt shows agendapro-client-search, typing 2 chars 'an' opens agendapro-client-dropdown with 3 picks (1-char correctly does NOT trigger). Conclude panel not exercised: 0 existing appointments in seeded Boss tenant for current day.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AgendaProPage QuickBookModal", "issues": ["Hydration warning in console: '<span> cannot be a child of <option>' — caused by Emergent dev-tool wrappers (data-ve-dynamic spans) injecting nested <span> inside <option value={m}> at line 555. Cosmetic dev-only, not in production build, but if reproducible after build, replace template literals like `<option value={m}>{m} min</option>` with concatenated strings or wrap differently."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_50.py",
+    "/app/backend/tests/test_flow_engine.py",
+    "/app/test_reports/pytest/iter50_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_flatten_sgp_response is defensive: tolerates None/non-dict, missing list members, alt key spellings (razaosocial, statusexibicao, planointernet). The fatura2via code path also falls back to top-level data.link / data.linhadigitavel — perfect for SGP responses that don't wrap in {faturas:[…]}. This directly addresses the user's bug (3) of empty {{nome}} and missing 2ª via boleto link.",
+    "/api/crm/tickets/{id}/test-flow uses dry_run=True correctly so the dry preview does not mutate ticket.messages or active_flow_node_id — verified by re-reading flow-state after a test-flow call. Good DX for debugging stuck flows.",
+    "/api/crm/tickets/{id}/reset-flow clears flow_started_at + flow_vars too (not just the two _id fields), so the next welcome message will run with fresh state. Sets active_flow_id/active_flow_node_id to null (not unset) — make sure the engine treats null === missing (advance_flow uses .get() so this is fine).",
+    "Appointment block branch in scheduling_routes.py:160 is clean: short-circuits before service_id validation, sets service_id=null + service_name=block_reason, status=CONFIRMADO so the slot is reserved on the calendar. duration falls back to 30 if block_duration is None. The model `is_block` is Optional[bool]=False so legacy clients are unaffected.",
+    "The webhook endpoint expects `instance_id` (NOT connection_id), `phone` (NOT 'from'), and `message` (NOT 'text') — keep this in mind for any external simulator or doc. Ours matched after fix.",
+    "AgendaProPage frontend has comprehensive data-testids (block-btn, new-btn, mode-toggle, client-search, client-dropdown, client-pick-{id}, open-conclude, conclude-panel, pm-{method}, confirm-conclude). Excellent testability.",
+    "Hydration warning in QuickBookModal — Emergent dev tooling wraps {m} expressions in <span> for hot-edit; in <option> children React 18 disallows non-text. Build output should still be clean but worth noting."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_50.py (new — 16 tests, all passing)"
+  ],
+  "success_rate": {
+    "backend": "100% (16/16 in test_iteration_50.py + 7/7 regression in test_flow_engine.py)",
+    "frontend": "90% — Agenda Pro carousel, block modal toggle, client search autocomplete all verified. Conclude panel + payment-method grid not exercised because the test-day agenda was empty (no appointments to click). Recommend main agent self-test by booking one appointment first then clicking it."
+  },
+  "test_credentials": "Boss admin@boss.com.br / boss123 at /boss/login. CRM crm@test.com / crm123 at /crmtest/login.",
+  "seed_data_creation": "Tests create per-run TEST_iter50_flow_* flow_builders, attach to first existing channel_connection, and create blocks dated 2030-01-15 / 2030-02-20 (cleaned up via DELETE in finally). The ticket created via webhook is left in DB by design (used across the same module's fixture).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iteration_50.py tests/test_flow_engine.py -v. The /api/channels/webhook/message endpoint requires fields {instance_id, phone, name, message, message_id} — NOT {connection_id, from, text, wa_message_id} (those are the legacy/UI-side names). For frontend conclude-panel verification, first POST a non-block appointment in the Boss tenant for today's date then refresh AgendaProPage — testid agendapro-apt-{id} will be clickable, then agendapro-open-conclude → agendapro-conclude-panel + agendapro-pm-* grid + agendapro-confirm-conclude.",
+  "rca of the issue": "Original bug-3 (`Pronto, !` empty name + missing 2ª via link) RCA: flow placeholders {{nome}} were not being populated because the SGP HTTP response shape `{clientes:[{nome:...}]}` was not flattened to top-level vars. Fix in flow_engine.py:154 _flatten_sgp_response now extracts nome→nome_cliente, link→boleto_url, etc., and is invoked on every SGP HTTP node response (line 263). Verified end-to-end via the unit tests (TestFlattenSgpResponse) and the dry-run debug endpoint."
+}
