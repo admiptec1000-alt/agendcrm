@@ -530,7 +530,12 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
                 <label className="text-[10px] font-bold uppercase text-slate-400">Serviço</label>
                 <select value={form.service_id} onChange={e => setForm({ ...form, service_id: e.target.value })} className="input-field text-sm" data-testid="agendapro-service">
                   <option value="">— Selecione —</option>
-                  {services.map(s => <option key={s.id} value={s.id}>{s.name} ({s.duration || 30} min) — R$ {Number(s.price || 0).toFixed(2)}</option>)}
+                  {services.map(s => {
+                    const dur = s.duration || s.duration_min || 30;
+                    return (
+                      <option key={s.id} value={s.id}>{s.name} ({dur} min) — R$ {Number(s.price || 0).toFixed(2)}</option>
+                    );
+                  })}
                 </select>
               </div>
             </>
