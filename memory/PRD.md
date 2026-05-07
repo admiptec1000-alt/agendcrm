@@ -10,6 +10,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-07 — SGP auto-flatten + Agenda Pro Modernization
+
+**Bug-3 fix (`Pronto, !` + 2ª via vazia)**
+- `flow_engine._flatten_sgp_response` agora normaliza retornos SGP em vars top-level:
+  - `consultacliente` → `nome_cliente`, `cpfcnpj_cliente`, `email_cliente`, `numero_contrato`, `status_contrato`, `plano_cliente`, `endereco_cliente`
+  - `fatura2via` → `boleto_url`, `linha_digitavel`, `valor_fatura`, `vencimento_fatura`
+  - `verificaacesso` → `status_online_offline`
+  - `manutencao` → `descricao`, `mensagem_central`, `status`
+  - `liberacaopromessa` → `liberacao_status`
+- Tolerante: aceita arrays vazios, chaves alt (`razaosocial`, `statusexibicao`, `planointernet`), top-level fallback para `fatura2via`.
+- `_execute_http_node` agora loga payload_keys/response_keys + chave do flatten.
+
+**Agenda Pro modernizada**
+- Carrossel Instagram-style de profissionais no topo (avatares circulares, ring azul quando ativo). "Equipe" mostra todos; clicar num profissional filtra a coluna.
+- Modal QuickBook agora tem **toggle Agendamento ↔ Bloqueio**. Modo Bloqueio cria appointment com `is_block: true`, sem cliente/serviço, marcando o slot como indisponível com motivo + duração configurável (15/30/45/60/90/120/180/240 min).
+- **Busca de cliente existente** via `schedulingAPI.getClients({search})` com debounce 200ms, dropdown de até 8 resultados, autocomplete preenche nome+telefone.
+- Click em appointment existente abre modal com botão **"Concluir"** que expõe painel inline com:
+  - Valor final editável + desconto (%)
+  - Grid de formas de pagamento (`/scheduling/financial/payment-methods`)
+  - Botão "Concluir atendimento" → chama `concludeAppointment` que cria a transação financeira automaticamente.
+
+**Backend novo**
+- Modelo `AppointmentCreate` aceita `is_block`, `block_duration`, `block_reason`. `service_id` virou Optional.
+- `scheduling_routes.create_appointment` curto-circuita o caminho de bloqueio antes da validação de serviço, status default `CONFIRMADO`.
+
+**Sincronização Agenda ↔ Agenda Pro ↔ Calendário**
+- Confirmado: todas as 3 telas usam `schedulingAPI.getAppointments` na collection `appointments`. Mesma fonte → qualquer mudança aparece nas outras visualizações.
+
+**Testes**: testing_agent_v3_fork rodou iteration_49 → backend 100% (16/16 novos casos + 7/7 regressão), frontend 90% (carrossel, block toggle, client search verificados; conclude panel não exercitado por falta de agendamento prévio no tenant Boss). Sem bugs críticos.
+
+
 ### 2026-05-06 (cont.) — Flow Engine: Logging + Debug Endpoints + Hardening + Modal memo
 
 **Bug raiz reconfirmado**: a versão antiga do `_trigger_flow_for_ticket` usava `data.label` como fallback para o texto enviado, fazendo com que o bot só mandasse "Inicio" (label do nó start) e nunca avançasse. O motor real (`flow_engine.py`) já corrige isso skipando o nó `start`. Em produção (`agentcrm.8ip.com.br`), o redeploy é OBRIGATÓRIO para o fix entrar em ação.
