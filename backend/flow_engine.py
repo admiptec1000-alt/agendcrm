@@ -44,13 +44,13 @@ def _node_type(n: dict) -> str:
     return (d.get("nodeType") or n.get("type") or "").lower()
 
 
-def _node_text(n: dict, vars_: dict) -> Optional[str]:
+def _node_text(n: dict, vars_: dict, missing: Optional[set] = None) -> Optional[str]:
     d = n.get("data") or {}
     cfg = d.get("config") or {}
     text = cfg.get("text") or d.get("text") or d.get("message") or d.get("content")
     if not isinstance(text, str):
         return None
-    out = _interpolate(text, vars_)
+    out = _interpolate(text, vars_, missing=missing)
     # Append menu options inline so users see choices in WhatsApp text.
     if _node_type(n) == "menu":
         opts = cfg.get("options") or d.get("options") or []
@@ -66,20 +66,40 @@ def _node_text(n: dict, vars_: dict) -> Optional[str]:
 
 _VAR_RE = re.compile(r"\{\{\s*([\w\.\-]+)\s*\}\}")
 
+# Placeholders the engine considers "critical": if the flow tries to send a
+# message containing one of these and the corresponding var is empty, the
+# engine substitutes a friendly fallback in the message AND emits a separate
+# warning to the customer so they don't get a half-sent message like
+# "Pronto, !" or "Aqui está sua 2ª via:" (without a link).
+_CRITICAL_PLACEHOLDERS = {
+    "nome_cliente": "Cliente nao encontrado em nossa base. Verifique o CPF/CNPJ informado.",
+    "boleto_url": "Nao localizei nenhuma fatura aberta para esse contrato.",
+    "linha_digitavel": "Nao localizei nenhuma fatura aberta para esse contrato.",
+    "numero_contrato": "Nao localizei contrato vinculado a esse CPF/CNPJ.",
+}
 
-def _interpolate(text: str, vars_: dict) -> str:
+
+def _interpolate(text: str, vars_: dict, missing: Optional[set] = None) -> str:
     def _sub(m):
         key = m.group(1)
         # Direct lookup
         if key in vars_:
-            return str(vars_[key] or "")
+            v = vars_[key]
+            if v in (None, "", False):
+                if missing is not None:
+                    missing.add(key)
+            return str(v or "")
         # Dotted path (e.g. response.data.nome)
         cur = vars_
         for part in key.split("."):
             if isinstance(cur, dict) and part in cur:
                 cur = cur[part]
             else:
+                if missing is not None:
+                    missing.add(key)
                 return ""
+        if cur in (None, "", False) and missing is not None:
+            missing.add(key)
         return str(cur or "")
     return _VAR_RE.sub(_sub, text)
 
@@ -159,22 +179,33 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
     out: dict = {}
     if not isinstance(data, dict):
         return out
+    # Default discovery flag so flow can branch on whether SGP actually
+    # found something. The flow can use {{cliente_encontrado}} or simply
+    # rely on `nome_cliente` being empty — but explicit is better.
+    out["cliente_encontrado"] = False
+    out["fatura_encontrada"] = False
     try:
         if action == "consultacliente":
-            # Typical shape: {"clientes": [{"nome": ..., "cpfcnpj": ..., "contratos": [{...}]}]}
-            cli = (data.get("clientes") or [data])[0] if (data.get("clientes") or isinstance(data, dict)) else {}
+            # Typical shape: {"clientes": [...], "contratos": [...]}
+            # Newer SGP also returns plain {"contratos": [...]} when the
+            # cliente list is at the root of the response.
+            clientes = data.get("clientes") or []
+            contratos_top = data.get("contratos") or []
+            cli = clientes[0] if (isinstance(clientes, list) and clientes) else {}
             if not isinstance(cli, dict):
                 return out
             out["nome_cliente"] = cli.get("nome") or cli.get("razaosocial") or cli.get("razao_social") or ""
             out["cpfcnpj_cliente"] = cli.get("cpfcnpj") or cli.get("cnpj") or cli.get("cpf") or ""
             out["email_cliente"] = cli.get("email") or ""
-            contratos = cli.get("contratos") or []
-            if contratos and isinstance(contratos, list):
-                ct = contratos[0] if isinstance(contratos[0], dict) else {}
+            contratos = cli.get("contratos") or contratos_top or []
+            if isinstance(contratos, list) and contratos and isinstance(contratos[0], dict):
+                ct = contratos[0]
                 out["numero_contrato"] = str(ct.get("contrato") or ct.get("id") or "")
                 out["status_contrato"] = ct.get("status") or ct.get("statusexibicao") or ""
                 out["plano_cliente"] = ct.get("plano") or ct.get("planointernet") or ""
                 out["endereco_cliente"] = ct.get("endereco") or ""
+            # Mark "encontrado" only when we actually have a name OR contract.
+            out["cliente_encontrado"] = bool(out.get("nome_cliente") or out.get("numero_contrato"))
         elif action == "fatura2via":
             # Typical shape: {"faturas": [{"link": ..., "linhadigitavel": ..., "valor": ..., "vencimento": ...}]}
             faturas = data.get("faturas") or data.get("titulos") or []
@@ -187,6 +218,7 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
             else:
                 out["boleto_url"] = data.get("link") or data.get("url") or ""
                 out["linha_digitavel"] = data.get("linhadigitavel") or ""
+            out["fatura_encontrada"] = bool(out.get("boleto_url") or out.get("linha_digitavel"))
         elif action == "verificaacesso":
             # Typical shape: {"online": True, "status": "...", "mac": "..."}
             online = data.get("online")
@@ -397,7 +429,20 @@ async def advance_flow(
             continue
 
         if nt in ("message", "welcome", "send_message", "text"):
-            text = _node_text(node, vars_)
+            missing: set = set()
+            text = _node_text(node, vars_, missing=missing)
+            critical_missing = missing & set(_CRITICAL_PLACEHOLDERS.keys())
+            if text and critical_missing:
+                # Don't deliver "Pronto, !" or "Aqui está sua 2ª via:" without
+                # the data. Send a single contextual error and end the flow so
+                # the customer can retry from the start instead of seeing a
+                # broken half-message.
+                fallback = _CRITICAL_PLACEHOLDERS[next(iter(critical_missing))]
+                logger.warning(f"[flow_engine] node {current_id} has unresolved critical placeholders {critical_missing}; emitting fallback")
+                await _emit_and_persist(fallback)
+                if not dry_run:
+                    await _save_state(db, ticket["id"], flow_id, None, vars_)
+                return sent
             if text:
                 await _emit_and_persist(text)
             else:
@@ -407,7 +452,16 @@ async def advance_flow(
             continue
 
         if nt == "menu":
-            text = _node_text(node, vars_) or "Escolha uma opcao:"
+            missing = set()
+            text = _node_text(node, vars_, missing=missing) or "Escolha uma opcao:"
+            critical_missing = missing & set(_CRITICAL_PLACEHOLDERS.keys())
+            if critical_missing:
+                fallback = _CRITICAL_PLACEHOLDERS[next(iter(critical_missing))]
+                logger.warning(f"[flow_engine] menu {current_id} has unresolved critical placeholders {critical_missing}; emitting fallback and ending")
+                await _emit_and_persist(fallback)
+                if not dry_run:
+                    await _save_state(db, ticket["id"], flow_id, None, vars_)
+                return sent
             await _emit_and_persist(text)
             pending_node_id = current_id
             current_id = None
