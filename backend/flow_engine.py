@@ -281,8 +281,19 @@ async def _execute_http_node(node: dict, vars_: dict, company_id: str) -> dict:
             spec = SGP_ACTIONS[action]
             api_url = cfg_doc["base_url"].rstrip("/") + spec["path"]
             params = (body.get("params") if isinstance(body, dict) else None) or {}
+            # Sanitize CPF/CNPJ-like params: SGP expects digits only. Customers
+            # type "016.570.219-20", "(11) 99999-9999" etc — strip everything
+            # that isn't a digit when the param name suggests a document/phone.
+            digit_only_keys = {"cpfcnpj", "cpf", "cnpj", "telefone", "celular", "phone"}
+            clean = {}
+            for k, v in params.items():
+                if k in digit_only_keys and isinstance(v, str):
+                    clean[k] = re.sub(r"\D", "", v)
+                else:
+                    clean[k] = v
+            params = clean
             payload = {**params, "token": cfg_doc["token"], "app": cfg_doc.get("app") or "8ip"}
-            logger.info(f"[flow_engine] SGP call action={action} payload_keys={list(params.keys())}")
+            logger.info(f"[flow_engine] SGP call action={action} payload={ {k:('***' if k=='token' else v) for k,v in payload.items()} }")
             async with httpx.AsyncClient(timeout=15.0) as cli:
                 if spec["method"] == "GET":
                     r = await cli.get(api_url, params=payload)
@@ -429,6 +440,8 @@ async def advance_flow(
             continue
 
         if nt in ("message", "welcome", "send_message", "text"):
+            cfg_msg = (node.get("data") or {}).get("config") or {}
+            capture = cfg_msg.get("capture_var")
             missing: set = set()
             text = _node_text(node, vars_, missing=missing)
             critical_missing = missing & set(_CRITICAL_PLACEHOLDERS.keys())
@@ -447,6 +460,14 @@ async def advance_flow(
                 await _emit_and_persist(text)
             else:
                 logger.info(f"[flow_engine] node {current_id} ({nt}) has no text — skipping emit")
+            # If this message asks for an input (capture_var set), PAUSE here
+            # waiting for the customer's reply. Without this, the engine would
+            # rush through the SGP HTTP call with an empty placeholder.
+            if capture:
+                pending_node_id = current_id
+                current_id = None
+                logger.info(f"[flow_engine] message {pending_node_id} has capture_var={capture!r}; pausing for customer reply")
+                break
             edge = _next_edge(edges, current_id)
             current_id = edge["target"] if edge else None
             continue

@@ -198,3 +198,116 @@ def test_start_node_with_text_data_is_still_skipped():
     sent = _run(flow_engine.advance_flow(db, ticket, flow, is_initial=True))
     assert "INICIO TEXT" not in "|".join(sent)
     assert "Olá Joao!" in sent[0]
+
+
+def _flow_with_capture_and_sgp():
+    """Mimics the WEB Internet 100% Fibra flow: ask CPF (message + capture_var)
+    → SGP HTTP → menu using {{nome_cliente}}.
+    The engine must PAUSE on `ask_cpf` waiting for the customer reply, not
+    rush through to the SGP call with an empty CPF."""
+    return {
+        "id": "flow-cap",
+        "company_id": "co1",
+        "nodes": [
+            {"id": "start", "data": {"nodeType": "start"}},
+            {"id": "ask_cpf", "data": {"nodeType": "message", "config": {
+                "text": "Informe o CPF do titular do plano:",
+                "capture_var": "cpf_cliente",
+            }}},
+            {"id": "sgp_consulta", "data": {"nodeType": "http", "config": {
+                "url": "{{API_URL}}/api/sgp/consultacliente",
+                "body": {"params": {"cpfcnpj": "{{cpf_cliente}}"}},
+            }}},
+            {"id": "found_menu", "data": {"nodeType": "menu", "config": {
+                "text": "Pronto, {{nome_cliente}}! Como posso ajudar?",
+                "options": [{"label": "Boleto", "key": "1"}],
+            }}},
+        ],
+        "edges": [
+            {"id": "e1", "source": "start", "target": "ask_cpf"},
+            {"id": "e2", "source": "ask_cpf", "target": "sgp_consulta"},
+            {"id": "e3", "source": "sgp_consulta", "target": "found_menu"},
+        ],
+    }
+
+
+def test_message_with_capture_var_pauses_for_input(monkeypatch):
+    """Bug repro from production (WEB Internet 100% Fibra):
+    The engine was sending the 'Informe o CPF' prompt and then IMMEDIATELY
+    calling the SGP API with an empty {{cpf_cliente}} placeholder, getting
+    `{"contratos":[]}` back, and then sending 'Cliente não encontrado'
+    BEFORE the customer had a chance to type the CPF. Fix: nodes of type
+    `message` with `capture_var` must pause execution like menu nodes do."""
+    db = _FakeDB()
+    flow = _flow_with_capture_and_sgp()
+    ticket = _ticket()
+    db.tickets.docs["t1"] = ticket
+
+    # If the engine wrongly advances past `ask_cpf` it would call SGP, so
+    # patch _execute_http_node to flag any unexpected call.
+    called = {"sgp": 0}
+
+    async def _fake_http(node, vars_, company_id):
+        called["sgp"] += 1
+        return {"cliente_encontrado": False}
+    monkeypatch.setattr(flow_engine, "_execute_http_node", _fake_http)
+
+    sent = _run(flow_engine.advance_flow(db, ticket, flow, is_initial=True))
+
+    saved = db.tickets.docs["t1"]
+    # SGP must NOT have been called
+    assert called["sgp"] == 0, "SGP was called before customer input — engine didn't pause!"
+    # Only the 'ask CPF' message should have been emitted
+    assert sent == ["Informe o CPF do titular do plano:"]
+    # State must be paused on `ask_cpf`
+    assert saved["active_flow_node_id"] == "ask_cpf"
+    assert saved["active_flow_id"] == "flow-cap"
+
+
+def test_capture_var_then_resume_continues_to_sgp(monkeypatch):
+    """After customer replies with CPF, engine resumes, captures the value,
+    and runs the SGP call + downstream menu with the resolved name."""
+    db = _FakeDB()
+    flow = _flow_with_capture_and_sgp()
+    ticket = _ticket()
+    db.tickets.docs["t1"] = ticket
+    _run(flow_engine.advance_flow(db, ticket, flow, is_initial=True))
+
+    sgp_seen = {"cpf": None}
+
+    async def _fake_http(node, vars_, company_id):
+        sgp_seen["cpf"] = vars_.get("cpf_cliente")
+        return {"cliente_encontrado": True, "nome_cliente": "JOSE DA SILVA"}
+    monkeypatch.setattr(flow_engine, "_execute_http_node", _fake_http)
+
+    snap = dict(db.tickets.docs["t1"])
+    sent = _run(flow_engine.advance_flow(db, snap, flow, incoming_text="016.570.219-20", is_initial=False))
+    saved = db.tickets.docs["t1"]
+
+    # CPF was captured into vars (raw — sanitization happens inside HTTP node)
+    assert sgp_seen["cpf"] == "016.570.219-20"
+    # Menu was emitted with resolved name
+    assert any("Pronto, JOSE DA SILVA!" in m for m in sent)
+    assert saved["active_flow_node_id"] == "found_menu"
+
+
+def test_critical_placeholder_missing_emits_friendly_fallback():
+    """If a downstream message node references {{nome_cliente}} but the var
+    is empty (SGP returned no match), the engine must NOT send the broken
+    'Pronto, !' message — it must emit the user-facing fallback instead."""
+    db = _FakeDB()
+    flow = _flow_with_capture_and_sgp()
+    ticket = _ticket()
+    ticket["active_flow_id"] = "flow-cap"
+    ticket["active_flow_node_id"] = "ask_cpf"
+    db.tickets.docs["t1"] = ticket
+
+    async def _fake_http(node, vars_, company_id):
+        # SGP returned no match
+        return {"cliente_encontrado": False, "nome_cliente": ""}
+    flow_engine._execute_http_node = _fake_http
+
+    sent = _run(flow_engine.advance_flow(db, ticket, flow, incoming_text="00000000000", is_initial=False))
+    assert any("nao encontrado" in m.lower() or "verifique" in m.lower() for m in sent), sent
+    saved = db.tickets.docs["t1"]
+    assert saved["active_flow_id"] is None  # flow ended
