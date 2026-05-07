@@ -5799,6 +5799,9 @@ const SgpConfigCard = () => {
             onChange={(e) => setCfg({ ...cfg, base_url: e.target.value })}
             placeholder="https://web.sgp.net.br"
             className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+          <p className="text-[10px] text-slate-500 mt-1">
+            ⚠️ Use APENAS a raiz da API (ex.: <code>https://web.sgp.net.br</code>). NÃO cole a URL do painel Django onde você gerou o token.
+          </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>

@@ -69,9 +69,23 @@ async def update_sgp_config(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
+    base_url = (data.base_url or "").strip().rstrip("/")
+    # Detect common mistake: user paste the URL of the Django admin token-edit
+    # page (where they clicked to generate the token) instead of the API root.
+    # Examples to reject: contains '/admin/', '/django/', '/cauth/' or
+    # ends with '/change' / '/edit' / has a query string.
+    suspect_segments = ("/admin/", "/admin", "/django", "/cauth", "/change", "/edit")
+    low = base_url.lower()
+    if any(seg in low for seg in suspect_segments) or "?" in base_url or "#" in base_url:
+        raise HTTPException(
+            400,
+            "Base URL parece incorreta. Use APENAS a raiz da API SGP (ex.: "
+            "'https://web.sgp.net.br'). Você colou o link do painel Django onde "
+            "gerou o token — isso não é a URL da API."
+        )
     payload = {
         "company_id": user["company_id"],
-        "base_url": (data.base_url or "").strip().rstrip("/"),
+        "base_url": base_url,
         "token": (data.token or "").strip(),
         "app": (data.app or "8ip").strip(),
         "enabled": bool(data.enabled),
@@ -92,18 +106,49 @@ async def test_sgp_config(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
-    """Quick connectivity check — calls /api/ura/manutencao/list/ which is
-    cheap and read-only. Returns the upstream HTTP status."""
+    """Real connectivity check — calls /api/ura/consultacliente/ with a fake CPF
+    and validates the upstream actually responded with JSON (not the Django
+    admin login page). 302 / HTML responses are flagged as MISCONFIGURED.
+    """
     cfg = await db.sgp_configs.find_one({"company_id": user["company_id"]}, {"_id": 0})
     if not cfg or not cfg.get("base_url") or not cfg.get("token"):
         raise HTTPException(400, "Configure base_url e token primeiro")
-    url = cfg["base_url"].rstrip("/") + "/api/ura/manutencao/list/"
+    url = cfg["base_url"].rstrip("/") + "/api/ura/consultacliente/"
+    payload = {"token": cfg["token"], "app": cfg.get("app") or "8ip", "cpfcnpj": "00000000000"}
     try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.get(url, params={"token": cfg["token"], "app": cfg.get("app") or "8ip"})
-        return {"ok": r.status_code < 400, "status": r.status_code, "url": url}
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as cli:
+            r = await cli.post(url, json=payload)
     except Exception as e:
         raise HTTPException(502, f"Falha de conexao com SGP: {e}")
+
+    # Hard-fail on redirects: Django admin sends 302 → login when base_url is wrong.
+    if 300 <= r.status_code < 400:
+        loc = r.headers.get("location") or "(sem location)"
+        raise HTTPException(
+            400,
+            f"Resposta {r.status_code} (redirecionamento) — Base URL parece "
+            f"errada (apontando para o painel Django, não para a API). Use a "
+            f"raiz: 'https://web.sgp.net.br'. Redirect destino: {loc}"
+        )
+    # Non-JSON response = HTML / login page = wrong endpoint
+    ct = (r.headers.get("content-type") or "").lower()
+    snippet = r.text[:140]
+    if "application/json" not in ct:
+        raise HTTPException(
+            400,
+            f"SGP respondeu com '{ct or 'sem content-type'}' (esperado JSON). "
+            f"Provavelmente a Base URL está errada. Trecho da resposta: {snippet!r}"
+        )
+    try:
+        body = r.json()
+    except Exception:
+        raise HTTPException(400, f"Resposta SGP não é JSON válido: {snippet!r}")
+    return {
+        "ok": r.status_code < 400,
+        "status": r.status_code,
+        "url": url,
+        "response_preview": body if isinstance(body, dict) else {"raw": str(body)[:200]},
+    }
 
 
 # ---------- Proxy declared at END of file (see comment at file head) ----------
