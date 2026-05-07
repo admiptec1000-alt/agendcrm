@@ -70,6 +70,20 @@ async def update_sgp_config(
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
     base_url = (data.base_url or "").strip().rstrip("/")
+    raw_token = (data.token or "").strip()
+    # Strip invisible/non-ASCII characters from the token. SGP tokens are UUIDs
+    # (hex digits + hyphens). When the user copy-pastes from a browser, fonts
+    # sometimes substitute Cyrillic 'а' (U+0430) for Latin 'a' (U+0061), which
+    # is visually identical but breaks authentication. Reject such tokens.
+    sanitized_token = "".join(ch for ch in raw_token if ch.isascii())
+    if sanitized_token != raw_token:
+        bad = [(i, ch, hex(ord(ch))) for i, ch in enumerate(raw_token) if not ch.isascii()]
+        raise HTTPException(
+            400,
+            f"O token contém caracteres invisíveis/Unicode "
+            f"(posições: {bad}). Provavelmente foi copiado de uma fonte que substituiu "
+            f"letras visualmente idênticas. Digite o token manualmente."
+        )
     # Detect common mistake: user paste the URL of the Django admin token-edit
     # page (where they clicked to generate the token) instead of the API root.
     # Examples to reject: contains '/admin/', '/django/', '/cauth/' or
@@ -86,7 +100,7 @@ async def update_sgp_config(
     payload = {
         "company_id": user["company_id"],
         "base_url": base_url,
-        "token": (data.token or "").strip(),
+        "token": sanitized_token,
         "app": (data.app or "8ip").strip(),
         "enabled": bool(data.enabled),
         "updated_at": datetime.now(timezone.utc).isoformat(),

@@ -1963,12 +1963,10 @@ const AgendaPage = () => {
     setDiscountAmount('');
     setDiscountPct('');
     setFinalPrice(String((a.price || 0).toFixed(2)));
-    // Lazy-load payment methods on first open
-    if (paymentMethods.length === 0) {
-      api.get('/scheduling/financial/payment-methods')
-        .then(r => setPaymentMethods((r.data || []).filter(m => m.enabled)))
-        .catch(() => {});
-    }
+    // Always (re)load payment methods so newly-created ones become available.
+    api.get('/scheduling/financial/payment-methods')
+      .then(r => setPaymentMethods((r.data || []).filter(m => m.enabled)))
+      .catch(() => {});
   };
 
   const handleConclude = async () => {
@@ -2254,11 +2252,14 @@ const AgendaPage = () => {
               <div>
                 <p className="text-xs font-semibold text-slate-700 mb-2">Forma de Pagamento</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {PAYMENT_METHODS.map(m => (
-                    <button key={m.key} onClick={() => setPaymentMethod(m.key)}
-                      className={`p-3 rounded-xl border-2 text-sm font-medium transition-all ${paymentMethod === m.key ? 'border-primary bg-primary/5 text-primary' : 'border-slate-200 text-slate-600'}`}
-                      data-testid={`agenda-payment-${m.key}`}>
-                      {m.label}
+                  {paymentMethods.length === 0 ? (
+                    <p className="col-span-2 text-[11px] text-slate-500 italic">Carregando formas de pagamento... Caso não apareça, cadastre em Financeiro → Formas de Pagamento.</p>
+                  ) : paymentMethods.map(m => (
+                    <button key={m.id} onClick={() => { setPaymentMethodId(m.id); setPaymentMethod(m.type || 'outros'); }}
+                      className={`p-3 rounded-xl border-2 text-sm font-medium transition-all text-left ${paymentMethodId === m.id ? 'border-primary bg-primary/5 text-primary' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}
+                      data-testid={`agenda-payment-${m.id}`}>
+                      <div className="font-semibold">{m.name}</div>
+                      <div className="text-[10px] text-slate-500 uppercase">{m.type}</div>
                     </button>
                   ))}
                 </div>
