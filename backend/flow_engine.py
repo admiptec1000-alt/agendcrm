@@ -89,11 +89,21 @@ def _interpolate(text: str, vars_: dict, missing: Optional[set] = None) -> str:
                 if missing is not None:
                     missing.add(key)
             return str(v or "")
-        # Dotted path (e.g. response.data.nome)
+        # Dotted path. Supports list indices as numeric segments, e.g.
+        # "response.contratos.0.razaoSocial" walks through a dict, then a
+        # list, then back into a dict.
         cur = vars_
         for part in key.split("."):
             if isinstance(cur, dict) and part in cur:
                 cur = cur[part]
+            elif isinstance(cur, list) and part.lstrip("-").isdigit():
+                idx = int(part)
+                if -len(cur) <= idx < len(cur):
+                    cur = cur[idx]
+                else:
+                    if missing is not None:
+                        missing.add(key)
+                    return ""
             else:
                 if missing is not None:
                     missing.add(key)
