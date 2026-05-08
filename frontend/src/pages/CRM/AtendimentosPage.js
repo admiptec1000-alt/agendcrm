@@ -191,7 +191,11 @@ const AtendimentosPage = () => {
       // Client-side filtering for connection/user/tag/queue
       if (filterConnId) list = list.filter(t => t.connection_id === filterConnId);
       if (filterUserId) list = list.filter(t => t.assigned_to === filterUserId);
-      if (filterTagName) list = list.filter(t => (t.tags || []).includes(filterTagName));
+      if (filterTagName) {
+        // Filter by tag name OR by id (tickets store either depending on how they were created)
+        const td = allTags.find(t => t.name === filterTagName);
+        list = list.filter(t => (t.tags || []).some(x => x === filterTagName || (td && x === td.id)));
+      }
       if (filterQueueId) list = list.filter(t => t.queue_id === filterQueueId);
       setTickets(list);
       setCounts(countsRes.data);
@@ -578,15 +582,16 @@ const AtendimentosPage = () => {
                         } catch { toast.error('Falha ao atualizar etapa'); }
                       }}
                     />
-                    {/* Tags */}
+                    {/* Tags — accept legacy NAME format and new ID (UUID) format. */}
                     {ticket.tags?.slice(0, 2).map((tag, i) => {
-                      const td = allTags.find(t => t.name === tag);
+                      const td = allTags.find(t => t.id === tag) || allTags.find(t => t.name === tag);
+                      const label = td ? td.name : tag;
                       return (
                         <span
                           key={`tag-${tag}-${i}`}
                           className="text-[9px] px-1.5 py-0.5 rounded font-medium"
                           style={td ? { background: `${td.color}1A`, color: td.color } : { background: 'rgba(79,70,229,0.1)', color: 'rgb(79,70,229)' }}
-                        >{tag}</span>
+                        >{label}</span>
                       );
                     })}
                     {(ticket.value > 0) && (
@@ -749,15 +754,16 @@ const AtendimentosPage = () => {
             <Tag className="w-3 h-3 text-slate-400" />
             <span className="text-[10px] text-slate-400 font-semibold uppercase">Tags:</span>
             {(selectedTicket.tags || []).map((t, i) => {
-              const td = allTags.find(at => at.name === t);
+              const td = allTags.find(at => at.id === t) || allTags.find(at => at.name === t);
+              const label = td ? td.name : t;
               return (
                 <span
                   key={`htag-${t}-${i}`}
                   className="text-[10px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1"
                   style={td ? { background: `${td.color}22`, color: td.color } : { background: '#E2E8F0', color: '#475569' }}
                 >
-                  {t}
-                  <button onClick={() => handleRemoveTag(t)} className="hover:opacity-70" data-testid={`remove-tag-${t}`}>
+                  {label}
+                  <button onClick={() => handleRemoveTag(t)} className="hover:opacity-70" data-testid={`remove-tag-${label}`}>
                     <X className="w-2.5 h-2.5" />
                   </button>
                 </span>
@@ -777,7 +783,7 @@ const AtendimentosPage = () => {
                   {allTags.length === 0 && <p className="text-xs text-slate-500 px-2 py-1">Cadastre tags em CRM &gt; Tags</p>}
                   <div className="max-h-48 overflow-y-auto space-y-1">
                     {allTags
-                      .filter(t => !selectedTicket.tags?.includes(t.name))
+                      .filter(t => !(selectedTicket.tags || []).some(x => x === t.id || x === t.name))
                       .map(t => (
                         <button
                           key={t.id}

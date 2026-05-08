@@ -64,7 +64,9 @@ async def list_tickets(
     assigned_to: str = None,
     channel: str = None,
     search: str = None,
-    tab: str = None
+    tab: str = None,
+    limit: int = 1000,
+    offset: int = 0,
 ):
     query = {"company_id": user["company_id"]}
     if status:
@@ -94,7 +96,12 @@ async def list_tickets(
         else:
             query.update(vis_filter)
 
-    tickets = await db.tickets.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
+    # Clamp the limit to keep responses bounded but allow paging through
+    # the full collection for tenants like Incinera with 2.5k+ tickets.
+    safe_limit = max(1, min(int(limit or 1000), 5000))
+    safe_offset = max(0, int(offset or 0))
+    cursor = db.tickets.find(query, {"_id": 0}).sort("updated_at", -1).skip(safe_offset).limit(safe_limit)
+    tickets = await cursor.to_list(safe_limit)
     return tickets
 
 @router.get("/tickets/counts")
