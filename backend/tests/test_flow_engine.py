@@ -311,3 +311,78 @@ def test_critical_placeholder_missing_emits_friendly_fallback():
     assert any("nao encontrado" in m.lower() or "verifique" in m.lower() for m in sent), sent
     saved = db.tickets.docs["t1"]
     assert saved["active_flow_id"] is None  # flow ended
+
+
+def test_flatten_consultacliente_real_sgp_shape():
+    """Validates flatten against the ACTUAL SGP URA response shape captured
+    from web.sgp.net.br: no `clientes` wrapper, all fields camelCase inside
+    `contratos[]`. This was the second production bug."""
+    real = {
+        "msg": "Contrato(s) Localizado(s)",
+        "contratos": [{
+            "contratoId": 2473,
+            "clienteId": 2252,
+            "razaoSocial": "IZAQUE CARRIÇO FERREIRA",
+            "cpfCnpj": "016.570.219-20",
+            "contratoStatus": 1,
+            "contratoStatusDisplay": "Ativo",
+            "popNome": "REDE-MOVEL-WEB/GO",
+            "planotelefonia": "PLANO 10GB",
+            "contratoValorAberto": 0.0,
+            "contratoTitulosAReceber": 3,
+            "link_quitacao": "https://web.sgp.net.br/api/declaracao/quitacao/abc/2026",
+        }]
+    }
+    out = flow_engine._flatten_sgp_response("consultacliente", real)
+    assert out["nome_cliente"] == "IZAQUE CARRIÇO FERREIRA", out
+    assert out["cpfcnpj_cliente"] == "016.570.219-20"
+    assert out["numero_contrato"] == "2473"
+    assert out["status_contrato"] == "Ativo"
+    assert out["pop_cliente"] == "REDE-MOVEL-WEB/GO"
+    assert out["clienteId"] == "2252"
+    assert out["cliente_encontrado"] is True
+
+
+def test_flatten_consultacliente_empty_response():
+    """When SGP returns `{"contratos":[]}` (CPF not in their database), the
+    flatten must mark cliente_encontrado=False and leave nome_cliente empty
+    so the engine's fallback kicks in."""
+    out = flow_engine._flatten_sgp_response("consultacliente", {"contratos": []})
+    assert out["cliente_encontrado"] is False
+    assert not out.get("nome_cliente")
+    assert not out.get("numero_contrato")
+
+
+def test_flatten_fatura2via_real_sgp_shape():
+    """Real SGP shape uses `links[]` (not `faturas`) with link, linhadigitavel,
+    valor, vencimento, codigopix, link_pix_html."""
+    real = {
+        "status": 1,
+        "razaoSocial": "IZAQUE CARRIÇO FERREIRA",
+        "protocolo": "260507212000",
+        "cpfCnpj": "016.570.219-20",
+        "contratoId": 2473,
+        "link": "https://web.sgp.net.br/boleto/40675-B3ZN09AC6D/",
+        "link_cobranca": "https://web.sgp.net.br/public/cobranca/40675-B3ZN09AC6D/",
+        "links": [{
+            "id": 41043,
+            "fatura": 40675,
+            "valor": 319.95,
+            "valor_original": 319.95,
+            "vencimento": "2026-05-20",
+            "vencimento_original": "2026-05-20",
+            "linhadigitavel": "75691.33510 01192.467205 00031.600018 4 14520000031995",
+            "link": "https://web.sgp.net.br/boleto/40675-B3ZN09AC6D/",
+            "link_cobranca": "https://web.sgp.net.br/public/cobranca/40675-B3ZN09AC6D/",
+            "link_pix_html": "https://web.sgp.net.br/pix/40675-B3ZN09AC6D/html/",
+            "codigopix": "00020101021226950014br.gov.bcb.pix2573pix.sicoob...",
+        }],
+    }
+    out = flow_engine._flatten_sgp_response("fatura2via", real)
+    assert out["boleto_url"] == "https://web.sgp.net.br/boleto/40675-B3ZN09AC6D/"
+    assert "75691.33510" in out["linha_digitavel"]
+    assert out["valor_fatura"] == "319.95"
+    assert out["vencimento_fatura"] == "2026-05-20"
+    assert out["pix_qr_url"].startswith("https://web.sgp.net.br/pix/")
+    assert out["pix_copia_e_cola"].startswith("00020101")
+    assert out["fatura_encontrada"] is True

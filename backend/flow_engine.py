@@ -186,39 +186,78 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
     out["fatura_encontrada"] = False
     try:
         if action == "consultacliente":
-            # Typical shape: {"clientes": [...], "contratos": [...]}
-            # Newer SGP also returns plain {"contratos": [...]} when the
-            # cliente list is at the root of the response.
+            # Real SGP URA shape (verified against web.sgp.net.br): the
+            # response has NO "clientes" key — all fields live directly on
+            # each item of `contratos[]`. Fields use camelCase ("cpfCnpj",
+            # "razaoSocial", "contratoId", "contratoStatusDisplay"...). Older
+            # endpoints sometimes use a "clientes" wrapper with snake_case;
+            # we try both for forward/backward compatibility.
             clientes = data.get("clientes") or []
-            contratos_top = data.get("contratos") or []
+            contratos = data.get("contratos") or []
             cli = clientes[0] if (isinstance(clientes, list) and clientes) else {}
-            if not isinstance(cli, dict):
-                return out
-            out["nome_cliente"] = cli.get("nome") or cli.get("razaosocial") or cli.get("razao_social") or ""
-            out["cpfcnpj_cliente"] = cli.get("cpfcnpj") or cli.get("cnpj") or cli.get("cpf") or ""
-            out["email_cliente"] = cli.get("email") or ""
-            contratos = cli.get("contratos") or contratos_top or []
-            if isinstance(contratos, list) and contratos and isinstance(contratos[0], dict):
-                ct = contratos[0]
-                out["numero_contrato"] = str(ct.get("contrato") or ct.get("id") or "")
-                out["status_contrato"] = ct.get("status") or ct.get("statusexibicao") or ""
-                out["plano_cliente"] = ct.get("plano") or ct.get("planointernet") or ""
+            ct = contratos[0] if (isinstance(contratos, list) and contratos and isinstance(contratos[0], dict)) else {}
+            # Cliente info: prefer wrapper, fall back to contrato fields
+            out["nome_cliente"] = (
+                cli.get("nome") or cli.get("razaosocial") or cli.get("razao_social")
+                or ct.get("razaoSocial") or ct.get("razaosocial") or ct.get("nome") or ""
+            )
+            out["cpfcnpj_cliente"] = (
+                cli.get("cpfcnpj") or cli.get("cnpj") or cli.get("cpf")
+                or ct.get("cpfCnpj") or ct.get("cpfcnpj") or ""
+            )
+            emails = ct.get("emails") or []
+            email_from_ct = emails[0] if isinstance(emails, list) and emails and isinstance(emails[0], str) else ""
+            if isinstance(emails, list) and emails and isinstance(emails[0], dict):
+                email_from_ct = emails[0].get("email") or ""
+            out["email_cliente"] = cli.get("email") or email_from_ct or ""
+            # Contrato info
+            if ct:
+                out["numero_contrato"] = str(
+                    ct.get("contratoId") or ct.get("contrato") or ct.get("id") or ""
+                )
+                out["status_contrato"] = (
+                    ct.get("contratoStatusDisplay") or ct.get("statusexibicao")
+                    or ct.get("status") or ""
+                )
+                out["plano_cliente"] = (
+                    ct.get("planoInternet") or ct.get("planointernet")
+                    or ct.get("plano") or ct.get("planotelefonia") or ""
+                )
                 out["endereco_cliente"] = ct.get("endereco") or ""
-            # Mark "encontrado" only when we actually have a name OR contract.
-            out["cliente_encontrado"] = bool(out.get("nome_cliente") or out.get("numero_contrato"))
+                out["pop_cliente"] = ct.get("popNome") or ""
+                out["valor_aberto"] = str(ct.get("contratoValorAberto") or "0")
+                out["titulos_receber"] = ct.get("contratoTitulosAReceber") or 0
+                out["link_quitacao"] = ct.get("link_quitacao") or ""
+                out["clienteId"] = str(ct.get("clienteId") or "")
+            # "Cliente encontrado" = SGP returned at least 1 contract OR a
+            # client name. The msg field may vary in language; trust the data.
+            out["cliente_encontrado"] = bool(
+                out.get("numero_contrato") or out.get("nome_cliente") or contratos
+            )
         elif action == "fatura2via":
-            # Typical shape: {"faturas": [{"link": ..., "linhadigitavel": ..., "valor": ..., "vencimento": ...}]}
-            faturas = data.get("faturas") or data.get("titulos") or []
-            if isinstance(faturas, list) and faturas and isinstance(faturas[0], dict):
-                f = faturas[0]
-                out["boleto_url"] = f.get("link") or f.get("url") or f.get("linkboleto") or ""
-                out["linha_digitavel"] = f.get("linhadigitavel") or f.get("linha_digitavel") or ""
-                out["valor_fatura"] = str(f.get("valor") or "")
-                out["vencimento_fatura"] = f.get("vencimento") or f.get("datavencimento") or ""
-            else:
-                out["boleto_url"] = data.get("link") or data.get("url") or ""
-                out["linha_digitavel"] = data.get("linhadigitavel") or ""
-            out["fatura_encontrada"] = bool(out.get("boleto_url") or out.get("linha_digitavel"))
+            # Real SGP shape (verified):
+            #   {"status":1, "razaoSocial":..., "links":[{"link":..., "linhadigitavel":..., "valor":..., "vencimento":..., "codigopix":..., "link_pix_html":...}],
+            #    "link":..., "link_cobranca":..., "cpfCnpj":..., "contratoId":...}
+            # Older/alt shape: {"faturas":[...]} or {"titulos":[...]}
+            links = data.get("links") or data.get("faturas") or data.get("titulos") or []
+            f = links[0] if (isinstance(links, list) and links and isinstance(links[0], dict)) else {}
+            out["boleto_url"] = (
+                f.get("link") or f.get("link_cobranca") or f.get("url") or f.get("linkboleto")
+                or data.get("link") or data.get("link_cobranca") or ""
+            )
+            out["linha_digitavel"] = (
+                f.get("linhadigitavel") or f.get("linha_digitavel")
+                or data.get("linhadigitavel") or ""
+            )
+            out["valor_fatura"] = str(f.get("valor") or f.get("valor_original") or "")
+            out["vencimento_fatura"] = (
+                f.get("vencimento") or f.get("vencimento_original")
+                or f.get("datavencimento") or ""
+            )
+            out["pix_copia_e_cola"] = f.get("codigopix") or ""
+            out["pix_qr_url"] = f.get("link_pix_html") or ""
+            out["fatura_protocolo"] = data.get("protocolo") or ""
+            out["fatura_encontrada"] = bool(out.get("boleto_url") or out.get("linha_digitavel") or out.get("pix_copia_e_cola"))
         elif action == "verificaacesso":
             # Typical shape: {"online": True, "status": "...", "mac": "..."}
             online = data.get("online")
