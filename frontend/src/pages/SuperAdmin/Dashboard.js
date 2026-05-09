@@ -60,8 +60,20 @@ const SuperAdminDashboard = () => {
     { key: 'partners', label: 'Parceiros', icon: HandCoins },
     { key: 'financial', label: 'Financeiro Admin', icon: Receipt },
     { key: 'indoor', label: 'Indoor', icon: Tv },
+    { key: 'my-panel', label: 'Meu Painel', icon: ShieldCheck },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
   ];
+
+  const openOperationalPanel = async () => {
+    try {
+      const { data } = await api.post('/super-admin/me/operational-impersonate');
+      const url = `${window.location.origin}/__impersonate__?token=${encodeURIComponent(data.access_token)}&slug=${encodeURIComponent(data.company_slug || '')}`;
+      window.open(url, '_blank');
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Configure a Empresa Operacional em Configuracoes');
+      setActiveTab('settings');
+    }
+  };
 
   if (loading) {
     return (
@@ -190,9 +202,10 @@ const SuperAdminDashboard = () => {
             />
           )}
           {activeTab === 'plans' && <PlansTab />}
-          {activeTab === 'partners' && <PartnersTab companies={companies} onRefresh={loadDashboardData} />}
+          {activeTab === 'partners' && <PartnersTab companies={companies} onRefresh={loadAll} />}
           {activeTab === 'financial' && <FinancialTab companies={companies} />}
           {activeTab === 'indoor' && <IndoorTab companies={companies} />}
+          {activeTab === 'my-panel' && <MyOperationalPanelTab onOpen={openOperationalPanel} onGoToSettings={() => setActiveTab('settings')} />}
           {activeTab === 'settings' && <SettingsTab companies={companies} />}
         </div>
       </main>
@@ -833,28 +846,414 @@ const KPI = ({ label, value, icon: Icon, color, testid }) => (
 
 // ─── FINANCIAL TAB (invoices + suspension control) ──────────────────────────
 const FinancialTab = ({ companies }) => {
-  const [subTab, setSubTab] = useState('invoices');
+  const [subTab, setSubTab] = useState('summary');
+  const tabs = [
+    { key: 'summary', label: 'Resumo' },
+    { key: 'invoices', label: 'Faturas' },
+    { key: 'expenses', label: 'Despesas' },
+    { key: 'commissions', label: 'Comissoes' },
+    { key: 'external', label: 'Clientes Externos' },
+  ];
   return (
     <div className="space-y-4" data-testid="financial-tab">
-      <div className="flex gap-2 border-b border-slate-200">
-        <button
-          data-testid="financial-subtab-invoices"
-          onClick={() => setSubTab('invoices')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            subTab === 'invoices' ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'
-          }`}>
-          Faturas
-        </button>
-        <button
-          data-testid="financial-subtab-external"
-          onClick={() => setSubTab('external')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            subTab === 'external' ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'
-          }`}>
-          Clientes Externos
+      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            data-testid={`financial-subtab-${t.key}`}
+            onClick={() => setSubTab(t.key)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+              subTab === t.key ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {subTab === 'summary' && <FinancialSummaryPanel />}
+      {subTab === 'invoices' && <InvoicesPanel companies={companies} />}
+      {subTab === 'expenses' && <ExpensesPanel />}
+      {subTab === 'commissions' && <CommissionsPanel />}
+      {subTab === 'external' && <ExternalClientsPanel />}
+    </div>
+  );
+};
+
+// ─── FINANCIAL SUMMARY PANEL (Phase 3 — main P&L view) ─────────────────
+const FinancialSummaryPanel = () => {
+  const today = new Date();
+  const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const [month, setMonth] = useState(defaultMonth);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data: r } = await api.get('/super-admin/financial/summary', { params: { month } });
+      setData(r);
+    } catch (e) { toast.error('Erro ao carregar resumo financeiro'); }
+    finally { setLoading(false); }
+  }, [month]);
+  useEffect(() => { load(); }, [load]);
+
+  const totals = data?.totals || {};
+  const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
+
+  return (
+    <div className="space-y-4" data-testid="financial-summary-panel">
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-xs font-bold uppercase text-slate-500">Periodo</label>
+        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="px-3 py-2 border border-slate-300 rounded text-sm" data-testid="summary-month-input" />
+        <button onClick={load} className="px-3 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 flex items-center gap-1" data-testid="summary-refresh-btn">
+          <RefreshCw className="w-4 h-4" /> Atualizar
         </button>
       </div>
-      {subTab === 'invoices' ? <InvoicesPanel companies={companies} /> : <ExternalClientsPanel />}
+
+      {/* Hero P&L */}
+      <div className="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white p-5" data-testid="summary-hero">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase opacity-70 tracking-wider">Receita</p>
+            <p className="text-2xl font-bold mt-1">{fmt(totals.revenue)}</p>
+            <p className="text-[10px] opacity-70 mt-0.5">{data?.invoices_count || 0} faturas pagas</p>
+          </div>
+          <div className="border-l border-white/20 pl-4">
+            <p className="text-[10px] font-bold uppercase opacity-70 tracking-wider">Custos Totais</p>
+            <p className="text-2xl font-bold text-rose-100 mt-1">- {fmt(totals.total_costs)}</p>
+          </div>
+          <div className="border-l border-white/20 pl-4">
+            <p className="text-[10px] font-bold uppercase opacity-70 tracking-wider">Lucro Liquido</p>
+            <p className={`text-2xl font-bold mt-1 ${(totals.net_profit || 0) >= 0 ? 'text-emerald-100' : 'text-rose-100'}`}>{fmt(totals.net_profit)}</p>
+          </div>
+          <div className="border-l border-white/20 pl-4">
+            <p className="text-[10px] font-bold uppercase opacity-70 tracking-wider">Margem</p>
+            <p className="text-2xl font-bold mt-1">{(totals.margin_pct || 0).toFixed(1)}%</p>
+            <p className="text-[10px] opacity-70 mt-0.5">{data?.active_companies || 0} clientes ativos</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Cost breakdown cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="card p-4">
+          <p className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Custos de Licenca</p>
+          <p className="text-xl font-bold text-slate-800 mt-1">{fmt(totals.license_cost)}</p>
+          <p className="text-xs text-slate-500 mt-0.5">infra/servicos por cliente ativo</p>
+        </div>
+        <div className="card p-4">
+          <p className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Comissoes (parceiros)</p>
+          <p className="text-xl font-bold text-slate-800 mt-1">{fmt(totals.commissions_total)}</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            <span className="text-emerald-600">{fmt(totals.commissions_paid)} pagas</span>
+            {' · '}
+            <span className="text-amber-600">{fmt(totals.commissions_pending)} pendentes</span>
+          </p>
+        </div>
+        <div className="card p-4">
+          <p className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Despesas Manuais</p>
+          <p className="text-xl font-bold text-slate-800 mt-1">{fmt(totals.manual_expenses)}</p>
+          <p className="text-xs text-slate-500 mt-0.5">infra, marketing, salarios, etc.</p>
+        </div>
+      </div>
+
+      {/* Per-company breakdown */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+          <h3 className="font-bold text-slate-800">Margem por Cliente</h3>
+          <span className="text-xs text-slate-500">{data?.by_company?.length || 0} clientes no periodo</span>
+        </div>
+        {loading ? (
+          <div className="p-8 text-center text-sm text-slate-400">Carregando…</div>
+        ) : !data?.by_company?.length ? (
+          <div className="p-8 text-center text-sm text-slate-400">Sem movimentacao financeira no periodo.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="text-left px-4 py-2.5">Cliente</th>
+                  <th className="text-right px-4 py-2.5">Receita</th>
+                  <th className="text-right px-4 py-2.5">Custo Licenca</th>
+                  <th className="text-right px-4 py-2.5">Comissao</th>
+                  <th className="text-right px-4 py-2.5">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.by_company.map(row => (
+                  <tr key={row.company_id} className="border-t border-slate-100" data-testid={`company-pl-${row.company_id}`}>
+                    <td className="px-4 py-2.5 font-medium text-slate-900">{row.company_name}</td>
+                    <td className="px-4 py-2.5 text-right text-emerald-600">{fmt(row.revenue)}</td>
+                    <td className="px-4 py-2.5 text-right text-rose-500">- {fmt(row.license_cost)}</td>
+                    <td className="px-4 py-2.5 text-right text-rose-500">- {fmt(row.commission_cost)}</td>
+                    <td className={`px-4 py-2.5 text-right font-bold ${row.net >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>{fmt(row.net)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── EXPENSES PANEL (manual outflows) ─────────────────────────────────
+const ExpensesPanel = () => {
+  const today = new Date();
+  const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const [month, setMonth] = useState(defaultMonth);
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/super-admin/expenses', { params: { month } });
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+    } catch { toast.error('Erro ao carregar despesas'); }
+    finally { setLoading(false); }
+  }, [month]);
+  useEffect(() => { load(); }, [load]);
+
+  const remove = async (e) => {
+    if (!window.confirm('Remover esta despesa?')) return;
+    await api.delete(`/super-admin/expenses/${e.id}`);
+    toast.success('Removida');
+    load();
+  };
+
+  const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
+  const catLabel = { infra: 'Infra', marketing: 'Marketing', salaries: 'Salarios', taxes: 'Impostos', other: 'Outros' };
+
+  return (
+    <div className="space-y-4" data-testid="expenses-panel">
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-xs font-bold uppercase text-slate-500">Periodo</label>
+        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="px-3 py-2 border border-slate-300 rounded text-sm" data-testid="expenses-month-input" />
+        <div className="ml-auto flex items-center gap-3">
+          <span className="text-sm text-slate-500">Total: <strong className="text-slate-800">{fmt(total)}</strong></span>
+          <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary text-sm flex items-center gap-2" data-testid="add-expense-btn">
+            <Plus className="w-4 h-4" /> Nova despesa
+          </button>
+        </div>
+      </div>
+      {loading ? (
+        <div className="py-12 text-center text-slate-400 text-sm">Carregando…</div>
+      ) : items.length === 0 ? (
+        <div className="py-12 text-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">Nenhuma despesa no periodo.</div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="text-left px-4 py-2.5">Data</th>
+                <th className="text-left px-4 py-2.5">Descricao</th>
+                <th className="text-left px-4 py-2.5">Categoria</th>
+                <th className="text-right px-4 py-2.5">Valor</th>
+                <th className="px-4 py-2.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(e => (
+                <tr key={e.id} className="border-t border-slate-100 hover:bg-slate-50" data-testid={`expense-row-${e.id}`}>
+                  <td className="px-4 py-2.5 text-slate-600">{e.date}</td>
+                  <td className="px-4 py-2.5 font-medium text-slate-900">{e.description}</td>
+                  <td className="px-4 py-2.5"><span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold">{catLabel[e.category] || e.category}</span></td>
+                  <td className="px-4 py-2.5 text-right font-bold text-rose-600">- {fmt(e.amount)}</td>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <button onClick={() => { setEditing(e); setShowModal(true); }} className="p-1.5 rounded hover:bg-slate-200 text-slate-600 mr-1" data-testid={`edit-expense-${e.id}`}><Pencil className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => remove(e)} className="p-1.5 rounded hover:bg-red-50 text-red-500" data-testid={`delete-expense-${e.id}`}><Trash2 className="w-3.5 h-3.5" /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {showModal && (
+        <ExpenseModal
+          expense={editing}
+          onClose={() => setShowModal(false)}
+          onSaved={() => { setShowModal(false); load(); }}
+        />
+      )}
+    </div>
+  );
+};
+
+const ExpenseModal = ({ expense, onClose, onSaved }) => {
+  const [form, setForm] = useState({
+    description: expense?.description || '',
+    amount: expense?.amount || '',
+    date: expense?.date || new Date().toISOString().slice(0, 10),
+    category: expense?.category || 'other',
+    notes: expense?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!form.description.trim() || !form.amount || !form.date) {
+      toast.error('Preencha descricao, valor e data');
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = { ...form, amount: parseFloat(form.amount) };
+      if (expense?.id) await api.put(`/super-admin/expenses/${expense.id}`, payload);
+      else await api.post('/super-admin/expenses', payload);
+      toast.success('Salvo');
+      onSaved();
+    } catch (e) { toast.error('Falha ao salvar'); }
+    finally { setSaving(false); }
+  };
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()} data-testid="expense-modal">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-slate-800">{expense ? 'Editar Despesa' : 'Nova Despesa'}</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4 text-slate-500" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-400">Descricao</label>
+            <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="expense-desc-input" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] uppercase font-bold text-slate-400">Valor (R$)</label>
+              <input type="number" step="0.01" min="0" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="expense-amount-input" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase font-bold text-slate-400">Data</label>
+              <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="expense-date-input" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-400">Categoria</label>
+            <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="expense-category-select">
+              <option value="infra">Infra/Servidores</option>
+              <option value="marketing">Marketing</option>
+              <option value="salaries">Salarios</option>
+              <option value="taxes">Impostos</option>
+              <option value="other">Outros</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-400">Notas</label>
+            <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm border border-slate-300 rounded">Cancelar</button>
+          <button onClick={save} disabled={saving} className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded disabled:opacity-50" data-testid="save-expense-btn">{saving ? 'Salvando…' : 'Salvar'}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── COMMISSIONS PANEL ─────────────────────────────────────────────────
+const CommissionsPanel = () => {
+  const today = new Date();
+  const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const [month, setMonth] = useState(defaultMonth);
+  const [status, setStatus] = useState('');
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(new Set());
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = { month };
+      if (status) params.status = status;
+      const { data } = await api.get('/super-admin/partners/commissions', { params });
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+      setSelected(new Set());
+    } catch { toast.error('Erro ao carregar comissoes'); }
+    finally { setLoading(false); }
+  }, [month, status]);
+  useEffect(() => { load(); }, [load]);
+
+  const settle = async () => {
+    if (!selected.size) { toast.error('Selecione ao menos uma comissao pendente'); return; }
+    if (!window.confirm(`Marcar ${selected.size} comissao(oes) como pagas ao parceiro?`)) return;
+    try {
+      const r = await api.post('/super-admin/partners/settle', { commission_ids: Array.from(selected) });
+      toast.success(`${r.data.settled} comissao(oes) liquidadas`);
+      load();
+    } catch { toast.error('Falha ao liquidar'); }
+  };
+
+  const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
+  const toggle = (id) => {
+    const n = new Set(selected);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    setSelected(n);
+  };
+
+  return (
+    <div className="space-y-4" data-testid="commissions-panel">
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-xs font-bold uppercase text-slate-500">Periodo</label>
+        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="px-3 py-2 border border-slate-300 rounded text-sm" data-testid="commissions-month-input" />
+        <select value={status} onChange={(e) => setStatus(e.target.value)} className="px-3 py-2 border border-slate-300 rounded text-sm" data-testid="commissions-status-select">
+          <option value="">Todas</option>
+          <option value="pending">Pendentes</option>
+          <option value="paid">Pagas</option>
+        </select>
+        <span className="text-sm text-slate-500 ml-auto">Total: <strong className="text-slate-800">{fmt(total)}</strong></span>
+        <button onClick={settle} disabled={!selected.size} className="px-3 py-2 text-sm rounded bg-emerald-600 text-white disabled:opacity-50" data-testid="settle-commissions-btn">
+          Liquidar selecionadas ({selected.size})
+        </button>
+      </div>
+      {loading ? (
+        <div className="py-12 text-center text-slate-400 text-sm">Carregando…</div>
+      ) : items.length === 0 ? (
+        <div className="py-12 text-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">Sem comissoes no periodo.</div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-4 py-2.5"></th>
+                <th className="text-left px-4 py-2.5">Data</th>
+                <th className="text-left px-4 py-2.5">Parceiro</th>
+                <th className="text-left px-4 py-2.5">Cliente Indicado</th>
+                <th className="text-right px-4 py-2.5">Fatura</th>
+                <th className="text-right px-4 py-2.5">% / Valor</th>
+                <th className="text-left px-4 py-2.5">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(c => (
+                <tr key={c.id} className="border-t border-slate-100" data-testid={`commission-row-${c.id}`}>
+                  <td className="px-4 py-2.5">
+                    {!c.paid_to_partner && (
+                      <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} data-testid={`commission-check-${c.id}`} />
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-slate-600">{(c.created_at || '').slice(0, 10)}</td>
+                  <td className="px-4 py-2.5 font-medium text-slate-900">{c.partner_company_name}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{c.referred_company_name}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-600">{fmt(c.invoice_amount)}</td>
+                  <td className="px-4 py-2.5 text-right font-bold text-emerald-600">{c.commission_pct}% · {fmt(c.amount)}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${c.paid_to_partner ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {c.paid_to_partner ? 'PAGA' : 'PENDENTE'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 };
@@ -1247,6 +1646,56 @@ const NewInvoiceModal = ({ companies, externals, onClose, onSaved }) => {
 };
 
 
+// ─── MY OPERATIONAL PANEL TAB (Phase 2) ─────────────────────────────────
+const MyOperationalPanelTab = ({ onOpen, onGoToSettings }) => {
+  const [settings, setSettings] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get('/super-admin/settings');
+        setSettings(data || {});
+      } catch { setSettings({}); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+  const configured = !!settings?.financial_manager_company_id;
+  return (
+    <div className="animate-fade-in space-y-4 max-w-3xl" data-testid="my-panel-tab">
+      <div className="bg-gradient-to-br from-violet-600 to-indigo-700 text-white rounded-xl p-6">
+        <div className="flex items-center gap-3">
+          <ShieldCheck className="w-8 h-8" />
+          <div>
+            <h3 className="text-xl font-bold font-heading">Meu Painel Operacional</h3>
+            <p className="text-sm opacity-90 mt-1">Use os modulos do SaaS (Kanban, Integracoes, Agenda, Permissoes…) como qualquer cliente para sua propria gestao interna.</p>
+          </div>
+        </div>
+      </div>
+      {loading ? (
+        <div className="card p-8 text-center text-slate-400 text-sm">Carregando…</div>
+      ) : configured ? (
+        <div className="card p-6 space-y-3">
+          <p className="text-sm text-slate-700">Empresa operacional configurada. Abra o painel em uma nova aba — voce nao perde a sessao do SuperAdmin neste navegador.</p>
+          <button onClick={onOpen} data-testid="open-operational-btn" className="btn-primary flex items-center gap-2">
+            <ExternalLink className="w-4 h-4" /> Abrir meu painel operacional
+          </button>
+          <p className="text-xs text-slate-500">
+            Os modulos disponiveis dependem do <strong>Tipo de Negocio</strong> dessa empresa. Edite-a em <em>Empresas</em> para liberar/restringir features (ex.: Kanban, API/Integracoes, Agente IA).
+          </p>
+        </div>
+      ) : (
+        <div className="card p-6 space-y-3">
+          <p className="text-sm text-slate-700">Selecione qual empresa servira como sua <strong>operacao interna</strong>. Geralmente voce cria uma empresa nova chamada "AgentCRM Interno" e a designa aqui.</p>
+          <button onClick={onGoToSettings} data-testid="goto-settings-btn" className="btn-primary text-sm">
+            Configurar agora
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
 const SettingsTab = ({ companies }) => {
   const [settings, setSettings] = useState({ financial_manager_company_id: '' });
   const [saving, setSaving] = useState(false);
@@ -1277,7 +1726,7 @@ const SettingsTab = ({ companies }) => {
         <div className="space-y-4">
           <div>
             <label className="text-xs font-medium text-slate-700 mb-1 block">
-              Empresa Gestora Financeira (opcional)
+              Empresa Operacional do SuperAdmin
             </label>
             <select
               value={settings.financial_manager_company_id}
@@ -1285,13 +1734,13 @@ const SettingsTab = ({ companies }) => {
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
               data-testid="settings-financial-mgr-select"
             >
-              <option value="">— Nenhuma (SuperAdmin gerencia) —</option>
+              <option value="">— Nenhuma —</option>
               {(companies || []).map(c => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
             <p className="text-xs text-slate-500 mt-1">
-              Essa empresa terá acesso a um menu especial "Gestão SuperAdmin" com as faturas e clientes da plataforma.
+              Esta empresa atua como o "tenant interno" do SuperAdmin: ao clicar em <strong>Meu Painel</strong>, voce abre o dashboard dela em uma nova aba para usar Kanban, Integracoes, Agenda e demais modulos para sua propria gestao. Tambem alimenta o Financeiro Admin (margem por cliente, parceiros, custos).
             </p>
           </div>
           <button

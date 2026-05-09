@@ -29,6 +29,7 @@ from routes.channels_routes import router as channels_router
 from routes.sgp_routes import router as sgp_router
 from routes.asaas_routes import router as asaas_router
 from routes.partners_routes import router as partners_router
+from routes.super_admin_finance_routes import router as super_admin_finance_router
 
 # Import auth functions
 from auth import get_password_hash
@@ -63,6 +64,7 @@ api_router.include_router(channels_router)
 api_router.include_router(sgp_router)
 api_router.include_router(asaas_router)
 api_router.include_router(partners_router)
+api_router.include_router(super_admin_finance_router)
 
 # Include the API router in the main app
 app.include_router(api_router)
