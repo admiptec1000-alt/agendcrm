@@ -10,6 +10,30 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-09 — Phase 2 (Operational Impersonate) + Phase 3 (Financeiro Admin) ✅
+
+**Phase 2 — Super Admin usa modulos do sistema para gestao propria**
+- Setting `financial_manager_company_id` (já existente) agora funciona como "Empresa Operacional" do SuperAdmin.
+- Novo endpoint `POST /api/super-admin/me/operational-impersonate` que emite JWT scoped na empresa configurada (validade 120 min, claim `impersonated_by` para auditoria).
+- Sidebar SuperAdmin → "Meu Painel" abre um hero violeta com botão que chama o endpoint e abre uma nova aba via `/__impersonate__` (token vai para sessionStorage, não sobrescreve o token do SA na aba atual).
+- Errors: 400 quando setting vazio (CTA → vai para Settings), 409 quando empresa não tem `company_users`, 404 quando empresa apagada.
+
+**Phase 3 — Modulo Financeiro Super Admin**
+- Novo arquivo `/app/backend/routes/super_admin_finance_routes.py` (344 linhas, 8 endpoints).
+- `GET /api/super-admin/financial/summary?month=YYYY-MM` retorna P&L mensal: `revenue` (faturas pagas), `license_cost` (license_cost × clientes ativos, amortizado p/ planos anuais), `commissions_total/paid/pending`, `manual_expenses`, `net_profit`, `margin_pct`, `by_company` (margem por cliente), `expenses_by_category`.
+- CRUD `/api/super-admin/expenses` (collection `super_admin_expenses`) — Pydantic valida `description min_length=1` (defesa em profundidade).
+- `GET /api/super-admin/partners/commissions` lista commissions com filtros `status` (paid/pending) e `month`.
+- Frontend `FinancialTab` ganhou 5 sub-abas: **Resumo** (hero verde + 3 cards de custos + tabela margem por cliente), **Faturas** (existente), **Despesas** (CRUD + modal categoria infra/marketing/salaries/taxes/other), **Comissoes** (lista + multi-select para liquidar via `/super-admin/partners/settle`), **Clientes Externos** (existente).
+
+**Bug fix anterior corrigido**
+- `<PartnersTab onRefresh={loadDashboardData}>` (variavel inexistente) → `loadAll`. UI de Parceiros voltou a recarregar pos-toggle.
+
+**Testes**
+- `/app/backend/tests/test_iteration_50_finance.py` — 18/19 passing (1 skip por falta de seed de parceiro→cliente, não bloqueante).
+- E2E via testing_agent_v3: 100% (Resumo, Despesas CRUD, Comissoes, Meu Painel, Settings).
+
+
+
 ### 2026-05-07 — SGP auto-flatten + Agenda Pro Modernization
 
 **Bug-3 fix (`Pronto, !` + 2ª via vazia)**

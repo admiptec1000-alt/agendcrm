@@ -20,7 +20,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from auth import require_super_admin, create_access_token
 from database import get_database
@@ -49,7 +49,7 @@ def _month_bounds(month: Optional[str]) -> tuple[str, str]:
 # ── Manual Expenses CRUD ────────────────────────────────────────────────
 
 class ExpenseIn(BaseModel):
-    description: str
+    description: str = Field(..., min_length=1)
     amount: float
     date: str  # YYYY-MM-DD
     category: Optional[str] = None  # infra, marketing, salaries, taxes, other
