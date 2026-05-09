@@ -1,20 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { UserPlus, Mail, Lock, User, Building } from 'lucide-react';
+import { UserPlus, Mail, Lock, User, Building, Gift } from 'lucide-react';
 
 const RegisterPage = () => {
+  const [searchParams] = useSearchParams();
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     password: '',
     company_name: '',
-    plan_type: 'both'
+    plan_type: 'both',
+    referred_by: '',
   });
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
+
+  // Capture ?ref= from URL or fall back to localStorage (set by /r/<code> bounce)
+  useEffect(() => {
+    const fromUrl = searchParams.get('ref');
+    const stored = window.localStorage.getItem('agentcrm_ref');
+    const code = (fromUrl || stored || '').trim().toUpperCase();
+    if (code) {
+      setFormData(prev => ({ ...prev, referred_by: code }));
+      // Persist for cases where user opens register tab manually after the bounce
+      try { window.localStorage.setItem('agentcrm_ref', code); } catch {}
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -24,6 +38,8 @@ const RegisterPage = () => {
 
     if (result.success) {
       toast.success('Cadastro realizado com sucesso!');
+      // Clear referral cookie now that conversion is recorded server-side
+      try { window.localStorage.removeItem('agentcrm_ref'); } catch {}
       navigate('/');
     } else {
       toast.error(result.error || 'Erro ao fazer cadastro');
@@ -48,6 +64,16 @@ const RegisterPage = () => {
               Comece a usar o AgentCRM hoje
             </p>
           </div>
+
+          {/* Referral badge (visible only when ?ref= is present) */}
+          {formData.referred_by && (
+            <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200" data-testid="register-ref-badge">
+              <Gift className="w-4 h-4 text-emerald-600" />
+              <p className="text-xs text-emerald-800">
+                Voce foi indicado pelo codigo <code className="font-mono font-bold">{formData.referred_by}</code>
+              </p>
+            </div>
+          )}
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-5">

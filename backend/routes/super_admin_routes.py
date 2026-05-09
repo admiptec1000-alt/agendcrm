@@ -263,6 +263,17 @@ async def create_company(
             mobile_bottom_nav = bt.get("mobile_bottom_nav", [])
 
     company_id = str(uuid.uuid4())
+    # If a referral code was supplied, validate it and link the company to the
+    # partner so future paid invoices accrue commission.
+    referred_by = None
+    if data.referred_by:
+        partner = await db.companies.find_one(
+            {"referral_code": data.referred_by.upper().strip(), "is_partner": True},
+            {"_id": 0, "id": 1, "referral_code": 1},
+        )
+        if partner:
+            referred_by = partner["referral_code"]
+
     company = {
         "id": company_id,
         "name": data.name,
@@ -277,6 +288,7 @@ async def create_company(
         "mobile_bottom_nav": mobile_bottom_nav,
         "subdomain": data.subdomain,
         "theme_colors": (data.theme_colors or ThemeColors()).model_dump(),
+        "referred_by": referred_by,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": user["id"]
     }
@@ -615,6 +627,8 @@ class PlanIn(BaseModel):
     billing_cycle: str = "monthly"  # monthly | yearly | one_time
     installments: int = 1  # how many invoices to auto-generate on company signup
     grace_days: int = 5  # days after due_date before auto-suspension
+    # Plan economics — used by Financeiro Admin to compute margin per active client.
+    license_cost: float = 0.0   # what we PAY upstream per active client (servers, third-party licenses, etc)
 
 
 @router.get("/plans")
@@ -637,6 +651,7 @@ async def create_plan(
         "name": data.name.strip(),
         "description": (data.description or "").strip() or None,
         "monthly_price": max(0.0, float(data.monthly_price or 0.0)),
+        "license_cost": max(0.0, float(data.license_cost or 0.0)),
         "plan_type": data.plan_type.value if hasattr(data.plan_type, "value") else str(data.plan_type),
         "max_connections": max(0, int(data.max_connections or 0)),
         "max_users": max(0, int(data.max_users or 0)),
@@ -663,6 +678,7 @@ async def update_plan(
         "name": data.name.strip(),
         "description": (data.description or "").strip() or None,
         "monthly_price": max(0.0, float(data.monthly_price or 0.0)),
+        "license_cost": max(0.0, float(data.license_cost or 0.0)),
         "plan_type": data.plan_type.value if hasattr(data.plan_type, "value") else str(data.plan_type),
         "max_connections": max(0, int(data.max_connections or 0)),
         "max_users": max(0, int(data.max_users or 0)),
@@ -855,10 +871,25 @@ async def update_invoice(
     if data.status == "paid" and not data.paid_at:
         update["paid_at"] = datetime.now(timezone.utc).isoformat()
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    # Detect transition to "paid" so we can credit the partner commission once.
+    invoice_before = await db.invoices.find_one({"id": inv_id}, {"_id": 0})
     r = await db.invoices.update_one({"id": inv_id}, {"$set": update})
     if r.matched_count == 0:
         raise HTTPException(404, "Fatura nao encontrada")
-    return await db.invoices.find_one({"id": inv_id}, {"_id": 0})
+    fresh = await db.invoices.find_one({"id": inv_id}, {"_id": 0})
+    became_paid = (
+        invoice_before and invoice_before.get("status") != "paid"
+        and fresh and fresh.get("status") == "paid"
+    )
+    if became_paid:
+        try:
+            from routes.partners_routes import credit_commission_for_invoice
+            await credit_commission_for_invoice(db, fresh)
+        except Exception as e:
+            # Don't block the invoice update if commission accrual fails — log only.
+            import logging
+            logging.getLogger(__name__).warning(f"partner commission credit failed for invoice {inv_id}: {e}")
+    return fresh
 
 
 @router.delete("/invoices/{inv_id}")

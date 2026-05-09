@@ -28,6 +28,7 @@ from routes.notification_routes import router as notification_router
 from routes.channels_routes import router as channels_router
 from routes.sgp_routes import router as sgp_router
 from routes.asaas_routes import router as asaas_router
+from routes.partners_routes import router as partners_router
 
 # Import auth functions
 from auth import get_password_hash
@@ -61,6 +62,7 @@ api_router.include_router(notification_router)
 api_router.include_router(channels_router)
 api_router.include_router(sgp_router)
 api_router.include_router(asaas_router)
+api_router.include_router(partners_router)
 
 # Include the API router in the main app
 app.include_router(api_router)

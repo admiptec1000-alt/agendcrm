@@ -12,9 +12,10 @@ import {
   Sparkles, Calendar, CalendarCheck, CalendarDays, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
+import PartnerPage from './PartnerPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
 import TagsPage from '../CRM/TagsPage';
 import KanbanPage from '../CRM/KanbanPage';
@@ -29,7 +30,7 @@ const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
   Megaphone, GitBranch, Info, Code, UserCog, Bot, Link, Sparkles, Calendar,
   CalendarCheck, UserCheck, FolderOpen, Scissors, CreditCard, Briefcase,
-  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor, Shield, FileText
+  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor, Shield, FileText, HandCoins
 };
 
 const FEATURE_META = {
@@ -70,6 +71,7 @@ const FEATURE_META = {
   indoor:             { icon: 'Monitor',          label: 'Indoor / TV', group: 'Config Empresa' },
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
   perfis_acesso:      { icon: 'Shield',           label: 'Perfis de Acesso', group: 'Administracao' },
+  parceiros:          { icon: 'HandCoins',         label: 'Programa de Parceiros', group: 'Config Empresa' },
 };
 
 const CompanyDashboard = () => {
@@ -106,6 +108,12 @@ const CompanyDashboard = () => {
   const enabledFeatures = useMemo(() => {
     const feats = user?.company?.features || [];
     const companyEnabled = feats.filter(f => f.enabled).map(f => f.feature_key);
+    // If the company is flagged as partner by the SuperAdmin, the
+    // "parceiros" page is automatically available even though it's not
+    // declared in the company's plan features.
+    if (user?.company?.is_partner) {
+      if (!companyEnabled.includes('parceiros')) companyEnabled.push('parceiros');
+    }
     const isAdmin = user?.role === 'company_admin' || user?.role === 'super_admin';
     const perms = user?.permissions || [];
     // Super-admin "All Modules" mode: show every feature in FEATURE_META,
@@ -641,6 +649,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'campanhas': return <CampaignsPage />;
     case 'tags': return <TagsPage />;
     case 'flowbuilder': return <FlowBuilderPage />;
+    case 'parceiros': return <PartnerPage />;
     case 'agente_ia': return <AIPage />;
     case 'conexoes': return <ConexoesPage />;
     case 'filas_chatbot': return <QueuesPage />;

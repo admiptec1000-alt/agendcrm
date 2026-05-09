@@ -136,6 +136,17 @@ async def register_company(
         if bt:
             features = bt.get("features", [])
 
+    # Validate referral code (if provided): only counts if it points to an
+    # active partner. Invalid codes are silently dropped — no leakage.
+    referred_by = None
+    if data.referred_by:
+        ref = await db.companies.find_one(
+            {"referral_code": data.referred_by.upper().strip(), "is_partner": True},
+            {"_id": 0, "referral_code": 1},
+        )
+        if ref:
+            referred_by = ref["referral_code"]
+
     # Create company
     company_id = str(uuid.uuid4())
     company = {
@@ -147,6 +158,7 @@ async def register_company(
         "business_type_id": data.business_type_id,
         "features": features,
         "theme_colors": ThemeColors().model_dump(),
+        "referred_by": referred_by,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.companies.insert_one(company)

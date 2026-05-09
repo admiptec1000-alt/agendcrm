@@ -91,6 +91,7 @@ class RegisterRequest(BaseModel):
     company_name: Optional[str] = None
     business_type_id: Optional[str] = None  # ID do tipo de negócio
     plan_type: PlanType = PlanType.BOTH
+    referred_by: Optional[str] = None  # partner referral code (8-char) captured from /r/<code>
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -116,6 +117,7 @@ class CompanyCreate(BaseModel):
     admin_email: EmailStr
     admin_password: str
     subdomain: Optional[str] = None
+    referred_by: Optional[str] = None  # partner referral code captured from /r/<code>
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None

@@ -9,7 +9,7 @@ import {
   Briefcase, BarChart3, Eye, Check, Scissors, Stethoscope,
   Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe,
   Monitor, ExternalLink, Tv, Link as LinkIcon, RefreshCw,
-  Receipt, Package, Copy
+  Receipt, Package, Copy, HandCoins, ShieldCheck
 } from 'lucide-react';
 
 const iconMap = {
@@ -57,7 +57,8 @@ const SuperAdminDashboard = () => {
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { key: 'companies', label: 'Empresas', icon: Building },
     { key: 'business-types', label: 'Tipos de Negocio', icon: Briefcase },
-    { key: 'financial', label: 'Financeiro', icon: Receipt },
+    { key: 'partners', label: 'Parceiros', icon: HandCoins },
+    { key: 'financial', label: 'Financeiro Admin', icon: Receipt },
     { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
   ];
@@ -189,6 +190,7 @@ const SuperAdminDashboard = () => {
             />
           )}
           {activeTab === 'plans' && <PlansTab />}
+          {activeTab === 'partners' && <PartnersTab companies={companies} onRefresh={loadDashboardData} />}
           {activeTab === 'financial' && <FinancialTab companies={companies} />}
           {activeTab === 'indoor' && <IndoorTab companies={companies} />}
           {activeTab === 'settings' && <SettingsTab companies={companies} />}
@@ -561,6 +563,7 @@ const PlanModal = ({ initial, onClose, onSave }) => {
     billing_cycle: initial?.billing_cycle || 'monthly',
     installments: initial?.installments ?? 1,
     grace_days: initial?.grace_days ?? 5,
+    license_cost: initial?.license_cost ?? 0,
   });
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
   const toggleBt = (id) => {
@@ -592,6 +595,13 @@ const PlanModal = ({ initial, onClose, onSave }) => {
               <label className="text-xs font-medium text-slate-700 mb-1 block">Preço mensal (R$)</label>
               <input type="number" min={0} step="0.01" value={form.monthly_price} onChange={(e) => set('monthly_price', parseFloat(e.target.value) || 0)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="plan-price-input" />
             </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700 mb-1 block">Custo de licença (R$)</label>
+              <input type="number" min={0} step="0.01" value={form.license_cost} onChange={(e) => set('license_cost', parseFloat(e.target.value) || 0)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" data-testid="plan-license-cost-input" />
+              <p className="text-[10px] text-slate-400 mt-1">Custo que pagamos por cliente (infra/3rd-party). Usado p/ DRE.</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-slate-700 mb-1 block">Tipo</label>
               <select value={form.plan_type} onChange={(e) => set('plan_type', e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
@@ -667,6 +677,158 @@ const PlanModal = ({ initial, onClose, onSave }) => {
     </div>
   );
 };
+
+
+// ─── PARTNERS TAB ────────────────────────────────────────────────────────
+const PartnersTab = ({ companies, onRefresh }) => {
+  const [partners, setPartners] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/super-admin/partners');
+      setPartners(r.data || []);
+    } catch { toast.error('Erro ao carregar parceiros'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const togglePartner = async (company, isOn) => {
+    try {
+      await api.put(`/super-admin/companies/${company.id}/partner`, {
+        is_partner: isOn,
+        partner_commission_pct: company.partner_commission_pct ?? 20,
+        partner_recurring: company.partner_recurring ?? true,
+      });
+      toast.success(isOn ? 'Empresa virou parceira!' : 'Removida do programa');
+      load();
+      onRefresh && onRefresh();
+    } catch (e) { toast.error('Falha ao salvar'); }
+  };
+
+  const updatePartnerConfig = async (data) => {
+    try {
+      await api.put(`/super-admin/companies/${editing.id}/partner`, {
+        is_partner: true,
+        partner_commission_pct: parseFloat(data.pct) || 0,
+        partner_recurring: !!data.recurring,
+        partner_notes: data.notes || '',
+      });
+      toast.success('Comissao atualizada');
+      setEditing(null);
+      load();
+    } catch { toast.error('Falha ao atualizar'); }
+  };
+
+  const nonPartnerCompanies = (companies || []).filter(c => !partners.some(p => p.id === c.id));
+  const totalCommission = partners.reduce((sum, p) => sum + (p.commission_total || 0), 0);
+  const totalReferrals = partners.reduce((sum, p) => sum + (p.referred_count || 0), 0);
+
+  return (
+    <div className="space-y-4" data-testid="partners-tab">
+      {/* KPIs */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <KPI label="Parceiros ativos" value={partners.length} icon={HandCoins} color="emerald" testid="kpi-partners" />
+        <KPI label="Indicacoes totais" value={totalReferrals} icon={Users} color="blue" testid="kpi-referrals" />
+        <KPI label="Comissao gerada" value={`R$ ${totalCommission.toFixed(2)}`} icon={DollarSign} color="violet" testid="kpi-commission" />
+        <KPI label="Empresas elegiveis" value={nonPartnerCompanies.length} icon={Building} color="amber" testid="kpi-eligible" />
+      </div>
+
+      {/* Partners list */}
+      <div className="bg-white rounded-xl border border-slate-200">
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+          <h3 className="font-bold text-slate-800">Parceiros ativos</h3>
+          <span className="text-xs text-slate-500">{partners.length} parceiro(s)</span>
+        </div>
+        {loading ? (
+          <div className="p-6 text-center text-sm text-slate-400">Carregando...</div>
+        ) : partners.length === 0 ? (
+          <div className="p-6 text-center text-sm text-slate-400">
+            Nenhum parceiro ainda. Promova uma empresa cliente abaixo para gerar o link de indicacao dela.
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {partners.map(p => (
+              <div key={p.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-[200px]">
+                  <div className="font-semibold text-slate-800">{p.name}</div>
+                  <div className="text-xs text-slate-500 flex items-center gap-2">
+                    <code className="bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">{p.referral_code}</code>
+                    <span>{p.partner_commission_pct || 0}% {p.partner_recurring ? 'recorrente' : 'unico'}</span>
+                  </div>
+                </div>
+                <div className="text-xs text-slate-600 flex gap-3">
+                  <span><strong>{p.referred_count || 0}</strong> indicados</span>
+                  <span><strong>{p.active_referred_count || 0}</strong> ativos</span>
+                  <span className="text-emerald-600 font-semibold">R$ {(p.commission_total || 0).toFixed(2)}</span>
+                </div>
+                <button onClick={() => setEditing(p)} className="text-xs px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg" data-testid={`partner-edit-${p.id}`}>Editar</button>
+                <button onClick={() => togglePartner(p, false)} className="text-xs px-3 py-1 text-rose-600 hover:bg-rose-50 rounded-lg" data-testid={`partner-remove-${p.id}`}>Remover</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Promote new partner */}
+      <div className="bg-white rounded-xl border border-slate-200">
+        <div className="px-4 py-3 border-b border-slate-200">
+          <h3 className="font-bold text-slate-800">Promover empresa a parceira</h3>
+          <p className="text-[11px] text-slate-500 mt-0.5">Ao habilitar, a empresa recebe um link unico de indicacao e comeca a acumular comissao quando indicacoes pagam suas mensalidades.</p>
+        </div>
+        <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+          {nonPartnerCompanies.map(c => (
+            <div key={c.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
+              <div className="text-sm text-slate-800">{c.name}</div>
+              <button onClick={() => togglePartner(c, true)} className="text-xs px-3 py-1 bg-emerald-500 text-white hover:bg-emerald-600 rounded-lg" data-testid={`partner-promote-${c.id}`}>+ Tornar parceira</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {editing && (
+        <PartnerEditModal partner={editing} onClose={() => setEditing(null)} onSave={updatePartnerConfig} />
+      )}
+    </div>
+  );
+};
+
+const PartnerEditModal = ({ partner, onClose, onSave }) => {
+  const [pct, setPct] = useState(String(partner.partner_commission_pct ?? 20));
+  const [recurring, setRecurring] = useState(partner.partner_recurring !== false);
+  const [notes, setNotes] = useState(partner.partner_notes || '');
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()} data-testid="partner-edit-modal">
+        <h3 className="font-bold text-slate-800 mb-3">Comissao de {partner.name}</h3>
+        <label className="text-[10px] uppercase font-bold text-slate-400">% de comissao</label>
+        <input value={pct} onChange={e => setPct(e.target.value)} type="number" step="0.01" min="0" max="100" className="w-full px-3 py-2 border border-slate-300 rounded text-sm mb-3" data-testid="partner-pct-input" />
+        <label className="flex items-center gap-2 text-sm mb-3">
+          <input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} data-testid="partner-recurring-check" />
+          <span>Recorrente (toda fatura paga)</span>
+        </label>
+        <label className="text-[10px] uppercase font-bold text-slate-400">Notas</label>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2 border border-slate-300 rounded text-sm mb-3" />
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm border rounded">Cancelar</button>
+          <button onClick={() => onSave({ pct, recurring, notes })} className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded" data-testid="partner-save-btn">Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const KPI = ({ label, value, icon: Icon, color, testid }) => (
+  <div className="bg-white rounded-xl border border-slate-200 p-3" data-testid={testid}>
+    <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-slate-500">
+      <Icon className={`w-3.5 h-3.5 text-${color}-500`} /> {label}
+    </div>
+    <div className="text-xl font-bold text-slate-800 mt-1">{value}</div>
+  </div>
+);
+
 
 
 // ─── FINANCIAL TAB (invoices + suspension control) ──────────────────────────
