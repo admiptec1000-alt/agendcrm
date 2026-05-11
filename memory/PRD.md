@@ -10,9 +10,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-11 — AgendaPro respeita Horario de Funcionamento ✅
+
+- Endpoint existente `/api/scheduling/business-hours` agora alimenta os slots do AgendaPro.
+- **Day view**: slots renderizam apenas no intervalo configurado para aquele dia (ex.: Seg 08:00-18:00 mostra `08:00..17:30`). Dia inativo (ex.: domingo) mostra estado "Estabelecimento fechado neste dia" com instrucao para usar botao Novo.
+- **Week view**: usa a uniao das janelas ativas como linhas; celulas de dias fechados ou fora do horario do dia ficam dimmed/disabled (`bg-slate-50/80 pointer-events-none`).
+- Botao **Novo** continua aberto: o usuario pode digitar manualmente data/hora fora do expediente quando necessario. Apenas o clique-no-grid e restrito.
+- Removido `buildSlots`, `DAY_START_HOUR`, `DAY_END_HOUR` (hardcoded 07-22) — substituidos pelo `slotsFromRange(start, end)` adaptativo.
+
+
+
+**1) Tela inicial por Tipo de Negocio**
+
 ### 2026-05-11 — Tela inicial por BT + Slots 30min + Multi-servico + Fix Sync ✅
 
 **1) Tela inicial por Tipo de Negocio**
+- Modelo `BusinessTypeCreate/Update` ganhou campo `default_screen: Optional[str]`.
+- Modal SuperAdmin tem select `bt-default-screen` listando apenas features habilitadas.
+- Company Dashboard prioriza `user.business_type.default_screen` sobre o fallback heuristico.
+
+**2) Agenda Pro: rotulos de 30 min**
+- Antes `slot.endsWith(':00') ? slot : ''` → agora `{slot}` (todos visiveis).
+
+**3) Sync Agenda ↔ Agenda Pro**
+- `isoDate(d)` usa componentes locais (corrigia off-by-one em UTC-3 que ocultava agendamentos).
+- Coluna sintetica "Sem profissional" agrupa appointments orfaos.
+
+**4) Multi-servico**
+- `AppointmentCreate.extra_items` opcional. Backend soma duration/price, concatena `service_name`.
+- UI: checkbox panel "Servicos adicionais" no QuickBook (AgendaPro) e NewAppointmentModal (Agenda).
+
+
 - Modelo `BusinessTypeCreate/Update` ganhou campo `default_screen: Optional[str]`.
 - `super_admin_routes` POST/PUT business-types normaliza empty → None.
 - Modal SuperAdmin (`BusinessTypeModal`) tem select `bt-default-screen` que lista apenas features habilitadas.

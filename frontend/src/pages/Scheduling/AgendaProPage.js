@@ -26,8 +26,6 @@ import {
  */
 
 const SLOT_MIN = 30;
-const DAY_START_HOUR = 7;
-const DAY_END_HOUR = 22;
 
 const STATUS_COLORS = {
   pendente:    { bg: 'bg-amber-100',   bd: 'border-amber-400',   tx: 'text-amber-900' },
@@ -51,19 +49,26 @@ const addDays = (d, n) => { const c = new Date(d); c.setDate(c.getDate() + n); r
 const startOfWeek = (d) => { const c = new Date(d); c.setDate(c.getDate() - c.getDay()); return c; };
 const initials = (name) => (name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(s => s[0]).join('').toUpperCase();
 
-const buildSlots = () => {
-  const out = [];
-  for (let h = DAY_START_HOUR; h < DAY_END_HOUR; h++) {
-    for (let m = 0; m < 60; m += SLOT_MIN) {
-      out.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    }
-  }
-  return out;
-};
 const minutesFromHHMM = (hhmm) => {
   if (!hhmm) return 0;
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
+};
+
+// JS Date.getDay() → business_hours key
+const DAY_KEYS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
+
+// Build slot list from a business-hours range (start..end). Returns [] when
+// inactive. Uses SLOT_MIN (30) increments. The end slot is exclusive (last
+// bookable slot is end-SLOT_MIN, e.g. 18:00 → last slot is 17:30).
+const slotsFromRange = (start, end) => {
+  const out = [];
+  const s = minutesFromHHMM(start);
+  const e = minutesFromHHMM(end);
+  for (let m = s; m < e; m += SLOT_MIN) {
+    out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  }
+  return out;
 };
 
 export default function AgendaProPage() {
@@ -75,16 +80,50 @@ export default function AgendaProPage() {
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [openModal, setOpenModal] = useState(null);
+  const [businessHours, setBusinessHours] = useState(null); // {seg:{start,end,active}, ...}
 
-  const slots = useMemo(buildSlots, []);
+  // Slots adapt to business hours. In Day view, use that day's range; in
+  // Week view, use the widest active range so the grid has consistent rows
+  // (closed-day cells are visually disabled later).
+  const slots = useMemo(() => {
+    if (!businessHours) return [];
+    if (view === 'day') {
+      const key = DAY_KEYS[date.getDay()];
+      const h = businessHours[key] || {};
+      if (!h.active) return [];
+      return slotsFromRange(h.start || '08:00', h.end || '18:00');
+    }
+    // Week view: union of all active days
+    let minS = 24 * 60, maxE = 0;
+    Object.values(businessHours).forEach(h => {
+      if (!h?.active) return;
+      const s = minutesFromHHMM(h.start || '08:00');
+      const e = minutesFromHHMM(h.end || '18:00');
+      if (s < minS) minS = s;
+      if (e > maxE) maxE = e;
+    });
+    if (maxE <= minS) return [];
+    const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    return slotsFromRange(fmt(minS), fmt(maxE));
+  }, [businessHours, view, date]);
 
   useEffect(() => {
     Promise.all([
       schedulingAPI.getProfessionals().catch(() => ({ data: [] })),
       schedulingAPI.getServices().catch(() => ({ data: [] })),
-    ]).then(([p, s]) => {
+      api.get('/scheduling/business-hours').catch(() => ({ data: null })),
+    ]).then(([p, s, bh]) => {
       setProfessionals(p.data || []);
       setServices(s.data || []);
+      setBusinessHours(bh.data || {
+        seg: { start: '08:00', end: '18:00', active: true },
+        ter: { start: '08:00', end: '18:00', active: true },
+        qua: { start: '08:00', end: '18:00', active: true },
+        qui: { start: '08:00', end: '18:00', active: true },
+        sex: { start: '08:00', end: '18:00', active: true },
+        sab: { start: '08:00', end: '13:00', active: true },
+        dom: { start: '00:00', end: '00:00', active: false },
+      });
     });
   }, []);
 
@@ -152,11 +191,23 @@ export default function AgendaProPage() {
       const d = addDays(w0, i);
       return {
         id: isoDate(d),
+        dayKey: DAY_KEYS[d.getDay()],
         label: `${wd[i]} ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`,
         isToday: isoDate(d) === isoDate(new Date()),
       };
     });
   }, [view, date, professionals, activeProfId, hasOrphans]);
+
+  // Helper: check if a (column, slot) falls within that day's business hours.
+  // In Day view we already filter slots to the day range upstream, so this
+  // is only meaningful for Week view (to dim cells of closed/early-end days).
+  const isSlotInBusinessHours = useCallback((col, slot) => {
+    if (!businessHours || view === 'day') return true;
+    const h = businessHours[col.dayKey];
+    if (!h?.active) return false;
+    const m = minutesFromHHMM(slot);
+    return m >= minutesFromHHMM(h.start || '00:00') && m < minutesFromHHMM(h.end || '23:59');
+  }, [businessHours, view]);
 
   const headerLabel = useMemo(() => {
     if (view === 'day') {
@@ -320,7 +371,7 @@ export default function AgendaProPage() {
                 return (
                   <div
                     key={col.id + slot}
-                    className="border-b border-l border-slate-100 hover:bg-blue-50/50 cursor-pointer transition"
+                    className={`border-b border-l border-slate-100 transition ${isSlotInBusinessHours(col, slot) ? 'hover:bg-blue-50/50 cursor-pointer' : 'bg-slate-50/80 pointer-events-none'}`}
                     onClick={() => handleSlotClick(col, slot)}
                     onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
                     onDrop={(e) => {
@@ -336,6 +387,13 @@ export default function AgendaProPage() {
             </React.Fragment>
           ))}
         </div>
+        {view === 'day' && slots.length === 0 && (
+          <div className="p-12 text-center" data-testid="agendapro-closed-day">
+            <Lock className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+            <p className="text-sm font-semibold text-slate-600">Estabelecimento fechado neste dia</p>
+            <p className="text-xs text-slate-400 mt-1">Para agendar fora do horario de funcionamento, use o botao <strong>Novo</strong> acima e informe a data/hora manualmente.</p>
+          </div>
+        )}
       </div>
 
       {loading && <div className="text-center text-xs text-slate-400 mt-3">Carregando…</div>}
