@@ -38,7 +38,15 @@ const STATUS_COLORS = {
 };
 const BLOCK_STYLE = { bg: 'bg-slate-300/70', bd: 'border-slate-500 border-dashed', tx: 'text-slate-700' };
 
-const isoDate = (d) => d.toISOString().split('T')[0];
+const isoDate = (d) => {
+  // Use LOCAL date components to avoid timezone shifts (Brazil UTC-3 issue).
+  // Previously used d.toISOString().split('T')[0] which produced the wrong
+  // day for local midnight values, hiding appointments from AgendaPro.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
 const addDays = (d, n) => { const c = new Date(d); c.setDate(c.getDate() + n); return c; };
 const startOfWeek = (d) => { const c = new Date(d); c.setDate(c.getDate() - c.getDay()); return c; };
 const initials = (name) => (name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(s => s[0]).join('').toUpperCase();
@@ -101,13 +109,24 @@ export default function AgendaProPage() {
   const goNext = () => setDate(addDays(date, view === 'day' ? 1 : 7));
   const goToday = () => setDate(new Date());
 
+  // Detect appointments whose professional_id doesn't match any current
+  // professional (orphan/legacy) and bucket them under a synthetic "Sem
+  // profissional" column so they don't silently disappear.
+  const hasOrphans = useMemo(() => {
+    if (view !== 'day') return false;
+    const profIds = new Set(professionals.map(p => p.id));
+    const today = isoDate(date);
+    return appointments.some(a => a.date === today && (!a.professional_id || !profIds.has(a.professional_id)));
+  }, [appointments, view, date, professionals]);
+
   const apptsByCol = useMemo(() => {
     const map = {};
+    const profIds = new Set(professionals.map(p => p.id));
     for (const a of appointments) {
       if (view === 'day') {
         if (a.date !== isoDate(date)) continue;
-        if (activeProfId && a.professional_id !== activeProfId) continue;
-        const k = a.professional_id || '_';
+        const k = (a.professional_id && profIds.has(a.professional_id)) ? a.professional_id : '__orphan__';
+        if (activeProfId && k !== activeProfId) continue;
         (map[k] = map[k] || []).push(a);
       } else {
         if (activeProfId && a.professional_id !== activeProfId) continue;
@@ -116,12 +135,16 @@ export default function AgendaProPage() {
       }
     }
     return map;
-  }, [appointments, view, date, activeProfId]);
+  }, [appointments, view, date, activeProfId, professionals]);
 
   const columns = useMemo(() => {
     if (view === 'day') {
       const list = activeProfId ? professionals.filter(p => p.id === activeProfId) : professionals;
-      return list.map(p => ({ id: p.id, label: p.name, photo: p.photo_url }));
+      const cols = list.map(p => ({ id: p.id, label: p.name, photo: p.photo_url }));
+      if (hasOrphans && !activeProfId) {
+        cols.push({ id: '__orphan__', label: 'Sem profissional', photo: null });
+      }
+      return cols;
     }
     const w0 = startOfWeek(date);
     const wd = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
@@ -133,7 +156,7 @@ export default function AgendaProPage() {
         isToday: isoDate(d) === isoDate(new Date()),
       };
     });
-  }, [view, date, professionals, activeProfId]);
+  }, [view, date, professionals, activeProfId, hasOrphans]);
 
   const headerLabel = useMemo(() => {
     if (view === 'day') {
@@ -339,6 +362,7 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
     customer_name: apt.customer_name || '',
     customer_phone: apt.customer_phone || '',
     service_id: apt.service_id || (services[0]?.id || ''),
+    extra_service_ids: (apt.extra_items || []).map(it => it.service_id).filter(Boolean),
     professional_id: apt.professional_id || initial.professional_id || (professionals[0]?.id || ''),
     date: apt.date || initial.date || isoDate(new Date()),
     time: apt.time || initial.time || '',
@@ -429,11 +453,24 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
     if (!form.time) return toast.error('Informe o horário');
     setSaving(true);
     try {
+      // Build payload: include extra_items for multi-service appointments.
+      const extra_items = (form.extra_service_ids || [])
+        .map(sid => services.find(s => s.id === sid))
+        .filter(Boolean)
+        .map(s => ({
+          service_id: s.id,
+          name: s.name,
+          price: Number(s.price || 0),
+          duration: Number(s.duration || s.duration_min || 30),
+          type: 'service',
+        }));
+      const { extra_service_ids, ...rest } = form;
+      const payload = { ...rest, extra_items };
       if (editing) {
-        await schedulingAPI.updateAppointment(apt.id, form);
+        await schedulingAPI.updateAppointment(apt.id, payload);
         toast.success('Atualizado');
       } else {
-        await schedulingAPI.createAppointment(form);
+        await schedulingAPI.createAppointment(payload);
         toast.success('Agendamento criado');
       }
       onSaved();
@@ -527,8 +564,8 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-bold uppercase text-slate-400">Serviço</label>
-                <select value={form.service_id} onChange={e => setForm({ ...form, service_id: e.target.value })} className="input-field text-sm" data-testid="agendapro-service">
+                <label className="text-[10px] font-bold uppercase text-slate-400">Servico principal</label>
+                <select value={form.service_id} onChange={e => setForm({ ...form, service_id: e.target.value, extra_service_ids: form.extra_service_ids.filter(id => id !== e.target.value) })} className="input-field text-sm" data-testid="agendapro-service">
                   <option value="">— Selecione —</option>
                   {services.map(s => {
                     const dur = s.duration || s.duration_min || 30;
@@ -538,6 +575,49 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
                   })}
                 </select>
               </div>
+              {form.service_id && services.length > 1 && (() => {
+                const extras = services.filter(s => s.id !== form.service_id);
+                const main = services.find(s => s.id === form.service_id);
+                const mainDur = (main?.duration || main?.duration_min || 30);
+                const mainPrice = Number(main?.price || 0);
+                const selExtras = extras.filter(s => form.extra_service_ids.includes(s.id));
+                const totalDur = mainDur + selExtras.reduce((sum, s) => sum + (s.duration || s.duration_min || 30), 0);
+                const totalPrice = mainPrice + selExtras.reduce((sum, s) => sum + Number(s.price || 0), 0);
+                return (
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-slate-400">Servicos adicionais (opcional)</label>
+                    <div className="border border-slate-200 rounded-lg max-h-32 overflow-y-auto bg-slate-50 p-1.5 space-y-0.5" data-testid="agendapro-extras-list">
+                      {extras.map(s => {
+                        const dur = s.duration || s.duration_min || 30;
+                        const checked = form.extra_service_ids.includes(s.id);
+                        return (
+                          <label key={s.id} className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs ${checked ? 'bg-blue-100 text-blue-800' : 'bg-white hover:bg-blue-50 text-slate-700'}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setForm(f => ({
+                                  ...f,
+                                  extra_service_ids: checked
+                                    ? f.extra_service_ids.filter(id => id !== s.id)
+                                    : [...f.extra_service_ids, s.id],
+                                }));
+                              }}
+                              data-testid={`agendapro-extra-${s.id}`}
+                            />
+                            <span className="flex-1 truncate">{s.name}</span>
+                            <span className="text-[10px] text-slate-500 whitespace-nowrap">{dur}min · R$ {Number(s.price || 0).toFixed(2)}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-600" data-testid="agendapro-total-display">
+                      <span><strong>{selExtras.length}</strong> adicional(is)</span>
+                      <span><strong>{totalDur} min</strong> · R$ <strong>{totalPrice.toFixed(2)}</strong></span>
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
 

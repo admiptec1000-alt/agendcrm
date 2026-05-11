@@ -2311,6 +2311,7 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
     max_connections: businessType?.max_connections ?? 1,
     max_users: businessType?.max_users ?? 1,
     show_on_landing: businessType?.show_on_landing || false,
+    default_screen: businessType?.default_screen || '',
   });
   const [features, setFeatures] = useState(businessType?.features || []);
   const [mobileBottomNav, setMobileBottomNav] = useState(businessType?.mobile_bottom_nav || []);
@@ -2562,6 +2563,24 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
                 <p className="col-span-full text-xs text-slate-400 text-center py-4">Habilite funcionalidades acima para poder escolher.</p>
               )}
             </div>
+          </div>
+
+          <div className="border-t border-slate-200 pt-4">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-1">Tela Inicial</h3>
+            <p className="text-xs text-slate-500 mb-3">Define qual modulo abre automaticamente apos o login. Se vazio, o sistema escolhe um padrao baseado no Tipo Base.</p>
+            <select
+              data-testid="bt-default-screen"
+              value={form.default_screen}
+              onChange={(e) => setForm({ ...form, default_screen: e.target.value })}
+              className="input-field w-full md:w-1/2"
+            >
+              <option value="">— Padrao automatico —</option>
+              {allFeatures
+                .filter(f => isFeatureEnabled(f.feature_key))
+                .map(f => (
+                  <option key={f.feature_key} value={f.feature_key}>{f.label}</option>
+                ))}
+            </select>
           </div>
         </div>
 

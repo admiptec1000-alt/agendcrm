@@ -121,6 +121,7 @@ async def create_business_type(
         "base_type": data.base_type,
         "features": data.features,
         "mobile_bottom_nav": (data.mobile_bottom_nav or [])[:4],
+        "default_screen": (data.default_screen or "").strip() or None,
         "monthly_price": max(0.0, float(data.monthly_price or 0.0)),
         "billing_cycle": (data.billing_cycle or "monthly").lower(),
         "installments": max(1, int(data.installments or 1)),
@@ -175,6 +176,9 @@ async def update_business_type(
     # Cap bottom nav at 4 slots (Menu button takes the 5th position)
     if "mobile_bottom_nav" in update_data:
         update_data["mobile_bottom_nav"] = (update_data["mobile_bottom_nav"] or [])[:4]
+    # Normalize empty default_screen → null (means "use legacy default")
+    if "default_screen" in update_data:
+        update_data["default_screen"] = (update_data["default_screen"] or "").strip() or None
     if update_data:
         await db.business_types.update_one({"id": type_id}, {"$set": update_data})
 

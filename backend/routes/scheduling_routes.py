@@ -242,6 +242,41 @@ async def create_appointment(
                 raise HTTPException(status_code=400, detail=f"Creditos insuficientes (necessarios: {cost})")
 
     appointment_id = str(uuid.uuid4())
+    # ── Multi-service: sum extra services duration + price, build display name
+    extra_items = list(getattr(data, "extra_items", None) or [])
+    total_duration = int(service.get("duration") or 30)
+    total_original = float(service.get("price") or 0)
+    service_names = [service.get("name") or ""]
+    if extra_items:
+        # Resolve each extra item from DB to validate + canonicalize fields
+        normalized_extras: list = []
+        for it in extra_items:
+            sid = it.get("service_id")
+            if not sid or sid == data.service_id:
+                continue
+            extra_svc = await db.services.find_one({"id": sid, "company_id": user["company_id"]})
+            if not extra_svc:
+                continue
+            edur = int(extra_svc.get("duration") or 0)
+            eprice = float(extra_svc.get("price") or 0)
+            total_duration += edur
+            total_original += eprice
+            service_names.append(extra_svc.get("name") or "")
+            normalized_extras.append({
+                "service_id": sid,
+                "name": extra_svc.get("name"),
+                "price": eprice,
+                "duration": edur,
+                "type": "service",
+            })
+        extra_items = normalized_extras
+        # Recompute price when no subscription is being used; if subscription
+        # applies it stays at 0.0 (only debited 1 service slot — extras are
+        # billed at full price added on top).
+        if not subscription_applied:
+            price = total_original
+        else:
+            price = sum(e["price"] for e in extra_items)
     appointment = {
         "id": appointment_id,
         "company_id": user["company_id"],
@@ -249,15 +284,16 @@ async def create_appointment(
         "customer_phone": data.customer_phone,
         "customer_email": data.customer_email,
         "service_id": data.service_id,
-        "service_name": service["name"],
+        "service_name": " + ".join(service_names) if extra_items else service["name"],
         "professional_id": data.professional_id,
         "professional_name": professional["name"],
         "date": data.date,
         "time": data.time,
-        "duration": service["duration"],
+        "duration": total_duration,
         "price": price,
-        "original_price": service["price"],
+        "original_price": total_original,
         "subscription_applied": subscription_applied,
+        "extra_items": extra_items,
         "status": AppointmentStatus.PENDENTE,
         "notes": data.notes,
         "confirm_token": str(uuid.uuid4()),

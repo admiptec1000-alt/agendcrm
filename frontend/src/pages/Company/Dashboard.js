@@ -149,13 +149,16 @@ const CompanyDashboard = () => {
   }, []);
 
   // Pick a default page once enabled features are known.
-  // CRM-only -> 'atendimentos' (or first CRM feature); scheduling -> 'agenda'; fallback -> first enabled.
+  // Priority: business_type.default_screen (if enabled) > base_type heuristics > first enabled.
   useEffect(() => {
     if (activePage) return;
     if (!enabledFeatures || enabledFeatures.length === 0) return;
     if (baseType === null) return; // wait for base_type to be resolved
     let target = null;
-    if (baseType === 'crm') {
+    const configured = user?.business_type?.default_screen;
+    if (configured && enabledFeatures.includes(configured)) {
+      target = configured;
+    } else if (baseType === 'crm') {
       target = enabledFeatures.includes('atendimentos') ? 'atendimentos'
         : (enabledFeatures.includes('kanban') ? 'kanban'
         : (enabledFeatures.includes('contatos') ? 'contatos'
@@ -165,7 +168,7 @@ const CompanyDashboard = () => {
         : (enabledFeatures.includes('dashboard') ? 'dashboard' : enabledFeatures[0]);
     }
     setActivePage(target);
-  }, [enabledFeatures, baseType, activePage]);
+  }, [enabledFeatures, baseType, activePage, user?.business_type?.default_screen]);
 
   const menuGroups = useMemo(() => {
     const groups = {};
@@ -2006,11 +2009,18 @@ const AgendaPage = () => {
 
   const handleCreateAppointment = async ({ customer, booking }) => {
     try {
+      // Convert extra_service_ids → extra_items with full service data
+      const { extra_service_ids = [], ...rest } = booking;
+      const extra_items = extra_service_ids
+        .map(sid => services.find(s => s.id === sid))
+        .filter(Boolean)
+        .map(s => ({ service_id: s.id, name: s.name, price: Number(s.price || 0), duration: Number(s.duration || s.duration_min || 30), type: 'service' }));
       await schedulingAPI.createAppointment({
         customer_name: customer.name,
         customer_phone: customer.phone,
         customer_email: customer.email || undefined,
-        ...booking,
+        ...rest,
+        extra_items,
       });
       toast.success('Agendamento criado!');
       setShowNewApt(false);
@@ -2318,7 +2328,7 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
 
   // booking form
   const todayStr = new Date().toISOString().split('T')[0];
-  const [book, setBook] = useState({ service_id: '', professional_id: '', date: todayStr, time: '' });
+  const [book, setBook] = useState({ service_id: '', extra_service_ids: [], professional_id: '', date: todayStr, time: '' });
 
   // Subscription for currently picked client
   const [subInfo, setSubInfo] = useState(null); // { has_subscription, subscription, plan }
@@ -2389,6 +2399,14 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
     }
     onSave({ customer, booking: { ...book, use_subscription: !!useSubscription } });
   };
+
+  const _activeServices = services.filter(s => s.is_active);
+  const _mainSvc = _activeServices.find(s => s.id === book.service_id) || null;
+  const _extraSvcs = _activeServices.filter(s => book.extra_service_ids.includes(s.id) && s.id !== book.service_id);
+  const _totalDuration = (_mainSvc ? (_mainSvc.duration || _mainSvc.duration_min || 30) : 0)
+    + _extraSvcs.reduce((sum, s) => sum + (s.duration || s.duration_min || 30), 0);
+  const _totalPrice = (_mainSvc ? Number(_mainSvc.price || 0) : 0)
+    + _extraSvcs.reduce((sum, s) => sum + Number(s.price || 0), 0);
 
   const ready = (step === 'new'
       ? (newClient.name.trim().length >= 2 && newClient.phone.replace(/\D/g,'').length >= 10)
@@ -2559,12 +2577,12 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
               <select
                 value={book.service_id}
-                onChange={e => setBook({...book, service_id: e.target.value})}
+                onChange={e => setBook({...book, service_id: e.target.value, extra_service_ids: book.extra_service_ids.filter(id => id !== e.target.value)})}
                 className="w-full min-w-0 px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
                 data-testid="new-apt-service"
               >
-                <option value="">Servico...</option>
-                {services.filter(s => s.is_active).map(s => (
+                <option value="">Servico principal...</option>
+                {_activeServices.map(s => (
                   <option key={s.id} value={s.id}>{s.name} - R$ {s.price?.toFixed(2)}</option>
                 ))}
               </select>
@@ -2594,6 +2612,34 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
                 data-testid="new-apt-time"
               />
             </div>
+
+            {book.service_id && _activeServices.length > 1 && (
+              <div className="mt-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Servicos adicionais (opcional)</p>
+                <div className="border border-slate-200 rounded-lg max-h-32 overflow-y-auto bg-slate-50 p-1.5 space-y-0.5" data-testid="new-apt-extras-list">
+                  {_activeServices.filter(s => s.id !== book.service_id).map(s => {
+                    const dur = s.duration || s.duration_min || 30;
+                    const checked = book.extra_service_ids.includes(s.id);
+                    return (
+                      <label key={s.id} className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs ${checked ? 'bg-blue-100 text-blue-800' : 'bg-white hover:bg-blue-50 text-slate-700'}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setBook(b => ({ ...b, extra_service_ids: checked ? b.extra_service_ids.filter(id => id !== s.id) : [...b.extra_service_ids, s.id] }))}
+                          data-testid={`new-apt-extra-${s.id}`}
+                        />
+                        <span className="flex-1 truncate">{s.name}</span>
+                        <span className="text-[10px] text-slate-500 whitespace-nowrap">{dur}min · R$ {Number(s.price || 0).toFixed(2)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-600" data-testid="new-apt-total-display">
+                  <span><strong>{_extraSvcs.length}</strong> adicional(is)</span>
+                  <span><strong>{_totalDuration} min</strong> · R$ <strong>{_totalPrice.toFixed(2)}</strong></span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

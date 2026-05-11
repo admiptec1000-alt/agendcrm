@@ -52,6 +52,7 @@ class BusinessTypeCreate(BaseModel):
     base_type: PlanType  # crm, scheduling, both
     features: List[Dict[str, Any]] = []  # Lista de features habilitadas
     mobile_bottom_nav: List[str] = []    # Até 4 feature_keys para barra inferior mobile
+    default_screen: Optional[str] = None  # feature_key da tela inicial após login
     # Billing & limits — embedded so the Tipo de Negócio fully describes
     # both feature permissions AND commercial terms. When a company is
     # assigned this BT, invoices are auto-generated from these fields.
@@ -70,6 +71,7 @@ class BusinessTypeUpdate(BaseModel):
     base_type: Optional[PlanType] = None
     features: Optional[List[Dict[str, Any]]] = None
     mobile_bottom_nav: Optional[List[str]] = None
+    default_screen: Optional[str] = None
     is_active: Optional[bool] = None
     monthly_price: Optional[float] = None
     billing_cycle: Optional[str] = None
@@ -196,6 +198,7 @@ class AppointmentCreate(BaseModel):
     is_block: Optional[bool] = False         # Agenda block (no service)
     block_duration: Optional[int] = 30       # minutes (when is_block)
     block_reason: Optional[str] = None
+    extra_items: Optional[List[Dict[str, Any]]] = None  # multi-service: [{service_id, name, price, duration}]
 
 class AppointmentUpdate(BaseModel):
     status: Optional[AppointmentStatus] = None
