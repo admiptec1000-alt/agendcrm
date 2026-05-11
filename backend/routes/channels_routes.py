@@ -610,6 +610,9 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     #       real phone for the same LID.
     lid_jid = (data.get("lid_jid") or "").strip() or None
     from_me = bool(data.get("from_me"))  # True when operator sent from phone
+    is_group = bool(data.get("is_group"))
+    group_jid = (data.get("group_jid") or "").strip() or None
+    group_subject = (data.get("group_subject") or "").strip() or None
     # Optional inbound media (audio/image/video/document). The microservice
     # downloads the encrypted payload via Baileys, decrypts it and forwards
     # the decoded bytes as base64. We persist it to object storage here so
@@ -737,11 +740,22 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
                     f"(matched by push_name, real_phone={fallback_ticket.get('customer_phone')})"
                 )
 
-    ticket = fallback_ticket or await db.tickets.find_one({
-        "company_id": company_id,
-        "customer_phone": phone,
-        "status": {"$nin": ["fechado"]}
-    })
+    if is_group:
+        # Group messages live in their own ticket scoped to the group_jid
+        # so the operator sees one conversation per WhatsApp group, not per
+        # member. Channel="whatsapp_group" lets the UI render a separate tab.
+        ticket = await db.tickets.find_one({
+            "company_id": company_id,
+            "group_jid": group_jid,
+            "status": {"$nin": ["fechado"]},
+        })
+    else:
+        ticket = fallback_ticket or await db.tickets.find_one({
+            "company_id": company_id,
+            "customer_phone": phone,
+            "channel": {"$ne": "whatsapp_group"},
+            "status": {"$nin": ["fechado"]}
+        })
 
     new_message = {
         "id": str(uuid.uuid4()),
@@ -800,12 +814,15 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "company_id": company_id,
             "connection_id": instance_id,
             "client_id": client_id,
-            "customer_name": name,
+            "customer_name": (group_subject if is_group else name) or name,
             "customer_phone": phone,
             "customer_email": None,
             "status": "aberto",
             "priority": "medium",
-            "channel": "whatsapp",
+            "channel": "whatsapp_group" if is_group else "whatsapp",
+            "is_group": is_group,
+            "group_jid": group_jid,
+            "group_subject": group_subject,
             "description": text[:140] if text else None,
             "assigned_to": None,
             "messages": [new_message],

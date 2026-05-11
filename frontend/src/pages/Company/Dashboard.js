@@ -12,7 +12,7 @@ import {
   Sparkles, Calendar, CalendarCheck, CalendarDays, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins, Paperclip
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import PartnerPage from './PartnerPage';
@@ -1642,13 +1642,23 @@ const BookFromClientForm = ({ services, professionals, onSave }) => {
 const QuickResponsesPage = () => {
   const [items, setItems] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ title: '', content: '', shortcut: '' });
+  const [form, setForm] = useState({ title: '', content: '', shortcut: '', attachment_filename: '', attachment_mimetype: '', attachment_data_b64: '' });
   useEffect(() => { crmAPI.getQuickResponses().then(r => setItems(r.data)).catch(() => {}); }, []);
+  const handleFile = (file) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.error('Arquivo muito grande (max 5MB)'); return; }
+    const reader = new FileReader();
+    reader.onload = e => {
+      const b64 = String(e.target.result).split(',')[1] || '';
+      setForm(f => ({ ...f, attachment_filename: file.name, attachment_mimetype: file.type || 'application/octet-stream', attachment_data_b64: b64 }));
+    };
+    reader.readAsDataURL(file);
+  };
   const handleSave = async () => {
     await crmAPI.createQuickResponse(form);
     toast.success('Resposta criada!');
     setShowAdd(false);
-    setForm({ title: '', content: '', shortcut: '' });
+    setForm({ title: '', content: '', shortcut: '', attachment_filename: '', attachment_mimetype: '', attachment_data_b64: '' });
     crmAPI.getQuickResponses().then(r => setItems(r.data));
   };
   return (
@@ -1665,6 +1675,9 @@ const QuickResponsesPage = () => {
               {i.shortcut && <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">/{i.shortcut}</code>}
             </div>
             <p className="text-sm text-slate-600">{i.content}</p>
+            {i.attachment_filename && (
+              <p className="text-[11px] text-emerald-700 mt-1 inline-flex items-center gap-1"><Paperclip className="w-3 h-3" />{i.attachment_filename}</p>
+            )}
           </div>
         ))}
       </div>
@@ -1674,6 +1687,21 @@ const QuickResponsesPage = () => {
             <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="Titulo" className="input-field" />
             <textarea value={form.content} onChange={e => setForm({...form, content: e.target.value})} placeholder="Conteudo da resposta" className="input-field" rows={3} />
             <input value={form.shortcut} onChange={e => setForm({...form, shortcut: e.target.value})} placeholder="Atalho (ex: ola)" className="input-field" />
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Anexo (opcional)</label>
+              <input
+                type="file"
+                onChange={e => handleFile(e.target.files?.[0])}
+                className="text-xs w-full"
+                data-testid="quick-response-file"
+              />
+              {form.attachment_filename && (
+                <div className="flex items-center justify-between mt-1 text-xs bg-emerald-50 px-2 py-1 rounded">
+                  <span className="text-emerald-700 truncate">{form.attachment_filename}</span>
+                  <button onClick={() => setForm(f => ({ ...f, attachment_filename: '', attachment_mimetype: '', attachment_data_b64: '' }))} className="text-red-500 ml-2">×</button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex justify-end gap-2 mt-4"><button onClick={() => setShowAdd(false)} className="btn-secondary text-sm">Cancelar</button><button onClick={handleSave} className="btn-primary text-sm">Salvar</button></div>
         </Modal>
@@ -6538,6 +6566,19 @@ const PerfilAcessoForm = ({ profile, features, onSave }) => {
               </div>
             );
           })}
+          {/* M5 — Special permissions beyond feature access (data scoping) */}
+          <div className="border-2 border-amber-200 rounded-xl p-3 bg-amber-50/30" data-testid="permission-group-advanced">
+            <p className="text-xs font-bold uppercase text-amber-700 mb-2">Permissoes avancadas</p>
+            <label className="flex items-center gap-2 p-2 rounded-lg hover:bg-amber-50 cursor-pointer" data-testid="permission-toggle-quotes-view-all">
+              <input
+                type="checkbox"
+                checked={form.permissions.includes('quotes.view_all')}
+                onChange={() => toggle('quotes.view_all')}
+                className="w-4 h-4 rounded text-primary"
+              />
+              <span className="text-sm text-slate-700">Ver todos os orcamentos da empresa <span className="text-[10px] text-slate-500">(sem este, ve apenas os que criou)</span></span>
+            </label>
+          </div>
         </div>
       </div>
       <div className="flex justify-end sticky bottom-0 bg-white pt-3 border-t border-slate-100">

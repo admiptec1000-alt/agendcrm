@@ -102,6 +102,20 @@ async def list_tickets(
     safe_offset = max(0, int(offset or 0))
     cursor = db.tickets.find(query, {"_id": 0}).sort("updated_at", -1).skip(safe_offset).limit(safe_limit)
     tickets = await cursor.to_list(safe_limit)
+    # Annotate each ticket with the registered client name (when the phone
+    # matches a record in `clients`). The list UI shows this instead of the
+    # raw WhatsApp pushName so the operator sees the CRM-canonical name.
+    phones = list({t.get("customer_phone") for t in tickets if t.get("customer_phone")})
+    if phones:
+        clients = await db.clients.find(
+            {"company_id": user["company_id"], "phone": {"$in": phones}},
+            {"_id": 0, "phone": 1, "name": 1},
+        ).to_list(len(phones))
+        name_by_phone = {c["phone"]: c.get("name") for c in clients if c.get("name")}
+        for t in tickets:
+            ph = t.get("customer_phone")
+            if ph and name_by_phone.get(ph):
+                t["client_registered_name"] = name_by_phone[ph]
     return tickets
 
 @router.get("/tickets/counts")
@@ -114,10 +128,15 @@ async def get_ticket_counts(
     vis = _ticket_visibility_filter(user)
     if vis:
         base = {**base, **vis}
-    atendendo = await db.tickets.count_documents({**base, "status": {"$in": ["aberto", "em_cobranca", "proposta"]}})
-    aguardando = await db.tickets.count_documents({**base, "status": {"$in": ["pago", "bloqueado"]}})
+    atendendo = await db.tickets.count_documents({**base, "status": {"$nin": ["fechado", "cancelado"]}, "assigned_to": {"$nin": [None, ""]}, "channel": {"$ne": "whatsapp_group"}})
+    aguardando = await db.tickets.count_documents({
+        **base, "status": {"$nin": ["fechado", "cancelado"]},
+        "channel": {"$ne": "whatsapp_group"},
+        "$or": [{"assigned_to": None}, {"assigned_to": {"$exists": False}}, {"assigned_to": ""}],
+    })
+    grupos = await db.tickets.count_documents({**base, "status": {"$nin": ["fechado", "cancelado"]}, "channel": "whatsapp_group"})
     total = await db.tickets.count_documents(base)
-    return {"atendendo": atendendo, "aguardando": aguardando, "total": total}
+    return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "total": total}
 
 
 @router.get("/tickets/{ticket_id}")
@@ -524,10 +543,22 @@ async def add_message_to_ticket(
     ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket não encontrado")
-    
+
+    # Signature prefix (operator name) — opt-in via MessageCreate.with_signature.
+    # Default True so existing behavior is preserved when callers omit the flag.
+    outbound_content = data.content
+    if (
+        data.sender_type == "agent"
+        and getattr(data, "with_signature", True)
+        and ticket.get("channel") == "whatsapp"
+        and (user.get("name") or "").strip()
+    ):
+        sig = (user["name"] or "").strip()
+        outbound_content = f"*{sig}:*\n{data.content}"
+
     message = {
         "id": str(uuid.uuid4()),
-        "content": data.content,
+        "content": outbound_content,
         "sender_type": data.sender_type,
         "sender_id": user["id"],
         "sender_name": user["name"],
@@ -565,7 +596,7 @@ async def add_message_to_ticket(
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(
                         f"{wa_url}/instances/{conn_id}/send",
-                        json={"phone": target_phone, "message": data.content}
+                        json={"phone": target_phone, "message": outbound_content}
                     )
                     try:
                         res = resp.json()
@@ -617,6 +648,111 @@ async def add_message_to_ticket(
 # === TICKET TAGS ===
 class TicketTagToggle(BaseModel):
     tag: str
+
+
+@router.post("/tickets/{ticket_id}/media")
+async def send_media_to_ticket(
+    ticket_id: str,
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Send a media file (image/audio/video/document) to the customer via WA.
+
+    Body: {
+      filename: str,
+      mimetype: str,
+      data_base64: str,
+      caption: str | None,    # optional text shown with the file (not for audio)
+    }
+
+    Persists the message on the ticket and forwards the bytes to the WA
+    microservice. Audio with `audio/*` mimetype is sent as a PTT voice note.
+    """
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    if ticket.get("channel") != "whatsapp":
+        raise HTTPException(status_code=400, detail="Ticket nao e WhatsApp")
+    filename = (payload.get("filename") or "arquivo").strip()
+    mimetype = (payload.get("mimetype") or "application/octet-stream").strip()
+    data_b64 = payload.get("data_base64") or ""
+    caption = (payload.get("caption") or "").strip()
+    if not data_b64:
+        raise HTTPException(status_code=400, detail="data_base64 obrigatorio")
+    is_audio = mimetype.startswith("audio/")
+    is_image = mimetype.startswith("image/")
+    attachment_kind = "audio" if is_audio else ("image" if is_image else (
+        "video" if mimetype.startswith("video/") else "document"
+    ))
+    message_id = str(uuid.uuid4())
+    message = {
+        "id": message_id,
+        "content": caption or ("[Audio]" if is_audio else f"[{attachment_kind}] {filename}"),
+        "sender_type": "agent",
+        "sender_id": user["id"],
+        "sender_name": user["name"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "delivery_status": "pending",
+        "type": attachment_kind,
+        "attachment_kind": attachment_kind,
+        "attachment_filename": filename,
+        "attachment_mimetype": mimetype,
+        "attachment_data_b64": data_b64,  # stored so the chat can replay
+    }
+    await db.tickets.update_one(
+        {"id": ticket_id},
+        {"$push": {"messages": message}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    # Try forwarding to WA microservice
+    conn_id = ticket.get("connection_id")
+    if not conn_id:
+        return {"queued": True, "message": message}
+    wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3001")
+    target_phone = ticket.get("customer_phone")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{wa_url}/instances/{conn_id}/send-media",
+                json={
+                    "phone": target_phone,
+                    "filename": filename,
+                    "mimetype": mimetype,
+                    "data_base64": data_b64,
+                    "caption": caption or "",
+                },
+            )
+            if resp.status_code == 200 and resp.json().get("success"):
+                msg_id_wa = resp.json().get("message_id")
+                await db.tickets.update_one(
+                    {"id": ticket_id, "messages.id": message_id},
+                    {"$set": {
+                        "messages.$.delivery_status": "sent",
+                        "messages.$.wa_message_id": msg_id_wa,
+                    }},
+                )
+                message["delivery_status"] = "sent"
+                message["wa_message_id"] = msg_id_wa
+            else:
+                err = (resp.json() or {}).get("error") or f"HTTP {resp.status_code}"
+                await db.tickets.update_one(
+                    {"id": ticket_id, "messages.id": message_id},
+                    {"$set": {"messages.$.delivery_status": "failed", "messages.$.delivery_error": err}},
+                )
+                message["delivery_status"] = "failed"
+                message["delivery_error"] = err
+    except Exception as e:
+        await db.tickets.update_one(
+            {"id": ticket_id, "messages.id": message_id},
+            {"$set": {"messages.$.delivery_status": "failed", "messages.$.delivery_error": str(e)}},
+        )
+        message["delivery_status"] = "failed"
+        message["delivery_error"] = str(e)
+    # Don't return the base64 in the response to avoid 50MB JSON
+    response = {**message}
+    response.pop("attachment_data_b64", None)
+    return response
 
 
 @router.post("/tickets/{ticket_id}/tags/add")
@@ -782,6 +918,9 @@ async def create_quick_response(
         "title": data.title,
         "content": data.content,
         "shortcut": data.shortcut,
+        "attachment_filename": data.attachment_filename or None,
+        "attachment_mimetype": data.attachment_mimetype or None,
+        "attachment_data_b64": data.attachment_data_b64 or None,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.quick_responses.insert_one(response)
@@ -1174,6 +1313,7 @@ class QueueCreate(BaseModel):
     description: Optional[str] = ""
     welcome_message: Optional[str] = ""
     bot_flow_id: Optional[str] = None
+    connection_ids: Optional[List[str]] = None  # M3: queue → 1+ WhatsApp connections
 
 
 class QueueUpdate(BaseModel):
@@ -1182,6 +1322,7 @@ class QueueUpdate(BaseModel):
     description: Optional[str] = None
     welcome_message: Optional[str] = None
     bot_flow_id: Optional[str] = None
+    connection_ids: Optional[List[str]] = None
 
 
 @router.get("/queues")
@@ -1206,6 +1347,7 @@ async def create_queue(
         "description": data.description or "",
         "welcome_message": data.welcome_message or "",
         "bot_flow_id": data.bot_flow_id,
+        "connection_ids": data.connection_ids or [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.queues.insert_one(doc)

@@ -10,7 +10,38 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
-### 2026-05-11 — AgendaPro: duracao real + service search moderno ✅
+### 2026-05-11 — Mega batch: 15+ melhorias Atendimentos + Orçamentos + Filas + Permissões ✅
+
+**Atendimentos (QW + M1)**
+- QW2 — Editar contato: "Ver mais" sempre aberto.
+- QW3 — Campos CPF/CNPJ com máscara automática (000.000.000-00 / 00.000.000/0000-00).
+- QW4 — Seletor de coluna Kanban movido da sidebar do contato para o header do chat (ao lado das Tags).
+- QW5 — Lista de tickets mostra nome do cliente cadastrado no CRM (fallback para pushName do WhatsApp).
+- ?1 — Badge **"com orçamento (N)"** ao digitar CPF/CNPJ que já tem orçamento (endpoint GET /quotes/by-document/:doc).
+- ?2 — Toggle assinatura (ícone lápis ao lado do campo). Padrão ON: prefixa `*Nome do Atendente:*\n…`. OFF: envia sem prefixo. Backend `MessageCreate.with_signature`.
+- M1 — Habilitados 5 botões no chat: **anexar (Paperclip)** com input file, **emoji picker** com 75 emojis, **transferir** (modal Para usuário / Para fila), **gravar áudio** (MediaRecorder → opus → WA PTT), **fechar ticket** (status=fechado).
+- M7 — Tabs reorganizadas: **Atendendo** = `assigned_to` definido. **Aguardando** = `assigned_to` vazio. (não-puxado → Aguardando automaticamente)
+- G1 — Nova aba **Grupos**: microservice agora aceita `@g.us`, backend cria tickets com `channel: whatsapp_group`, frontend separa por tab.
+
+**Orçamentos (QW1 + M5 + M6 + G2)**
+- QW1 — Removido auto-pick do template padrão.
+- M5 — Permissão `quotes.view_all` adicionada em "Permissões avançadas" do perfil. Sem ela, usuário vê apenas orçamentos que ele criou.
+- M6 — Lista de orçamentos: colunas **CPF/CNPJ** + **Usuário criador**. Filtros: CPF/CNPJ, Cliente (regex), Usuário (dropdown).
+- G2 — Templates ganharam aba **"Layout (papel timbrado)"**: upload PNG/JPG da arte do papel timbrado; PDF rende com a imagem como background-image @page e padding configurável (top/bottom/x em mm). Header/footer são ignorados quando layout está ativo, evitando desfiguração.
+
+**Filas (M3)**
+- Queue model ganhou `connection_ids: List[str]`. UI tem checkbox list para vincular uma ou mais conexões WhatsApp à fila.
+
+**Respostas Rápidas (M4)**
+- Campo de anexo (arquivo até 5MB) com preview do nome no card.
+
+**WhatsApp microservice**
+- `messages.upsert` agora processa `@g.us` (groups). Forwarda `is_group`, `group_jid`, `group_subject` para o backend.
+- `send-media` reconhece `audio/*` e envia como PTT (voice note) com `ptt: true`. `video/*` → vídeo. Outros → documento.
+
+**IMPORTANTE PARA PRODUÇÃO:** Redeploy do whatsapp-service junto com o backend (mudanças em groups + audio PTT).
+
+
 
 **1) Agendamento de 90min preenche 3 slots (antes pintava 30min)**
 
@@ -19,6 +50,11 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microservice `whatsapp-service/index.js` parou de descartar `key.fromMe`; envia `from_me: true` no payload.
 - Backend `webhook/message` persiste fromMe como `sender_type: 'agent'`, `delivery_status: 'sent'`, `source: 'phone'`. Bypassa @lid fallback, flow trigger e criacao de ticket orfao. Dedupe via `wa_message_id`.
 - Requer redeploy do whatsapp-service + backend em producao.
+
+### 2026-05-11 — AgendaPro: duracao real + service search unificado ✅
+- Bug do `gridRow span` corrigido (coordenadas explicitas, span = ceil(duration/30)).
+- Search picker moderno com chips uniformes (sem distincao Principal/Adicional) nos modais Novo Agendamento e QuickBook.
+
 
 - Bug raiz: `apt.duration` era usado para calcular `span` mas o layout CSS Grid usava `gridRow: span N` sem `gridColumn` explicito. Cells subsequentes do mesmo column entravam na "next available" cell e empurravam a coluna, mascarando o efeito visual da duracao.
 - Fix: `gridColumn` e `gridRow` explicitos em todas as celulas. Calculo da `span = ceil(duration / 30)`. Celulas cobertas por um appt multi-slot anterior nao sao renderizadas (evita overlap). Bloco do appt agora exibe `duration` no rodape para confirmacao visual.

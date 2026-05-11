@@ -183,6 +183,7 @@ class TicketUpdate(BaseModel):
 class MessageCreate(BaseModel):
     content: str
     sender_type: str  # user, agent, system, ai
+    with_signature: Optional[bool] = True  # prepend operator name to outbound content
 
 # Appointment Models
 class AppointmentCreate(BaseModel):
@@ -275,6 +276,10 @@ class QuickResponseCreate(BaseModel):
     title: str
     content: str
     shortcut: Optional[str] = None
+    # M4 — optional attachment (base64-encoded) sent alongside the message
+    attachment_filename: Optional[str] = None
+    attachment_mimetype: Optional[str] = None
+    attachment_data_b64: Optional[str] = None
 
 # Campaign Models
 class CampaignAntiBlock(BaseModel):

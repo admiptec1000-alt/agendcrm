@@ -303,6 +303,7 @@ const TEMPLATE_TABS = [
   { key: 'content', label: 'Conteudo' },
   { key: 'header', label: 'Cabecalho' },
   { key: 'footer', label: 'Rodape' },
+  { key: 'layout', label: 'Layout (papel timbrado)' },
 ];
 
 const buildQuillImageHandler = () => function () {
@@ -428,6 +429,76 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
         const heightVal = heightField
           ? (editing?.[heightField] ?? (heightField === 'header_height_mm' ? 22 : 18))
           : null;
+        // ── Layout (papel timbrado) sub-tab — full-page background image
+        if (t.key === 'layout') {
+          if (!isActive) return <div key={t.key} style={{ display: 'none' }} />;
+          const hasImg = !!editing?.layout_image_b64;
+          const handleLayoutFile = (file) => {
+            if (!file) return;
+            if (file.size > 10 * 1024 * 1024) { toast.error('Imagem muito grande (max 10MB)'); return; }
+            const reader = new FileReader();
+            reader.onload = ev => {
+              const b64 = String(ev.target.result).split(',')[1] || '';
+              setEditing(prev => ({
+                ...prev,
+                layout_image_b64: b64,
+                layout_image_mimetype: file.type || 'image/png',
+              }));
+            };
+            reader.readAsDataURL(file);
+          };
+          return (
+            <div key={t.key} data-testid="template-layout-tab" className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
+              <p className="text-xs text-slate-600">
+                Faca upload de uma imagem (PNG/JPG) do seu papel timbrado em A4. O orcamento sera renderizado <strong>em cima</strong> dessa imagem em todas as paginas — o cabecalho e rodape acima sao <strong>ignorados</strong> quando esta opcao esta ativa, evitando que a sobreposicao desfigure o leiaute.
+              </p>
+              <input
+                type="file"
+                accept="image/png,image/jpeg"
+                onChange={e => handleLayoutFile(e.target.files?.[0])}
+                className="text-xs w-full"
+                data-testid="template-layout-file-input"
+              />
+              {hasImg && (
+                <div className="flex items-start gap-3">
+                  <img
+                    src={`data:${editing.layout_image_mimetype || 'image/png'};base64,${editing.layout_image_b64}`}
+                    alt="Layout preview"
+                    className="border border-slate-300 rounded max-h-64 object-contain bg-white"
+                    data-testid="template-layout-preview"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEditing(prev => ({ ...prev, layout_image_b64: '', layout_image_mimetype: '' }))}
+                    className="px-2 py-1 text-xs border border-rose-300 text-rose-700 rounded hover:bg-rose-50"
+                    data-testid="template-layout-remove"
+                  >
+                    Remover layout
+                  </button>
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { k: 'layout_padding_top_mm', label: 'Margem topo (mm)', def: 40 },
+                  { k: 'layout_padding_bottom_mm', label: 'Margem rodape (mm)', def: 30 },
+                  { k: 'layout_padding_x_mm', label: 'Margem lateral (mm)', def: 18 },
+                ].map(p => (
+                  <div key={p.k}>
+                    <label className="text-[10px] font-bold uppercase text-slate-400">{p.label}</label>
+                    <input
+                      type="number"
+                      min={0} max={120}
+                      value={editing?.[p.k] ?? p.def}
+                      onChange={e => setEditing(prev => ({ ...prev, [p.k]: parseInt(e.target.value, 10) || p.def }))}
+                      className="input-field text-sm"
+                      data-testid={`template-${p.k}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        }
         return (
           <div
             key={t.key}
@@ -702,15 +773,28 @@ const QuotesTab = () => {
   const [editing, setEditing] = useState(null);
   const [previewing, setPreviewing] = useState(null);
   const [loading, setLoading] = useState(false);
+  // M6 filters
+  const [filterDoc, setFilterDoc] = useState('');
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterUser, setFilterUser] = useState('');
+  const [allUsers, setAllUsers] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await quotesAPI.list();
+      const params = {};
+      if (filterDoc.trim()) params.document = filterDoc.trim();
+      if (filterCustomer.trim()) params.customer = filterCustomer.trim();
+      if (filterUser) params.user_id = filterUser;
+      const { data } = await quotesAPI.list(params);
       setQuotes(data || []);
     } finally { setLoading(false); }
-  }, []);
+  }, [filterDoc, filterCustomer, filterUser]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    // Load users for the M6 "Usuario" filter dropdown
+    import('../../services/api').then(m => m.schedulingAPI.getCompanyUsers().catch(() => ({ data: [] })).then(r => setAllUsers(r.data || [])));
+  }, []);
 
   const handleDelete = async (id) => {
     if (!window.confirm('Excluir este orcamento?')) return;
@@ -736,7 +820,7 @@ const QuotesTab = () => {
 
   return (
     <div data-testid="quotes-list-tab">
-      <div className="flex justify-between items-center mb-3">
+      <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
         <p className="text-sm text-slate-600">Orcamentos sao gerados a partir de um atendimento. Abra um chat e use o atalho "Novo Orcamento" no header.</p>
         <button
           data-testid="new-quote-btn"
@@ -748,6 +832,40 @@ const QuotesTab = () => {
         </button>
       </div>
 
+      {/* M6 Filters */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
+        <input
+          value={filterDoc}
+          onChange={e => setFilterDoc(e.target.value)}
+          placeholder="CPF / CNPJ…"
+          className="input-field text-sm"
+          data-testid="filter-quote-document"
+        />
+        <input
+          value={filterCustomer}
+          onChange={e => setFilterCustomer(e.target.value)}
+          placeholder="Cliente…"
+          className="input-field text-sm"
+          data-testid="filter-quote-customer"
+        />
+        <select
+          value={filterUser}
+          onChange={e => setFilterUser(e.target.value)}
+          className="input-field text-sm"
+          data-testid="filter-quote-user"
+        >
+          <option value="">Usuario (todos)</option>
+          {allUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select>
+        <button
+          onClick={() => { setFilterDoc(''); setFilterCustomer(''); setFilterUser(''); }}
+          className="px-3 py-2 text-sm border border-slate-300 rounded-md hover:bg-slate-50"
+          data-testid="clear-quote-filters"
+        >
+          Limpar filtros
+        </button>
+      </div>
+
       {loading ? <div className="text-center py-8 text-slate-400">Carregando...</div> : (
         <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
           <table className="w-full text-sm">
@@ -755,6 +873,8 @@ const QuotesTab = () => {
               <tr>
                 <th className="px-4 py-2">N&ordm;</th>
                 <th className="px-4 py-2">Cliente</th>
+                <th className="px-4 py-2">CPF/CNPJ</th>
+                <th className="px-4 py-2">Usuario</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2 text-right">Total</th>
                 <th className="px-4 py-2">Criado em</th>
@@ -763,11 +883,13 @@ const QuotesTab = () => {
             </thead>
             <tbody>
               {quotes.length === 0 ? (
-                <tr><td colSpan={6} className="text-center text-slate-400 py-6">Nenhum orcamento ainda.</td></tr>
+                <tr><td colSpan={8} className="text-center text-slate-400 py-6">Nenhum orcamento ainda.</td></tr>
               ) : quotes.map(q => (
                 <tr key={q.id} className="border-t border-slate-100" data-testid={`quote-row-${q.id}`}>
                   <td className="px-4 py-2 font-mono text-slate-700">#{q.quote_number}</td>
                   <td className="px-4 py-2">{q.client_name || '—'}</td>
+                  <td className="px-4 py-2 text-xs text-slate-500 font-mono">{q.client_document || '—'}</td>
+                  <td className="px-4 py-2 text-xs text-slate-600">{q.created_by_name || '—'}</td>
                   <td className="px-4 py-2"><span className="text-xs bg-slate-100 px-2 py-0.5 rounded">{q.status}</span></td>
                   <td className="px-4 py-2 text-right font-medium text-emerald-700">{formatBRL(q.total_value)}</td>
                   <td className="px-4 py-2 text-slate-500 text-xs">{q.created_at ? new Date(q.created_at).toLocaleDateString('pt-BR') : ''}</td>
@@ -828,11 +950,9 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
       setTemplates(ts.data || []);
       setCatalogServices(ss.data || []);
       setCatalogFreights(fs.data || []);
-      // auto-pick default template
-      if (!form.template_id) {
-        const def = (ts.data || []).find(t => t.is_default);
-        if (def) setForm(f => ({ ...f, template_id: def.id }));
-      }
+      // Do NOT auto-pick the default template — the user must explicitly
+      // choose one for each quote (avoids accidentally sending the wrong
+      // layout when there are multiple templates per company).
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

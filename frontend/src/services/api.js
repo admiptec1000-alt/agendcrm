@@ -108,6 +108,7 @@ export const crmAPI = {
   mergeTickets: (srcId, dstId) => api.post(`/crm/tickets/${srcId}/merge-into/${dstId}`),
   resolveTicketLid: (ticketId, realPhone) => api.post(`/crm/tickets/${ticketId}/resolve-lid`, { real_phone: realPhone }),
   addMessage: (ticketId, data) => api.post(`/crm/tickets/${ticketId}/messages`, data),
+  sendMedia: (ticketId, data) => api.post(`/crm/tickets/${ticketId}/media`, data),
   addTicketTag: (ticketId, tag) => api.post(`/crm/tickets/${ticketId}/tags/add`, { tag }),
   removeTicketTag: (ticketId, tag) => api.post(`/crm/tickets/${ticketId}/tags/remove`, { tag }),
   // Kanban
@@ -341,6 +342,7 @@ export const quotesAPI = {
   reconvertTemplate: (id) => api.post(`/quotes/templates/${id}/reconvert-placeholders`),
   // Quotes
   list: (params) => api.get('/quotes', { params }),
+  findByDocument: (doc) => api.get(`/quotes/by-document/${encodeURIComponent(doc)}`),
   get: (id) => api.get(`/quotes/${id}`),
   create: (data) => api.post('/quotes', data),
   update: (id, data) => api.put(`/quotes/${id}`, data),

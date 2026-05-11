@@ -420,8 +420,10 @@ async function createConnection(instanceId) {
       // state as the phone. The webhook handler stores them as outgoing.
       const fromMe = !!msg.key.fromMe;
       const remoteJid = msg.key.remoteJid || '';
-      // Skip groups and status broadcasts (focus on 1-on-1 DMs for CRM)
-      if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
+      const isGroup = remoteJid.endsWith('@g.us');
+      // Skip status broadcasts and newsletters; groups are forwarded so the
+      // backend can decide (per-company setting) whether to surface them.
+      if (remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
 
       // CRITICAL: Modern WhatsApp uses Linked Device IDs (@lid) for contact
       // identification that DO NOT match the phone number. If we just strip
@@ -436,7 +438,20 @@ async function createConnection(instanceId) {
       //   6) strip @lid as last resort (will still create duplicate)
       let realJid = remoteJid;
       let lidResolvedSource = null;
-      if (remoteJid.endsWith('@lid')) {
+      let groupJid = null;
+      let groupSubject = null;
+      if (isGroup) {
+        // For group messages, remoteJid is the GROUP jid; the sender is in
+        // `participant`. We surface group conversations to the backend as a
+        // separate ticket type (channel=whatsapp_group).
+        groupJid = remoteJid;
+        const partJid = msg.key.participant || msg.key.participantPn || '';
+        realJid = partJid || remoteJid;
+        try {
+          const meta = await instance.groupMetadata(groupJid);
+          groupSubject = meta?.subject || null;
+        } catch (e) { /* best-effort */ }
+      } else if (remoteJid.endsWith('@lid')) {
         // Try Baileys' built-in fields first (these are SYNCHRONOUS / free)
         realJid = msg.key.senderPn
                || msg.key.participantPn
@@ -582,6 +597,9 @@ async function createConnection(instanceId) {
           media_filename: mediaFilename,
           media_base64: mediaB64,
           from_me: fromMe,  // true when operator sent it from the linked phone
+          is_group: isGroup,
+          group_jid: groupJid,
+          group_subject: groupSubject,
         }, { timeout: 30000, maxBodyLength: 50 * 1024 * 1024, maxContentLength: 50 * 1024 * 1024 });
         console.log(`[${instanceId}] ✓ webhook sent phone=${phone} ${fromMe ? '[FROM_ME]' : '[IN]'} text="${text.slice(0, 40)}"${mediaKind ? ' media='+mediaKind : ''} -> ${resp.status}`);
       } catch (e) {
@@ -800,14 +818,24 @@ app.post('/instances/:id/send-media', async (req, res) => {
 
     const buffer = Buffer.from(data_base64, 'base64');
     const isImage = (mimetype || '').startsWith('image/');
-    const payload = isImage
-      ? { image: buffer, caption: caption || '', mimetype: mimetype || 'image/png' }
-      : {
-          document: buffer,
-          mimetype: mimetype || 'application/octet-stream',
-          fileName: filename || 'file.bin',
-          caption: caption || '',
-        };
+    const isAudio = (mimetype || '').startsWith('audio/');
+    const isVideo = (mimetype || '').startsWith('video/');
+    let payload;
+    if (isImage) {
+      payload = { image: buffer, caption: caption || '', mimetype: mimetype || 'image/png' };
+    } else if (isAudio) {
+      // Send as voice note (ptt=true) so WA shows as audio bubble with play
+      payload = { audio: buffer, mimetype: mimetype || 'audio/ogg; codecs=opus', ptt: true };
+    } else if (isVideo) {
+      payload = { video: buffer, caption: caption || '', mimetype: mimetype || 'video/mp4' };
+    } else {
+      payload = {
+        document: buffer,
+        mimetype: mimetype || 'application/octet-stream',
+        fileName: filename || 'file.bin',
+        caption: caption || '',
+      };
+    }
 
     try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
     const sent = await instance.sock.sendMessage(targetJid, payload);

@@ -137,7 +137,7 @@ const TicketValueEditor = ({ ticket, onSaved }) => {
 const AtendimentosPage = () => {
   const { user } = useAuth();
   const [tickets, setTickets] = useState([]);
-  const [counts, setCounts] = useState({ atendendo: 0, aguardando: 0, total: 0 });
+  const [counts, setCounts] = useState({ atendendo: 0, aguardando: 0, grupos: 0, total: 0 });
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showContactInfo, setShowContactInfo] = useState(false);
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -162,6 +162,12 @@ const AtendimentosPage = () => {
   const [queues, setQueues] = useState([]);
   const [kanbanColumns, setKanbanColumns] = useState([]);
   const [messageInput, setMessageInput] = useState('');
+  const [withSignature, setWithSignature] = useState(true);  // ?2 — prefix outgoing msg with operator name (default ON)
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const fileInputRef = useRef(null);
   const [allTags, setAllTags] = useState([]);
   const [presenceMap, setPresenceMap] = useState({}); // phone -> {presence, updated_at}
   const [sending, setSending] = useState(false);
@@ -261,6 +267,81 @@ const AtendimentosPage = () => {
     setSelectedTicket(ticket);
     setShowContactInfo(false);
   };
+  // Send media file (image/audio/video/document) to the customer
+  const handleSendFile = async (file) => {
+    if (!file || !selectedTicket) return;
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error('Arquivo muito grande (max 20MB)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target.result;
+      const b64 = String(dataUrl).split(',')[1] || '';
+      try {
+        const r = await crmAPI.sendMedia(selectedTicket.id, {
+          filename: file.name,
+          mimetype: file.type || 'application/octet-stream',
+          data_base64: b64,
+        });
+        if (r.data?.delivery_status === 'failed') {
+          toast.error('Falha ao enviar: ' + (r.data.delivery_error || 'erro desconhecido'));
+        } else {
+          toast.success('Arquivo enviado');
+        }
+        loadMessages(selectedTicket.id);
+      } catch (err) {
+        toast.error(err.response?.data?.detail || 'Erro ao enviar arquivo');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // PTT voice recording via MediaRecorder API
+  const handleToggleRecording = async () => {
+    if (isRecording) {
+      try { mediaRecorderRef.current?.stop(); } catch {}
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      const chunks = [];
+      mr.ondataavailable = (ev) => { if (ev.data.size > 0) chunks.push(ev.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        setIsRecording(false);
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const b64 = String(e.target.result).split(',')[1] || '';
+          try {
+            const r = await crmAPI.sendMedia(selectedTicket.id, {
+              filename: 'audio.webm',
+              mimetype: 'audio/ogg; codecs=opus',  // WA expects opus
+              data_base64: b64,
+            });
+            if (r.data?.delivery_status === 'failed') {
+              toast.error('Falha ao enviar audio: ' + (r.data.delivery_error || ''));
+            } else {
+              toast.success('Audio enviado');
+            }
+            loadMessages(selectedTicket.id);
+          } catch {
+            toast.error('Erro ao enviar audio');
+          }
+        };
+        reader.readAsDataURL(blob);
+      };
+      mediaRecorderRef.current = mr;
+      mr.start();
+      setIsRecording(true);
+    } catch {
+      toast.error('Microfone negado ou indisponivel');
+    }
+  };
+
+
 
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !selectedTicket || sending) return;
@@ -268,7 +349,7 @@ const AtendimentosPage = () => {
     const text = messageInput;
     setMessageInput('');
     try {
-      const res = await crmAPI.addMessage(selectedTicket.id, { content: text, sender_type: 'agent' });
+      const res = await crmAPI.addMessage(selectedTicket.id, { content: text, sender_type: 'agent', with_signature: withSignature });
       if (res.data?.delivery_status === 'failed') {
         toast.error(`Mensagem nao entregue: ${res.data.delivery_error || 'erro'}`);
       }
@@ -474,6 +555,7 @@ const AtendimentosPage = () => {
         <div className="flex border-b border-slate-200">
           <TabButton active={activeTab === 'atendendo'} onClick={() => setActiveTab('atendendo')} label="Atendendo" count={counts.atendendo} testId="tab-atendendo" />
           <TabButton active={activeTab === 'aguardando'} onClick={() => setActiveTab('aguardando')} label="Aguardando" count={counts.aguardando} testId="tab-aguardando" />
+          <TabButton active={activeTab === 'grupos'} onClick={() => setActiveTab('grupos')} label="Grupos" count={counts.grupos} testId="tab-grupos" />
         </div>
 
         {/* List */}
@@ -484,7 +566,7 @@ const AtendimentosPage = () => {
                 <MessageSquare className="w-7 h-7 text-primary" />
               </div>
               <p className="text-sm font-semibold text-slate-700">Tudo em dia!</p>
-              <p className="text-xs text-slate-400 mt-1">{activeTab === 'atendendo' ? 'Nenhum atendimento em andamento' : 'Nenhum cliente aguardando'}</p>
+              <p className="text-xs text-slate-400 mt-1">{activeTab === 'atendendo' ? 'Nenhum atendimento em andamento' : activeTab === 'aguardando' ? 'Nenhum cliente aguardando' : 'Nenhuma conversa de grupo'}</p>
               <button onClick={() => setShowNewTicket(true)} className="mt-4 text-xs font-semibold text-primary hover:underline">
                 + Iniciar novo atendimento
               </button>
@@ -505,7 +587,7 @@ const AtendimentosPage = () => {
               >
                 <div className="relative flex-shrink-0">
                   <div className="w-11 h-11 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-sm">
-                    {ticket.customer_name?.substring(0, 2).toUpperCase()}
+                    {(ticket.client_registered_name || ticket.customer_name)?.substring(0, 2).toUpperCase()}
                   </div>
                   <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-100 flex items-center justify-center">
                     <Smartphone className="w-2.5 h-2.5 text-emerald-600" />
@@ -520,7 +602,7 @@ const AtendimentosPage = () => {
                           className="text-[10px] font-bold text-slate-400 flex-shrink-0"
                         >#{ticket.ticket_number}</span>
                       )}
-                      <p className="font-medium text-sm text-slate-900 truncate">{ticket.customer_name}</p>
+                      <p className="font-medium text-sm text-slate-900 truncate">{ticket.client_registered_name || ticket.customer_name}</p>
                     </div>
                     <span className="text-[10px] text-slate-400 flex-shrink-0 ml-2">{formatTime(ticket.updated_at)}</span>
                   </div>
@@ -570,18 +652,7 @@ const AtendimentosPage = () => {
                         + Puxar
                       </button>
                     )}
-                    {/* Kanban column - clicable */}
-                    <KanbanColumnPicker
-                      ticket={ticket}
-                      columns={kanbanColumns}
-                      onChange={async (newCol) => {
-                        try {
-                          await crmAPI.updateTicket(ticket.id, { kanban_column_id: newCol });
-                          toast.success('Etapa atualizada');
-                          loadData();
-                        } catch { toast.error('Falha ao atualizar etapa'); }
-                      }}
-                    />
+                    {/* Kanban column picker moved to chat header — list shows only Tags */}
                     {/* Tags — accept legacy NAME format and new ID (UUID) format. */}
                     {ticket.tags?.slice(0, 2).map((tag, i) => {
                       const td = allTags.find(t => t.id === tag) || allTags.find(t => t.name === tag);
@@ -622,11 +693,11 @@ const AtendimentosPage = () => {
             </button>
             <div className="cursor-pointer flex items-center gap-3 flex-1 min-w-0" onClick={() => setShowContactInfo(!showContactInfo)} data-testid="open-contact-info">
               <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-sm flex-shrink-0">
-                {selectedTicket.customer_name?.substring(0, 2).toUpperCase()}
+                {(selectedTicket.client_registered_name || selectedTicket.customer_name)?.substring(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0">
                 <p className="font-semibold text-sm text-slate-900 truncate">
-                  {selectedTicket.customer_name} <span className="text-slate-400 font-normal">#{selectedTicket.ticket_number || selectedTicket.id.substring(0, 4)}</span>
+                  {selectedTicket.client_registered_name || selectedTicket.customer_name} <span className="text-slate-400 font-normal">#{selectedTicket.ticket_number || selectedTicket.id.substring(0, 4)}</span>
                 </p>
                 {(() => {
                   const pres = presenceMap[selectedTicket.customer_phone]?.presence;
@@ -657,8 +728,30 @@ const AtendimentosPage = () => {
               <button onClick={() => setShowQuoteEditor(true)} className="p-2 rounded-lg hover:bg-emerald-50 text-emerald-600" title="Novo Orcamento" data-testid="new-quote-from-ticket-btn"><FileText className="w-4 h-4" /></button>
               <button onClick={() => setShowEditContact(true)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Editar contato" data-testid="edit-contact-btn"><Pencil className="w-4 h-4" /></button>
               <button onClick={handleDeleteTicket} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Excluir atendimento" data-testid="delete-ticket-btn"><Trash2 className="w-4 h-4" /></button>
-              <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hidden sm:block" title="Transferir"><ArrowRightLeft className="w-4 h-4" /></button>
-              <button className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hidden sm:block" title="Fechar"><Ban className="w-4 h-4" /></button>
+              <button
+                onClick={() => setShowTransferModal(true)}
+                className="p-2 rounded-lg hover:bg-blue-50 text-blue-600 hidden sm:block"
+                title="Transferir atendimento"
+                data-testid="transfer-ticket-btn"
+              >
+                <ArrowRightLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={async () => {
+                  if (!window.confirm('Fechar este atendimento?')) return;
+                  try {
+                    await crmAPI.updateTicket(selectedTicket.id, { status: 'fechado' });
+                    toast.success('Atendimento fechado');
+                    setSelectedTicket(null);
+                    loadData();
+                  } catch (e) { toast.error('Falha ao fechar'); }
+                }}
+                className="p-2 rounded-lg hover:bg-red-50 text-red-600 hidden sm:block"
+                title="Fechar atendimento"
+                data-testid="close-ticket-btn"
+              >
+                <Ban className="w-4 h-4" />
+              </button>
               <div className="relative">
                 <button
                   onClick={() => setShowMoreMenu(v => !v)}
@@ -800,6 +893,23 @@ const AtendimentosPage = () => {
                 </div>
               )}
             </div>
+            {/* Kanban column picker — moved from contact sidebar to chat header next to Tags */}
+            {kanbanColumns.length > 0 && (
+              <div className="ml-2 flex items-center gap-1.5" data-testid="header-kanban-picker">
+                <span className="text-[10px] text-slate-400 font-semibold uppercase">Kanban:</span>
+                <KanbanColumnPicker
+                  ticket={selectedTicket}
+                  columns={kanbanColumns}
+                  onChange={async (newCol) => {
+                    try {
+                      await crmAPI.updateTicket(selectedTicket.id, { kanban_column_id: newCol });
+                      toast.success('Etapa atualizada');
+                      loadData();
+                    } catch { toast.error('Falha ao atualizar etapa'); }
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Messages */}
@@ -968,25 +1078,72 @@ const AtendimentosPage = () => {
               >
                 <FileText className="w-5 h-5" />
               </button>
-              <button className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hidden sm:block"><Paperclip className="w-5 h-5" /></button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleSendFile(f); e.target.value = ''; }}
+                data-testid="file-input"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hidden sm:block"
+                title="Anexar arquivo"
+                data-testid="attach-file-btn"
+              >
+                <Paperclip className="w-5 h-5" />
+              </button>
               <div className="flex-1 relative min-w-0">
                 <input
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                  placeholder="Digite uma mensagem"
+                  placeholder={withSignature ? "Digite uma mensagem (com assinatura)" : "Digite uma mensagem"}
                   className="w-full px-4 py-2.5 bg-slate-50 rounded-full border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                   data-testid="message-input"
                   disabled={sending}
                 />
               </div>
-              <button className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hidden sm:block"><Smile className="w-5 h-5" /></button>
+              <button
+                onClick={() => setWithSignature(s => !s)}
+                className={`p-2 rounded-full transition-colors ${withSignature ? 'bg-primary/10 text-primary' : 'hover:bg-slate-100 text-slate-400'}`}
+                title={withSignature ? 'Assinatura ATIVA — clique para enviar sem nome' : 'Assinatura desativada — clique para ativar'}
+                data-testid="toggle-signature-btn"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowEmojiPicker(v => !v)}
+                  className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hidden sm:block"
+                  title="Emojis"
+                  data-testid="emoji-btn"
+                >
+                  <Smile className="w-5 h-5" />
+                </button>
+                {showEmojiPicker && (
+                  <div className="absolute bottom-full right-0 mb-2 bg-white border border-slate-200 rounded-xl shadow-lg p-2 grid grid-cols-8 gap-1 w-[280px] z-50" data-testid="emoji-picker">
+                    {['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬','👍','👎','👌','🤝','🙏','👋','💪','🙌','🎉','🔥','✅','❌','⭐','💯','❤️','💔','🚀','💰','📞','📧','📅','⏰','✨','💡'].map(e => (
+                      <button
+                        key={e}
+                        onClick={() => { setMessageInput(m => m + e); setShowEmojiPicker(false); }}
+                        className="text-xl hover:bg-slate-100 rounded p-1"
+                      >{e}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {messageInput.trim() ? (
                 <button onClick={handleSendMessage} disabled={sending} className="p-2.5 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50" data-testid="send-message-btn">
                   <Send className="w-5 h-5" />
                 </button>
               ) : (
-                <button className="p-2.5 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors">
+                <button
+                  onClick={handleToggleRecording}
+                  className={`p-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-primary'} text-white hover:opacity-90 transition-colors`}
+                  title={isRecording ? 'Clique para parar e enviar' : 'Gravar audio'}
+                  data-testid="record-audio-btn"
+                >
                   <Mic className="w-5 h-5" />
                 </button>
               )}
@@ -1063,6 +1220,15 @@ const AtendimentosPage = () => {
           ticket={selectedTicket}
           onClose={() => setShowEditContact(false)}
           onSave={handleSaveContact}
+        />
+      )}
+      {showTransferModal && selectedTicket && (
+        <TransferTicketModal
+          ticket={selectedTicket}
+          users={users}
+          queues={queues}
+          onClose={() => setShowTransferModal(false)}
+          onTransferred={() => { setShowTransferModal(false); loadData(); setSelectedTicket(null); toast.success('Atendimento transferido'); }}
         />
       )}
       {showQuote && selectedTicket && (
@@ -1309,6 +1475,51 @@ const NewTicketModal = ({ onClose, onSave }) => {
   );
 };
 
+const TransferTicketModal = ({ ticket, users, queues, onClose, onTransferred }) => {
+  const [mode, setMode] = useState('user');  // 'user' | 'queue'
+  const [target, setTarget] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (!target) return toast.error('Selecione um destino');
+    setBusy(true);
+    try {
+      const patch = mode === 'user'
+        ? { assigned_to: target, status: 'atendendo' }
+        : { queue_id: target, assigned_to: null, status: 'aguardando' };
+      await crmAPI.updateTicket(ticket.id, patch);
+      onTransferred();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Falha ao transferir');
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()} data-testid="transfer-ticket-modal">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-slate-800">Transferir Atendimento</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4 text-slate-500" /></button>
+        </div>
+        <div className="flex gap-2 mb-3">
+          <button onClick={() => { setMode('user'); setTarget(''); }} className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded ${mode === 'user' ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600'}`} data-testid="transfer-user-tab">Para usuario</button>
+          <button onClick={() => { setMode('queue'); setTarget(''); }} className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded ${mode === 'queue' ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600'}`} data-testid="transfer-queue-tab">Para fila</button>
+        </div>
+        <select value={target} onChange={e => setTarget(e.target.value)} className="input-field w-full" data-testid="transfer-target-select">
+          <option value="">— Selecione —</option>
+          {mode === 'user' ? (
+            users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)
+          ) : (
+            queues.map(q => <option key={q.id} value={q.id}>{q.name}</option>)
+          )}
+        </select>
+        <div className="flex justify-end gap-2 mt-4">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm border border-slate-300 rounded">Cancelar</button>
+          <button onClick={submit} disabled={busy} className="px-3 py-1.5 text-sm bg-primary text-white rounded disabled:opacity-50" data-testid="transfer-confirm-btn">{busy ? 'Transferindo…' : 'Transferir'}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const EditContactModal = ({ ticket, onClose, onSave }) => {
   // Now backed by the real Client/Lead record. Compact mode shows the
   // essentials; "Ver mais" expands to CPF/CNPJ + endereço completo.
@@ -1316,8 +1527,10 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
   const [client, setClient] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);  // Open by default — user explicitly requested
   const [cepLoading, setCepLoading] = useState(false);
+  // CPF/CNPJ → quote lookup (badge "com orcamento" shown after debounce)
+  const [docHasQuote, setDocHasQuote] = useState(null); // null=unknown, {has_quote, count}
   // Timeline state
   const [timeline, setTimeline] = useState(null);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -1347,6 +1560,36 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
     const d = (v || '').replace(/\D/g, '').slice(0, 8);
     return d.length <= 5 ? d : `${d.slice(0, 5)}-${d.slice(5)}`;
   };
+  const formatCPF = (v) => {
+    const d = (v || '').replace(/\D/g, '').slice(0, 11);
+    if (d.length <= 3) return d;
+    if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+    if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+    return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+  };
+  const formatCNPJ = (v) => {
+    const d = (v || '').replace(/\D/g, '').slice(0, 14);
+    if (d.length <= 2) return d;
+    if (d.length <= 5) return `${d.slice(0, 2)}.${d.slice(2)}`;
+    if (d.length <= 8) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5)}`;
+    if (d.length <= 12) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8)}`;
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+  };
+  // Debounced lookup: whenever CPF/CNPJ value is "complete" (11 / 14 digits),
+  // query the backend to know if a quote already exists for that document.
+  const currentDoc = client?.person_type === 'juridica' ? (client?.cnpj || '') : (client?.cpf || '');
+  useEffect(() => {
+    const digits = (currentDoc || '').replace(/\D/g, '');
+    const need = client?.person_type === 'juridica' ? 14 : 11;
+    if (digits.length !== need) { setDocHasQuote(null); return; }
+    let alive = true;
+    const t = setTimeout(() => {
+      quotesAPI.findByDocument(digits)
+        .then(r => { if (alive) setDocHasQuote(r.data || null); })
+        .catch(() => { if (alive) setDocHasQuote(null); });
+    }, 350);
+    return () => { alive = false; clearTimeout(t); };
+  }, [currentDoc, client?.person_type]);
   const lookupCep = async (cep) => {
     const raw = (cep || '').replace(/\D/g, '');
     if (raw.length !== 8) return;

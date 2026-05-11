@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { crmAPI } from '../../services/api';
+import { crmAPI, channelsAPI } from '../../services/api';
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, X, Bot, MessageSquareText } from 'lucide-react';
 
@@ -11,21 +11,27 @@ const QueuesPage = () => {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', color: '#4F46E5', description: '', welcome_message: '', bot_flow_id: '' });
+  const [form, setForm] = useState({ name: '', color: '#4F46E5', description: '', welcome_message: '', bot_flow_id: '', connection_ids: [] });
+  const [connections, setConnections] = useState([]);
 
   const reload = async () => {
     setLoading(true);
     try {
-      const [q, f] = await Promise.all([crmAPI.listQueues(), crmAPI.listFlows()]);
+      const [q, f, c] = await Promise.all([
+        crmAPI.listQueues(),
+        crmAPI.listFlows(),
+        channelsAPI.getConnections().catch(() => ({ data: [] })),
+      ]);
       setQueues(q.data);
       setFlows(f.data);
+      setConnections(c.data || []);
     } catch (e) {} finally { setLoading(false); }
   };
   useEffect(() => { reload(); }, []);
 
   const openNew = () => {
     setEditing(null);
-    setForm({ name: '', color: '#4F46E5', description: '', welcome_message: '', bot_flow_id: '' });
+    setForm({ name: '', color: '#4F46E5', description: '', welcome_message: '', bot_flow_id: '', connection_ids: [] });
     setShowModal(true);
   };
   const openEdit = (q) => {
@@ -33,7 +39,8 @@ const QueuesPage = () => {
     setForm({
       name: q.name, color: q.color || '#4F46E5',
       description: q.description || '', welcome_message: q.welcome_message || '',
-      bot_flow_id: q.bot_flow_id || ''
+      bot_flow_id: q.bot_flow_id || '',
+      connection_ids: q.connection_ids || [],
     });
     setShowModal(true);
   };
@@ -148,6 +155,28 @@ const QueuesPage = () => {
                   <option value="">Sem chatbot</option>
                   {flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                 </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Conexoes vinculadas (M3)</label>
+                <p className="text-[10px] text-slate-500 mb-1.5">Selecione uma ou mais conexoes WhatsApp que devem encaminhar atendimentos para esta fila.</p>
+                <div className="border border-slate-200 rounded-lg max-h-32 overflow-y-auto bg-slate-50 p-1.5 space-y-0.5" data-testid="queue-connections-list">
+                  {connections.length === 0 && <p className="text-[11px] text-slate-400 text-center py-2">Nenhuma conexao cadastrada</p>}
+                  {connections.map(c => {
+                    const checked = form.connection_ids.includes(c.id);
+                    return (
+                      <label key={c.id} className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs ${checked ? 'bg-blue-100 text-blue-800' : 'bg-white hover:bg-blue-50 text-slate-700'}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setForm(f => ({ ...f, connection_ids: checked ? f.connection_ids.filter(x => x !== c.id) : [...f.connection_ids, c.id] }))}
+                          data-testid={`queue-conn-${c.id}`}
+                        />
+                        <span className="flex-1 truncate">{c.name || c.id}</span>
+                        <span className="text-[10px] text-slate-500">{c.status || ''}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             </div>
             <div className="flex justify-end gap-2 p-3 border-t border-slate-200">

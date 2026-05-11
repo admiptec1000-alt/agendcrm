@@ -72,6 +72,15 @@ class QuoteTemplateCreate(BaseModel):
     footer_html: Optional[str] = None  # repeats on every page (bottom; supports {{page_number}}/{{total_pages}})
     header_height_mm: Optional[int] = None  # override default 22mm
     footer_height_mm: Optional[int] = None  # override default 18mm
+    # G2 — full-page layout background (PNG/JPG of the printed letterhead).
+    # When set, header/footer are ignored and the body is rendered on top of
+    # the letterhead image, with configurable padding to avoid colliding with
+    # the pre-printed graphics.
+    layout_image_b64: Optional[str] = None
+    layout_image_mimetype: Optional[str] = None
+    layout_padding_top_mm: Optional[int] = None     # default 40
+    layout_padding_bottom_mm: Optional[int] = None  # default 30
+    layout_padding_x_mm: Optional[int] = None       # default 18
 
 
 class QuoteTemplateUpdate(BaseModel):
@@ -82,6 +91,11 @@ class QuoteTemplateUpdate(BaseModel):
     footer_html: Optional[str] = None
     header_height_mm: Optional[int] = None
     footer_height_mm: Optional[int] = None
+    layout_image_b64: Optional[str] = None
+    layout_image_mimetype: Optional[str] = None
+    layout_padding_top_mm: Optional[int] = None
+    layout_padding_bottom_mm: Optional[int] = None
+    layout_padding_x_mm: Optional[int] = None
 
 
 class QuoteItemIn(BaseModel):
@@ -361,6 +375,11 @@ async def create_quote_template(data: QuoteTemplateCreate, user=Depends(get_curr
         "footer_html": data.footer_html or None,
         "header_height_mm": data.header_height_mm or 22,
         "footer_height_mm": data.footer_height_mm or 18,
+        "layout_image_b64": data.layout_image_b64 or None,
+        "layout_image_mimetype": data.layout_image_mimetype or None,
+        "layout_padding_top_mm": data.layout_padding_top_mm or 40,
+        "layout_padding_bottom_mm": data.layout_padding_bottom_mm or 30,
+        "layout_padding_x_mm": data.layout_padding_x_mm or 18,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.quote_templates.insert_one(doc)
@@ -848,6 +867,43 @@ async def create_quote(data: QuoteCreate, user=Depends(get_current_user), db: As
     return await db.quotes.find_one({"id": doc["id"]}, {"_id": 0})
 
 
+@router.get("/by-document/{doc}")
+async def find_quotes_by_document(
+    doc: str,
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Return whether the given CPF/CNPJ (digits only) has any quote in this
+    tenant. Used by the contact-edit UI to show a "com orcamento" badge.
+
+    The lookup is two-step because quotes hold `client_id` only:
+      1. find clients matching the digits (any of `cpf`, `cnpj`, `document`)
+      2. find quotes whose `client_id` is in that set
+    """
+    digits = re.sub(r"\D", "", doc or "")
+    if len(digits) < 11:
+        return {"has_quote": False, "count": 0}
+    matches = await db.clients.find(
+        {
+            "company_id": user["company_id"],
+            "$or": [
+                {"cpf": digits}, {"cpf": doc},
+                {"cnpj": digits}, {"cnpj": doc},
+                {"document": digits}, {"document": doc},
+            ],
+        },
+        {"_id": 0, "id": 1},
+    ).to_list(100)
+    if not matches:
+        return {"has_quote": False, "count": 0}
+    cids = [c["id"] for c in matches]
+    cnt = await db.quotes.count_documents({
+        "company_id": user["company_id"],
+        "client_id": {"$in": cids},
+    })
+    return {"has_quote": cnt > 0, "count": cnt, "client_ids": cids}
+
+
 @router.get("")
 async def list_quotes(
     user=Depends(get_current_user),
@@ -855,22 +911,81 @@ async def list_quotes(
     client_id: Optional[str] = None,
     ticket_id: Optional[str] = None,
     status: Optional[str] = None,
+    document: Optional[str] = None,
+    customer: Optional[str] = None,
+    user_id: Optional[str] = None,
 ):
     q = {"company_id": user["company_id"]}
     if client_id: q["client_id"] = client_id
     if ticket_id: q["ticket_id"] = ticket_id
     if status: q["status"] = status
+
+    # M5 — permission gating. Admins (company_admin/super_admin) see all
+    # quotes. Other users see only their own UNLESS their permission profile
+    # grants `quotes.view_all`.
+    is_admin = user.get("role") in ("company_admin", "super_admin")
+    can_view_all = is_admin
+    if not is_admin and user.get("permission_profile_id"):
+        pp = await db.permission_profiles.find_one(
+            {"id": user["permission_profile_id"], "company_id": user["company_id"]},
+            {"_id": 0, "permissions": 1},
+        )
+        if pp and ("quotes.view_all" in (pp.get("permissions") or []) or "*" in (pp.get("permissions") or [])):
+            can_view_all = True
+    if not can_view_all:
+        q["created_by"] = user["id"]
+    # Explicit override for admins/all-viewers filtering by user
+    if user_id and can_view_all:
+        q["created_by"] = user_id
+
+    # M6 — filters by CPF/CNPJ / customer name. Both resolve to client_ids first.
+    if document or customer:
+        cfilter = {"company_id": user["company_id"]}
+        if document:
+            digits = re.sub(r"\D", "", document)
+            cfilter["$or"] = [
+                {"cpf": digits}, {"cpf": document},
+                {"cnpj": digits}, {"cnpj": document},
+                {"document": digits}, {"document": document},
+            ]
+        if customer:
+            ored = cfilter.pop("$or", [])
+            cfilter["$and"] = [
+                *([{"$or": ored}] if ored else []),
+                {"$or": [
+                    {"name": {"$regex": customer, "$options": "i"}},
+                    {"company_name": {"$regex": customer, "$options": "i"}},
+                ]},
+            ]
+        matched = await db.clients.find(cfilter, {"_id": 0, "id": 1}).to_list(2000)
+        ids = [c["id"] for c in matched]
+        if not ids:
+            return []
+        q["client_id"] = {"$in": ids}
+
     quotes = await db.quotes.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
-    # Hydrate client_name for the list view (avoids N+1 by bulk fetching)
+    # Hydrate client_name + customer document + author name for the list view
     client_ids = list({qu.get("client_id") for qu in quotes if qu.get("client_id")})
     if client_ids:
         clients = await db.clients.find(
             {"id": {"$in": client_ids}, "company_id": user["company_id"]},
-            {"_id": 0, "id": 1, "name": 1, "company_name": 1}
+            {"_id": 0, "id": 1, "name": 1, "company_name": 1, "cpf": 1, "cnpj": 1, "document": 1},
         ).to_list(len(client_ids))
-        cmap = {c["id"]: (c.get("company_name") or c.get("name") or "") for c in clients}
+        cmap = {c["id"]: c for c in clients}
         for qu in quotes:
-            qu["client_name"] = cmap.get(qu.get("client_id"), "")
+            c = cmap.get(qu.get("client_id"), {})
+            qu["client_name"] = (c.get("company_name") or c.get("name") or "")
+            qu["client_document"] = c.get("cnpj") or c.get("cpf") or c.get("document") or ""
+    # Author name (M6: 'Usuario' column)
+    user_ids = list({qu.get("created_by") for qu in quotes if qu.get("created_by")})
+    if user_ids:
+        users = await db.company_users.find(
+            {"id": {"$in": user_ids}, "company_id": user["company_id"]},
+            {"_id": 0, "id": 1, "name": 1, "email": 1},
+        ).to_list(len(user_ids))
+        umap = {u["id"]: (u.get("name") or u.get("email") or "") for u in users}
+        for qu in quotes:
+            qu["created_by_name"] = umap.get(qu.get("created_by"), "")
     return quotes
 
 
@@ -1050,6 +1165,13 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
     quote_with_chrome["__footer_html"] = footer_html
     quote_with_chrome["__header_height_mm"] = template.get("header_height_mm") or 22
     quote_with_chrome["__footer_height_mm"] = template.get("footer_height_mm") or 18
+    # G2 — full-page letterhead background. When set, the body floats above
+    # the image and header/footer chromes are skipped to honor the layout.
+    quote_with_chrome["__layout_image_b64"] = template.get("layout_image_b64") or None
+    quote_with_chrome["__layout_image_mimetype"] = template.get("layout_image_mimetype") or None
+    quote_with_chrome["__layout_padding_top_mm"] = template.get("layout_padding_top_mm") or 40
+    quote_with_chrome["__layout_padding_bottom_mm"] = template.get("layout_padding_bottom_mm") or 30
+    quote_with_chrome["__layout_padding_x_mm"] = template.get("layout_padding_x_mm") or 18
     return body_html, quote_with_chrome
 
 
@@ -1170,6 +1292,11 @@ def _generate_pdf_bytes(
     footer_html: Optional[str] = None,
     header_height_mm: int = 22,
     footer_height_mm: int = 18,
+    layout_image_b64: Optional[str] = None,
+    layout_image_mimetype: Optional[str] = None,
+    layout_padding_top_mm: int = 40,
+    layout_padding_bottom_mm: int = 30,
+    layout_padding_x_mm: int = 18,
 ) -> bytes:
     """Convert HTML string to PDF bytes via WeasyPrint (sync, ~100-500ms).
 
@@ -1202,6 +1329,14 @@ def _generate_pdf_bytes(
     cleaned_html = (html_content or "").replace("\u00a0", " ")
     cleaned_header = (header_html or "").replace("\u00a0", " ")
     cleaned_footer = (footer_html or "").replace("\u00a0", " ")
+
+    # G2 — When a full-page layout image is supplied, it overrides the
+    # header/footer chrome: the body floats above the letterhead image with
+    # configurable padding so it doesn't collide with pre-printed graphics.
+    use_layout = bool(layout_image_b64)
+    if use_layout:
+        cleaned_header = ""
+        cleaned_footer = ""
 
     has_header = bool(cleaned_header.strip())
     has_footer = bool(cleaned_footer.strip())
@@ -1250,12 +1385,32 @@ def _generate_pdf_bytes(
     top_margin = f"{h + 4}mm" if has_header else "18mm"
     bottom_margin = f"{f + 4}mm" if has_footer else "18mm"
 
+    layout_css = ""
+    if use_layout:
+        # Use the letterhead image as @page background. WeasyPrint supports
+        # background-image on @page; the image scales to fill A4. The body
+        # margin matches the operator-defined paddings so quote content sits
+        # in the "safe area" of the letterhead.
+        mime = layout_image_mimetype or "image/png"
+        top_margin = f"{max(8, min(120, int(layout_padding_top_mm or 40)))}mm"
+        bottom_margin = f"{max(8, min(120, int(layout_padding_bottom_mm or 30)))}mm"
+        px = max(0, min(50, int(layout_padding_x_mm or 18)))
+        layout_css = (
+            f"@page {{ background: url('data:{mime};base64,{layout_image_b64}') "
+            "no-repeat center center; background-size: 100% 100%; }\n"
+        )
+        # X margin from layout_padding_x
+        page_margin_x = f"{px}mm"
+    else:
+        page_margin_x = "16mm"
+
     css_prefix = (
         "<style>\n"
         "@page {\n"
         "  size: A4;\n"
-        f"  margin: {top_margin} 16mm {bottom_margin} 16mm;\n"
+        f"  margin: {top_margin} {page_margin_x} {bottom_margin} {page_margin_x};\n"
         "}\n"
+        + layout_css
         + page_chrome_css
         + chrome_constraints_css
         + _QUOTE_STYLESHEET
@@ -1283,6 +1438,11 @@ async def download_quote_pdf(qid: str, user=Depends(get_current_user), db: Async
         footer_html=quote.get("__footer_html"),
         header_height_mm=quote.get("__header_height_mm") or 22,
         footer_height_mm=quote.get("__footer_height_mm") or 18,
+        layout_image_b64=quote.get("__layout_image_b64"),
+        layout_image_mimetype=quote.get("__layout_image_mimetype"),
+        layout_padding_top_mm=quote.get("__layout_padding_top_mm") or 40,
+        layout_padding_bottom_mm=quote.get("__layout_padding_bottom_mm") or 30,
+        layout_padding_x_mm=quote.get("__layout_padding_x_mm") or 18,
     )
     filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
     return StreamingResponse(
@@ -1342,6 +1502,11 @@ async def send_quote_whatsapp(
         footer_html=quote.get("__footer_html"),
         header_height_mm=quote.get("__header_height_mm") or 22,
         footer_height_mm=quote.get("__footer_height_mm") or 18,
+        layout_image_b64=quote.get("__layout_image_b64"),
+        layout_image_mimetype=quote.get("__layout_image_mimetype"),
+        layout_padding_top_mm=quote.get("__layout_padding_top_mm") or 40,
+        layout_padding_bottom_mm=quote.get("__layout_padding_bottom_mm") or 30,
+        layout_padding_x_mm=quote.get("__layout_padding_x_mm") or 18,
     )
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
     filename = f"orcamento-{quote.get('quote_number', qid)}.pdf"
