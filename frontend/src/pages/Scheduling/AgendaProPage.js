@@ -333,28 +333,43 @@ export default function AgendaProPage() {
             </div>
           ))}
 
-          {slots.map((slot) => (
+          {slots.map((slot, sIdx) => (
             <React.Fragment key={slot}>
-              <div className="border-b border-slate-100 p-1 text-[10px] text-slate-400 text-right pr-2 sticky left-0 bg-white">
+              <div className="border-b border-slate-100 p-1 text-[10px] text-slate-400 text-right pr-2 sticky left-0 bg-white" style={{ gridColumn: 1, gridRow: sIdx + 2 }}>
                 {slot}
               </div>
-              {columns.map(col => {
-                const colKey = view === 'day' ? col.id : col.id;
+              {columns.map((col, cIdx) => {
+                const colKey = col.id;
                 const colAppts = apptsByCol[colKey] || [];
                 const slotMin = minutesFromHHMM(slot);
                 const aptHere = colAppts.find(a => {
                   const am = minutesFromHHMM(a.time);
                   return am >= slotMin && am < slotMin + SLOT_MIN;
                 });
+                // Compute coverage on the fly to keep the closure simple.
+                const isCoveredByEarlier = (() => {
+                  for (let i = 1; i <= Math.min(sIdx, Math.ceil(720 / SLOT_MIN)); i++) {
+                    const prev = (apptsByCol[colKey] || []).find(a => {
+                      const am = minutesFromHHMM(a.time);
+                      const prevSlotMin = minutesFromHHMM(slots[sIdx - i]);
+                      if (am < prevSlotMin || am >= prevSlotMin + SLOT_MIN) return false;
+                      const span = Math.max(1, Math.ceil((a.duration || 30) / SLOT_MIN));
+                      return span > i;
+                    });
+                    if (prev) return true;
+                  }
+                  return false;
+                })();
+                if (isCoveredByEarlier) return null; // multi-slot apt above already covers this cell
                 if (aptHere) {
                   const isBlock = !!aptHere.is_block;
                   const c = isBlock ? BLOCK_STYLE : (STATUS_COLORS[aptHere.status] || STATUS_COLORS.pendente);
-                  const span = Math.max(1, Math.round((aptHere.duration || 30) / SLOT_MIN));
+                  const span = Math.max(1, Math.ceil((aptHere.duration || 30) / SLOT_MIN));
                   return (
                     <div
                       key={col.id + slot}
-                      className={`border-b border-l border-slate-100 p-1 cursor-pointer hover:opacity-90 ${c.bg} ${c.bd} border-l-4`}
-                      style={{ gridRow: `span ${span}` }}
+                      className={`border-b border-l border-slate-100 p-1 cursor-pointer hover:opacity-90 ${c.bg} ${c.bd} border-l-4 overflow-hidden`}
+                      style={{ gridColumn: cIdx + 2, gridRow: `${sIdx + 2} / span ${span}` }}
                       draggable
                       onDragStart={(e) => { e.dataTransfer.setData('text/plain', aptHere.id); }}
                       onClick={() => handleAptClick(aptHere)}
@@ -365,6 +380,7 @@ export default function AgendaProPage() {
                         {aptHere.time} {aptHere.customer_name}
                       </div>
                       <div className={`text-[10px] truncate ${c.tx}`}>{aptHere.service_name}</div>
+                      <div className={`text-[10px] opacity-70 ${c.tx}`}>{aptHere.duration || 30}min</div>
                     </div>
                   );
                 }
@@ -372,6 +388,7 @@ export default function AgendaProPage() {
                   <div
                     key={col.id + slot}
                     className={`border-b border-l border-slate-100 transition ${isSlotInBusinessHours(col, slot) ? 'hover:bg-blue-50/50 cursor-pointer' : 'bg-slate-50/80 pointer-events-none'}`}
+                    style={{ gridColumn: cIdx + 2, gridRow: sIdx + 2 }}
                     onClick={() => handleSlotClick(col, slot)}
                     onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
                     onDrop={(e) => {
@@ -431,6 +448,9 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
   });
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  // Service search picker — modernized for shops with many services
+  const [svcSearch, setSvcSearch] = useState('');
+  const [svcPickerOpen, setSvcPickerOpen] = useState(false);
 
   // Client search autocomplete
   const [clientQuery, setClientQuery] = useState('');
@@ -621,58 +641,97 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
                   <input value={form.customer_phone} onChange={e => setForm({ ...form, customer_phone: e.target.value })} className="input-field text-sm" data-testid="agendapro-customer-phone" />
                 </div>
               </div>
-              <div>
-                <label className="text-[10px] font-bold uppercase text-slate-400">Servico principal</label>
-                <select value={form.service_id} onChange={e => setForm({ ...form, service_id: e.target.value, extra_service_ids: form.extra_service_ids.filter(id => id !== e.target.value) })} className="input-field text-sm" data-testid="agendapro-service">
-                  <option value="">— Selecione —</option>
-                  {services.map(s => {
-                    const dur = s.duration || s.duration_min || 30;
-                    return (
-                      <option key={s.id} value={s.id}>{s.name} ({dur} min) — R$ {Number(s.price || 0).toFixed(2)}</option>
-                    );
-                  })}
-                </select>
-              </div>
-              {form.service_id && services.length > 1 && (() => {
-                const extras = services.filter(s => s.id !== form.service_id);
-                const main = services.find(s => s.id === form.service_id);
-                const mainDur = (main?.duration || main?.duration_min || 30);
-                const mainPrice = Number(main?.price || 0);
-                const selExtras = extras.filter(s => form.extra_service_ids.includes(s.id));
-                const totalDur = mainDur + selExtras.reduce((sum, s) => sum + (s.duration || s.duration_min || 30), 0);
-                const totalPrice = mainPrice + selExtras.reduce((sum, s) => sum + Number(s.price || 0), 0);
+              {/* Modern service picker — chip + search */}
+              {(() => {
+                const mainSvc = services.find(s => s.id === form.service_id) || null;
+                const extraSvcs = services.filter(s => form.extra_service_ids.includes(s.id) && s.id !== form.service_id);
+                const totalDur = (mainSvc ? (mainSvc.duration || mainSvc.duration_min || 30) : 0)
+                  + extraSvcs.reduce((sum, s) => sum + (s.duration || s.duration_min || 30), 0);
+                const totalPrice = (mainSvc ? Number(mainSvc.price || 0) : 0)
+                  + extraSvcs.reduce((sum, s) => sum + Number(s.price || 0), 0);
+                const selectedIds = new Set([form.service_id, ...form.extra_service_ids].filter(Boolean));
+                const results = svcSearch.trim()
+                  ? services.filter(s => !selectedIds.has(s.id) && s.name.toLowerCase().includes(svcSearch.toLowerCase())).slice(0, 12)
+                  : services.filter(s => !selectedIds.has(s.id)).slice(0, 12);
+                const addSvc = (svc) => {
+                  setForm(f => {
+                    if (selectedIds.has(svc.id)) return f;
+                    if (!f.service_id) return { ...f, service_id: svc.id };
+                    return { ...f, extra_service_ids: [...f.extra_service_ids, svc.id] };
+                  });
+                  setSvcSearch('');
+                  setSvcPickerOpen(false);
+                };
+                const removeSvc = (id) => {
+                  setForm(f => {
+                    if (f.service_id === id) {
+                      const [first, ...rest] = f.extra_service_ids;
+                      return { ...f, service_id: first || '', extra_service_ids: rest };
+                    }
+                    return { ...f, extra_service_ids: f.extra_service_ids.filter(x => x !== id) };
+                  });
+                };
                 return (
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400">Servicos adicionais (opcional)</label>
-                    <div className="border border-slate-200 rounded-lg max-h-32 overflow-y-auto bg-slate-50 p-1.5 space-y-0.5" data-testid="agendapro-extras-list">
-                      {extras.map(s => {
-                        const dur = s.duration || s.duration_min || 30;
-                        const checked = form.extra_service_ids.includes(s.id);
-                        return (
-                          <label key={s.id} className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs ${checked ? 'bg-blue-100 text-blue-800' : 'bg-white hover:bg-blue-50 text-slate-700'}`}>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                setForm(f => ({
-                                  ...f,
-                                  extra_service_ids: checked
-                                    ? f.extra_service_ids.filter(id => id !== s.id)
-                                    : [...f.extra_service_ids, s.id],
-                                }));
-                              }}
-                              data-testid={`agendapro-extra-${s.id}`}
-                            />
-                            <span className="flex-1 truncate">{s.name}</span>
-                            <span className="text-[10px] text-slate-500 whitespace-nowrap">{dur}min · R$ {Number(s.price || 0).toFixed(2)}</span>
-                          </label>
-                        );
-                      })}
+                    <label className="text-[10px] font-bold uppercase text-slate-400">Servicos</label>
+                    <div className="flex flex-wrap gap-1.5 mb-1.5 min-h-[28px]" data-testid="agendapro-selected-chips">
+                      {mainSvc && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary text-white text-xs font-semibold shadow-sm">
+                          <span className="opacity-70 text-[9px] uppercase tracking-wider">Principal</span>
+                          <span>{mainSvc.name}</span>
+                          <span className="opacity-70">· {mainSvc.duration || mainSvc.duration_min || 30}min</span>
+                          <button type="button" onClick={() => removeSvc(mainSvc.id)} className="ml-0.5 hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`agendapro-chip-remove-${mainSvc.id}`}>×</button>
+                        </span>
+                      )}
+                      {extraSvcs.map(s => (
+                        <span key={s.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-medium">
+                          <span>{s.name}</span>
+                          <span className="opacity-70">· {s.duration || s.duration_min || 30}min</span>
+                          <button type="button" onClick={() => removeSvc(s.id)} className="ml-0.5 hover:bg-indigo-200 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`agendapro-chip-remove-${s.id}`}>×</button>
+                        </span>
+                      ))}
+                      {!mainSvc && <span className="text-xs text-slate-400 italic">Nenhum servico selecionado ainda</span>}
                     </div>
-                    <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-600" data-testid="agendapro-total-display">
-                      <span><strong>{selExtras.length}</strong> adicional(is)</span>
-                      <span><strong>{totalDur} min</strong> · R$ <strong>{totalPrice.toFixed(2)}</strong></span>
+                    <div className="relative">
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={svcSearch}
+                        onChange={e => { setSvcSearch(e.target.value); setSvcPickerOpen(true); }}
+                        onFocus={() => setSvcPickerOpen(true)}
+                        onBlur={() => setTimeout(() => setSvcPickerOpen(false), 200)}
+                        placeholder={mainSvc ? 'Adicionar outro servico…' : 'Pesquisar e adicionar servicos…'}
+                        className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        data-testid="agendapro-service-search"
+                      />
+                      {svcPickerOpen && results.length > 0 && (
+                        <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 overflow-y-auto" data-testid="agendapro-service-picker">
+                          {results.map(s => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onMouseDown={(e) => { e.preventDefault(); addSvc(s); }}
+                              className="w-full text-left px-3 py-2 hover:bg-primary/5 flex items-center justify-between gap-2 border-b border-slate-50 last:border-0 transition"
+                              data-testid={`agendapro-svc-pick-${s.id}`}
+                            >
+                              <span className="text-sm font-medium text-slate-800 truncate flex-1">{s.name}</span>
+                              <span className="text-[11px] text-slate-500 whitespace-nowrap">{s.duration || s.duration_min || 30}min · R$ {Number(s.price || 0).toFixed(2)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {svcPickerOpen && svcSearch.trim() && results.length === 0 && (
+                        <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-xs text-slate-400 text-center">
+                          Nenhum servico encontrado para "{svcSearch}"
+                        </div>
+                      )}
                     </div>
+                    {(mainSvc || extraSvcs.length > 0) && (
+                      <div className="mt-2 flex items-center justify-between text-[11px] text-slate-600 px-1" data-testid="agendapro-total-display">
+                        <span>{(mainSvc ? 1 : 0) + extraSvcs.length} servico(s) selecionado(s)</span>
+                        <span className="font-semibold">{totalDur} min · R$ {totalPrice.toFixed(2)}</span>
+                      </div>
+                    )}
                   </div>
                 );
               })()}

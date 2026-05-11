@@ -2407,6 +2407,33 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
     + _extraSvcs.reduce((sum, s) => sum + (s.duration || s.duration_min || 30), 0);
   const _totalPrice = (_mainSvc ? Number(_mainSvc.price || 0) : 0)
     + _extraSvcs.reduce((sum, s) => sum + Number(s.price || 0), 0);
+  const _selectedIds = new Set([book.service_id, ...book.extra_service_ids].filter(Boolean));
+
+  // Service search picker — modern UX for shops with many services
+  const [svcSearch, setSvcSearch] = useState('');
+  const [svcPickerOpen, setSvcPickerOpen] = useState(false);
+  const _searchResults = svcSearch.trim()
+    ? _activeServices.filter(s => !_selectedIds.has(s.id) && s.name.toLowerCase().includes(svcSearch.toLowerCase())).slice(0, 12)
+    : _activeServices.filter(s => !_selectedIds.has(s.id)).slice(0, 12);
+  const addService = (svc) => {
+    if (_selectedIds.has(svc.id)) return;
+    setBook(b => {
+      if (!b.service_id) return { ...b, service_id: svc.id };
+      return { ...b, extra_service_ids: [...b.extra_service_ids, svc.id] };
+    });
+    setSvcSearch('');
+    setSvcPickerOpen(false);
+  };
+  const removeService = (id) => {
+    setBook(b => {
+      if (b.service_id === id) {
+        // Promote first extra to main, or clear if none.
+        const [first, ...rest] = b.extra_service_ids;
+        return { ...b, service_id: first || '', extra_service_ids: rest };
+      }
+      return { ...b, extra_service_ids: b.extra_service_ids.filter(x => x !== id) };
+    });
+  };
 
   const ready = (step === 'new'
       ? (newClient.name.trim().length >= 2 && newClient.phone.replace(/\D/g,'').length >= 10)
@@ -2574,18 +2601,78 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
           {/* Booking section */}
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Detalhes do Agendamento</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
-              <select
-                value={book.service_id}
-                onChange={e => setBook({...book, service_id: e.target.value, extra_service_ids: book.extra_service_ids.filter(id => id !== e.target.value)})}
-                className="w-full min-w-0 px-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
-                data-testid="new-apt-service"
-              >
-                <option value="">Servico principal...</option>
-                {_activeServices.map(s => (
-                  <option key={s.id} value={s.id}>{s.name} - R$ {s.price?.toFixed(2)}</option>
+
+            {/* Modern service picker — chip + search */}
+            <div className="mb-3">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5 block">Servicos</label>
+              {/* Selected chips */}
+              <div className="flex flex-wrap gap-1.5 mb-1.5 min-h-[28px]" data-testid="new-apt-selected-chips">
+                {_mainSvc && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary text-white text-xs font-semibold shadow-sm" data-testid={`chip-main-${_mainSvc.id}`}>
+                    <span className="opacity-70 text-[9px] uppercase tracking-wider">Principal</span>
+                    <span>{_mainSvc.name}</span>
+                    <span className="opacity-70">· {_mainSvc.duration || _mainSvc.duration_min || 30}min</span>
+                    <button type="button" onClick={() => removeService(_mainSvc.id)} className="ml-0.5 hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`chip-remove-${_mainSvc.id}`}>×</button>
+                  </span>
+                )}
+                {_extraSvcs.map(s => (
+                  <span key={s.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-medium" data-testid={`chip-extra-${s.id}`}>
+                    <span>{s.name}</span>
+                    <span className="opacity-70">· {s.duration || s.duration_min || 30}min</span>
+                    <button type="button" onClick={() => removeService(s.id)} className="ml-0.5 hover:bg-indigo-200 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`chip-remove-${s.id}`}>×</button>
+                  </span>
                 ))}
-              </select>
+                {!_mainSvc && (
+                  <span className="text-xs text-slate-400 italic">Nenhum servico selecionado ainda</span>
+                )}
+              </div>
+              {/* Search box + dropdown */}
+              <div className="relative">
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={svcSearch}
+                    onChange={e => { setSvcSearch(e.target.value); setSvcPickerOpen(true); }}
+                    onFocus={() => setSvcPickerOpen(true)}
+                    onBlur={() => setTimeout(() => setSvcPickerOpen(false), 200)}
+                    placeholder={_mainSvc ? 'Adicionar outro servico…' : 'Pesquisar e adicionar servicos…'}
+                    className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    data-testid="new-apt-service-search"
+                  />
+                </div>
+                {svcPickerOpen && _searchResults.length > 0 && (
+                  <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 overflow-y-auto" data-testid="new-apt-service-picker">
+                    {_searchResults.map(s => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); addService(s); }}
+                        className="w-full text-left px-3 py-2 hover:bg-primary/5 flex items-center justify-between gap-2 border-b border-slate-50 last:border-0 transition"
+                        data-testid={`new-apt-svc-pick-${s.id}`}
+                      >
+                        <span className="text-sm font-medium text-slate-800 truncate flex-1">{s.name}</span>
+                        <span className="text-[11px] text-slate-500 whitespace-nowrap">{s.duration || s.duration_min || 30}min · R$ {Number(s.price || 0).toFixed(2)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {svcPickerOpen && svcSearch.trim() && _searchResults.length === 0 && (
+                  <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-xs text-slate-400 text-center" data-testid="new-apt-no-results">
+                    Nenhum servico encontrado para "{svcSearch}"
+                  </div>
+                )}
+              </div>
+              {/* Totalizer */}
+              {(_mainSvc || _extraSvcs.length > 0) && (
+                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-600 px-1" data-testid="new-apt-total-display">
+                  <span>{1 + _extraSvcs.length} servico(s) selecionado(s)</span>
+                  <span className="font-semibold">{_totalDuration} min · R$ {_totalPrice.toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 min-w-0">
               <select
                 value={book.professional_id}
                 onChange={e => setBook({...book, professional_id: e.target.value})}
@@ -2612,34 +2699,6 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
                 data-testid="new-apt-time"
               />
             </div>
-
-            {book.service_id && _activeServices.length > 1 && (
-              <div className="mt-3">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Servicos adicionais (opcional)</p>
-                <div className="border border-slate-200 rounded-lg max-h-32 overflow-y-auto bg-slate-50 p-1.5 space-y-0.5" data-testid="new-apt-extras-list">
-                  {_activeServices.filter(s => s.id !== book.service_id).map(s => {
-                    const dur = s.duration || s.duration_min || 30;
-                    const checked = book.extra_service_ids.includes(s.id);
-                    return (
-                      <label key={s.id} className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs ${checked ? 'bg-blue-100 text-blue-800' : 'bg-white hover:bg-blue-50 text-slate-700'}`}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => setBook(b => ({ ...b, extra_service_ids: checked ? b.extra_service_ids.filter(id => id !== s.id) : [...b.extra_service_ids, s.id] }))}
-                          data-testid={`new-apt-extra-${s.id}`}
-                        />
-                        <span className="flex-1 truncate">{s.name}</span>
-                        <span className="text-[10px] text-slate-500 whitespace-nowrap">{dur}min · R$ {Number(s.price || 0).toFixed(2)}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-600" data-testid="new-apt-total-display">
-                  <span><strong>{_extraSvcs.length}</strong> adicional(is)</span>
-                  <span><strong>{_totalDuration} min</strong> · R$ <strong>{_totalPrice.toFixed(2)}</strong></span>
-                </div>
-              </div>
-            )}
           </div>
         </div>
 

@@ -10,7 +10,26 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-11 — AgendaPro: duracao real + service search moderno ✅
+
+**1) Agendamento de 90min preenche 3 slots (antes pintava 30min)**
+
 ### 2026-05-11 — Sync mensagens enviadas pelo celular do operador ✅
+
+- Microservice `whatsapp-service/index.js` parou de descartar `key.fromMe`; envia `from_me: true` no payload.
+- Backend `webhook/message` persiste fromMe como `sender_type: 'agent'`, `delivery_status: 'sent'`, `source: 'phone'`. Bypassa @lid fallback, flow trigger e criacao de ticket orfao. Dedupe via `wa_message_id`.
+- Requer redeploy do whatsapp-service + backend em producao.
+
+- Bug raiz: `apt.duration` era usado para calcular `span` mas o layout CSS Grid usava `gridRow: span N` sem `gridColumn` explicito. Cells subsequentes do mesmo column entravam na "next available" cell e empurravam a coluna, mascarando o efeito visual da duracao.
+- Fix: `gridColumn` e `gridRow` explicitos em todas as celulas. Calculo da `span = ceil(duration / 30)`. Celulas cobertas por um appt multi-slot anterior nao sao renderizadas (evita overlap). Bloco do appt agora exibe `duration` no rodape para confirmacao visual.
+
+**2) Service search moderno (substitui dropdown + checkbox list)**
+- Aplicado nos dois modais: Company/Dashboard `NewAppointmentModal` (Agenda) e AgendaProPage `QuickBookModal`.
+- UI: chips dos servicos selecionados (Principal em primary, extras em indigo) com botao × para remover. Input de pesquisa com lupa filtra em tempo real. Primeira selecao vira Principal; demais viram Adicionais.
+- Promove primeiro Adicional para Principal quando o Principal e removido.
+- Totalizador: "N servico(s) selecionado(s) · X min · R$ Y".
+
+
 
 **Problema:** Quando o operador enviava uma mensagem via WhatsApp do celular (linked device), ela chegava no cliente mas NAO aparecia na tela de Atendimentos do sistema. Recebimento (cliente → sistema) funcionava normalmente.
 
