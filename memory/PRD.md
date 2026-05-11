@@ -10,8 +10,36 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-11 — Tela inicial por BT + Slots 30min + Multi-servico + Fix Sync ✅
+
+**1) Tela inicial por Tipo de Negocio**
+- Modelo `BusinessTypeCreate/Update` ganhou campo `default_screen: Optional[str]`.
+- `super_admin_routes` POST/PUT business-types normaliza empty → None.
+- Modal SuperAdmin (`BusinessTypeModal`) tem select `bt-default-screen` que lista apenas features habilitadas.
+- Company Dashboard usa `user.business_type.default_screen` como prioridade sobre o fallback heuristico baseado em `base_type`.
+
+**2) Agenda Pro: rotulos de 30 min**
+- Antes: `slot.endsWith(':00') ? slot : ''` (so horario inteiro). Agora: `{slot}` — todos os rotulos visiveis (07:00, 07:30, 08:00...).
+
+**3) Sync Agenda ↔ Agenda Pro corrigido**
+- `isoDate(d)` agora usa componentes locais (getFullYear/getMonth/getDate) — antes usava `toISOString()` em UTC, causando off-by-one em fuso BR (UTC-3) e ocultando agendamentos do dia.
+- Appointments com `professional_id` ausente ou invalido vao para coluna sintetica `Sem profissional` no view Dia (antes desapareciam silenciosamente).
+
+**4) Multi-servico no agendamento**
+- `AppointmentCreate` aceita `extra_items: List[Dict]` opcional.
+- `scheduling_routes.create_appointment` soma duration/price de cada extra (resolve do DB para validar), concatena nomes em `service_name` (e.g. "Corte + Hidratacao") e armazena `extra_items` no doc.
+- Modal QuickBook (AgendaPro) e Modal `NewAppointmentModal` (Agenda) tem painel "Servicos adicionais" com checkboxes, totalizador em tempo real.
+
+**Testes:** backend pytest 9/9 PASS (`/app/test_reports/iteration_51.json`). Frontend smoke screenshots OK em /boss/painel.
+
+**IMPORTANT**: mudancas aplicadas no preview. Para produção (https://agentcrm.8ip.com.br): "Save to GitHub" + redeploy no Render.
+
+
+
+
 ### 2026-05-09 — Phase 2 (Operational Impersonate) + Phase 3 (Financeiro Admin) ✅
 
+**Phase 2 — Super Admin usa modulos do sistema para gestao propria**
 **Phase 2 — Super Admin usa modulos do sistema para gestao propria**
 - Setting `financial_manager_company_id` (já existente) agora funciona como "Empresa Operacional" do SuperAdmin.
 - Novo endpoint `POST /api/super-admin/me/operational-impersonate` que emite JWT scoped na empresa configurada (validade 120 min, claim `impersonated_by` para auditoria).

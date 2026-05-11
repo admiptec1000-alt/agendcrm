@@ -285,7 +285,7 @@ export default function AgendaProPage() {
           {slots.map((slot) => (
             <React.Fragment key={slot}>
               <div className="border-b border-slate-100 p-1 text-[10px] text-slate-400 text-right pr-2 sticky left-0 bg-white">
-                {slot.endsWith(':00') ? slot : ''}
+                {slot}
               </div>
               {columns.map(col => {
                 const colKey = view === 'day' ? col.id : col.id;
