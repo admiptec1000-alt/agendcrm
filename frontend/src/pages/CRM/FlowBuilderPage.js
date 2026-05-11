@@ -282,9 +282,6 @@ const FlowBuilderPage = () => {
               title="Importar fluxo de um arquivo JSON do computador">
               <Upload className="w-4 h-4" /> Importar Fluxo
             </button>
-            <button onClick={importSgpFlow} className="text-xs flex items-center gap-1 px-2 py-2 rounded-lg text-violet-700 hover:bg-violet-50" data-testid="import-sgp-flow-btn" title="Criar fluxo modelo pronto para integração SGP (ISP)">
-              <Globe className="w-3.5 h-3.5" /> Modelo SGP
-            </button>
             <button onClick={newFlow} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-flow-btn"><Plus className="w-4 h-4" /> Novo Fluxo</button>
           </div>
         </div>
@@ -462,10 +459,38 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, o
             <div className="space-y-2">
               <div><label className="text-[10px] font-bold uppercase text-slate-400">Pergunta enviada ao cliente</label>
                 <textarea value={config.question || ''} onChange={e => setConfig({...config, question: e.target.value})} rows={2} className="input-field text-sm" placeholder="Ex: Como posso ajudar?" /></div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Formato</label>
+                  <select
+                    value={config.options_format || 'text'}
+                    onChange={e => setConfig({...config, options_format: e.target.value})}
+                    className="input-field text-sm"
+                    data-testid="menu-options-format"
+                  >
+                    <option value="text">Texto numerado (cliente digita)</option>
+                    <option value="buttons">Botoes (max 3)</option>
+                    <option value="list">Lista (suporta ate 10)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400">Variavel dinamica (opcional)</label>
+                  <input
+                    value={config.dynamic_source || ''}
+                    onChange={e => setConfig({...config, dynamic_source: e.target.value})}
+                    placeholder="ex: contratos_lista"
+                    className="input-field text-sm"
+                    data-testid="menu-dynamic-source"
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-500">
+                Variavel dinamica: quando preenchida, o menu usa a lista carregada em runtime (ex.: contratos do SGP). Cada item vira automaticamente uma opcao com o titulo, descricao e id retornados pela integracao.
+              </p>
               <div className="bg-violet-50 border border-violet-200 rounded p-2 text-[11px] text-violet-800">
                 💡 Cada opção vira uma <strong>saída separada</strong> no nó. Conecte cada saída ao próximo nó (mensagem, fila, etc.) para criar caminhos diferentes.
               </div>
-              <label className="text-[10px] font-bold uppercase text-slate-400">Opcoes (a pessoa digita 1, 2, 3...)</label>
+              <label className="text-[10px] font-bold uppercase text-slate-400">Opcoes estaticas (ignoradas quando variavel dinamica esta definida)</label>
               {(config.options || []).map((o, i) => {
                 const opt = typeof o === 'string' ? { label: o } : o;
                 return (

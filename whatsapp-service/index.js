@@ -774,6 +774,71 @@ app.post('/instances/:id/send', async (req, res) => {
   }
 });
 
+// Send an interactive message — either buttons (≤3) or a list (sections w/ rows).
+// Baileys supports both via `templateMessage` (buttons) and `listMessage` (list).
+//
+// Body:
+//   {
+//     phone: "5511999...",
+//     mode: "buttons" | "list",         // required
+//     header: "Selecione um contrato:", // optional header text
+//     body: "Texto principal",           // main message body
+//     footer: "Suporte 8ip",             // optional footer
+//     // For buttons (max 3):
+//     buttons: [{ id, title }],
+//     // For list:
+//     button_label: "Ver opções",        // CTA text on the list expander
+//     sections: [{ title, rows: [{ id, title, description }] }],
+//   }
+app.post('/instances/:id/send-interactive', async (req, res) => {
+  const instance = instances[req.params.id];
+  if (!instance || !instance.sock) {
+    return res.status(503).json({ success: false, error: 'instance not connected' });
+  }
+  try {
+    const { phone, mode, header, body, footer, buttons, button_label, sections } = req.body;
+    const targetJid = `${(phone || '').replace(/\D/g, '')}@s.whatsapp.net`;
+    let payload;
+    if (mode === 'buttons') {
+      const list = (buttons || []).slice(0, 3).map(b => ({
+        buttonId: String(b.id || b.value || b.title).slice(0, 256),
+        buttonText: { displayText: String(b.title || b.label || b.id).slice(0, 20) },
+        type: 1,
+      }));
+      payload = {
+        text: body || '',
+        footer: footer || '',
+        buttons: list,
+        headerType: 1,
+      };
+    } else if (mode === 'list') {
+      payload = {
+        text: body || '',
+        footer: footer || '',
+        title: header || '',
+        buttonText: (button_label || 'Selecionar').slice(0, 20),
+        sections: (sections || []).map(s => ({
+          title: String(s.title || '').slice(0, 24),
+          rows: (s.rows || []).slice(0, 10).map(r => ({
+            rowId: String(r.id || r.value).slice(0, 256),
+            title: String(r.title || r.label).slice(0, 24),
+            description: r.description ? String(r.description).slice(0, 72) : undefined,
+          })),
+        })),
+      };
+    } else {
+      return res.status(400).json({ success: false, error: 'mode must be "buttons" or "list"' });
+    }
+    const sent = await instance.sock.sendMessage(targetJid, payload);
+    res.json({ success: true, jid: targetJid, message_id: sent?.key?.id });
+  } catch (e) {
+    console.error(`[${req.params.id}] send-interactive error:`, e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+
+
 // Send a media document (PDF, image, etc) as a WhatsApp attachment.
 // Accepts payload as base64 in `data_base64` so the FastAPI backend doesn't
 // need to host a public URL just to forward the bytes. Uses the same JID

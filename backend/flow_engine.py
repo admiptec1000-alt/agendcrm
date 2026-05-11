@@ -146,6 +146,28 @@ def _entry_node(nodes: List[dict]) -> Optional[dict]:
     return nodes[0] if nodes else None
 
 
+async def _send_whatsapp_interactive(ticket: dict, payload: dict):
+    """Send a buttons/list message via the local microservice.
+
+    `payload` is forwarded as-is to /send-interactive. Returns True on success,
+    False otherwise (caller should fall back to plain text)."""
+    try:
+        wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+        target = ticket.get("lid_jid") if ticket.get("pending_lid_resolution") else ticket.get("customer_phone")
+        if not (ticket.get("connection_id") and target):
+            return False
+        body = {"phone": target, **payload}
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                f"{wa_url}/instances/{ticket['connection_id']}/send-interactive",
+                json=body,
+            )
+            return r.status_code == 200 and r.json().get("success", False)
+    except Exception as e:
+        logger.warning(f"[flow_engine] send-interactive failed: {e}")
+        return False
+
+
 async def _send_whatsapp(ticket: dict, text: str):
     """Fire-and-forget WhatsApp send via local microservice."""
     try:
@@ -206,6 +228,55 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
             contratos = data.get("contratos") or []
             cli = clientes[0] if (isinstance(clientes, list) and clientes) else {}
             ct = contratos[0] if (isinstance(contratos, list) and contratos and isinstance(contratos[0], dict)) else {}
+            # ── Multi-contract support: expose the full list as
+            # `contratos_lista` (objects with label/value) and a printable
+            # `contratos_menu` (numbered text). The flowbuilder UI picks the
+            # rendering format (text/buttons/list) via the new `options_format`
+            # setting; the runtime only needs the list ready.
+            contratos_lista = []
+            for idx, c in enumerate(contratos if isinstance(contratos, list) else []):
+                if not isinstance(c, dict):
+                    continue
+                cid = str(c.get("contratoId") or c.get("contrato") or c.get("id") or "")
+                status = (
+                    c.get("contratoStatusDisplay") or c.get("statusexibicao")
+                    or c.get("status") or "—"
+                )
+                # Build a human address with safe fallbacks. Some SGP tenants
+                # return the address in `endereco` (already joined); others
+                # break it into `logradouro`/`numero`/`bairro`. Avoid the
+                # ugly literal "undefined, undefined - undefined" by checking
+                # each piece independently.
+                endereco_raw = c.get("endereco")
+                if not endereco_raw or "undefined" in str(endereco_raw).lower():
+                    log = (c.get("logradouro") or "").strip()
+                    num = (c.get("numero") or c.get("numero_endereco") or "").strip()
+                    bai = (c.get("bairro") or "").strip()
+                    parts = [p for p in [log, num and f"nº {num}"] if p]
+                    head = ", ".join(parts) if parts else ""
+                    endereco_raw = (head + (f" - {bai}" if bai else "")).strip(" -,") or "Endereco nao informado"
+                plano = c.get("planoInternet") or c.get("planointernet") or c.get("plano") or ""
+                label = f"Contrato {cid} ({status})" if cid else status
+                # Concise one-line for buttons (max 20 chars per button title)
+                title_btn = f"#{cid}" if cid else (status[:18] if status else "Contrato")
+                contratos_lista.append({
+                    "id": cid,
+                    "value": cid,
+                    "label": label,
+                    "title": title_btn,
+                    "status": status,
+                    "endereco": endereco_raw,
+                    "plano": plano,
+                    "_raw": c,
+                })
+            out["contratos_lista"] = contratos_lista
+            out["contratos_count"] = len(contratos_lista)
+            # Numbered text menu (used by the "text" options_format and as
+            # fallback for chat UIs that don't support interactive messages).
+            out["contratos_menu"] = "\n".join([
+                f"[ {i} ] - {ci['status']} - {ci['endereco']}"
+                for i, ci in enumerate(contratos_lista)
+            ]) or ""
             # Cliente info: prefer wrapper, fall back to contrato fields
             out["nome_cliente"] = (
                 cli.get("nome") or cli.get("razaosocial") or cli.get("razao_social")
@@ -443,17 +514,55 @@ async def advance_flow(
         if _node_type(prev) == "menu":
             cfg = (prev.get("data") or {}).get("config") or {}
             opts = cfg.get("options") or []
-            choice_idx = _resolve_menu_choice(incoming_text, opts)
-            if choice_idx is None:
-                logger.info(f"[flow_engine] menu {prev_id} got invalid reply {incoming_text!r}; re-prompting")
-                txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."
-                await _emit_and_persist(txt)
-                return sent
-            branch_handle = f"option-{choice_idx}"
-            cap = cfg.get("capture_var")
-            if cap and choice_idx < len(opts):
-                vars_[cap] = opts[choice_idx].get("label") or opts[choice_idx].get("key") or incoming_text
-            logger.info(f"[flow_engine] menu {prev_id} resolved to idx={choice_idx} handle={branch_handle}")
+            # If a dynamic_source is set, the user's reply will match the
+            # dynamic items (button rowId / list rowId / typed number).
+            dyn_src = cfg.get("dynamic_source") or ""
+            dyn_items = vars_.get(dyn_src) if dyn_src else None
+            if isinstance(dyn_items, list) and dyn_items:
+                s = (incoming_text or "").strip()
+                choice_idx = None
+                # Exact match on `value` (rowId from buttons/list) — most common
+                # path when client tapped a button.
+                for i, it in enumerate(dyn_items):
+                    val = str(it.get("value") or it.get("id") or "").strip()
+                    if val and s == val:
+                        choice_idx = i
+                        break
+                # Numeric idx (when client typed "0", "1", … in text mode)
+                if choice_idx is None and s.isdigit():
+                    idx = int(s)
+                    if 0 <= idx < len(dyn_items):
+                        choice_idx = idx
+                if choice_idx is None:
+                    logger.info(f"[flow_engine] menu {prev_id} (dynamic) got invalid reply {incoming_text!r}; re-prompting")
+                    txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."
+                    await _emit_and_persist(txt)
+                    return sent
+                # Capture the selected item into the variable so downstream
+                # nodes can reference {{contrato_id}}, {{endereco}}, …
+                picked = dyn_items[choice_idx]
+                # Always expose the chosen contract's normalised fields
+                vars_["contrato_id"] = str(picked.get("value") or picked.get("id") or "")
+                if picked.get("status"):  vars_["contrato_status"] = picked.get("status")
+                if picked.get("endereco"): vars_["contrato_endereco"] = picked.get("endereco")
+                if picked.get("plano"):    vars_["contrato_plano"] = picked.get("plano")
+                cap = cfg.get("capture_var")
+                if cap:
+                    vars_[cap] = vars_["contrato_id"]
+                branch_handle = "option-default"
+                logger.info(f"[flow_engine] menu {prev_id} (dynamic) resolved idx={choice_idx} contrato_id={vars_['contrato_id']!r}")
+            else:
+                choice_idx = _resolve_menu_choice(incoming_text, opts)
+                if choice_idx is None:
+                    logger.info(f"[flow_engine] menu {prev_id} got invalid reply {incoming_text!r}; re-prompting")
+                    txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."
+                    await _emit_and_persist(txt)
+                    return sent
+                branch_handle = f"option-{choice_idx}"
+                cap = cfg.get("capture_var")
+                if cap and choice_idx < len(opts):
+                    vars_[cap] = opts[choice_idx].get("label") or opts[choice_idx].get("key") or incoming_text
+                logger.info(f"[flow_engine] menu {prev_id} resolved to idx={choice_idx} handle={branch_handle}")
         else:
             cfg = (prev.get("data") or {}).get("config") or {}
             cap = cfg.get("capture_var")
@@ -522,6 +631,7 @@ async def advance_flow(
             continue
 
         if nt == "menu":
+            cfg_menu = (node.get("data") or {}).get("config") or {}
             missing = set()
             text = _node_text(node, vars_, missing=missing) or "Escolha uma opcao:"
             critical_missing = missing & set(_CRITICAL_PLACEHOLDERS.keys())
@@ -532,10 +642,61 @@ async def advance_flow(
                 if not dry_run:
                     await _save_state(db, ticket["id"], flow_id, None, vars_)
                 return sent
-            await _emit_and_persist(text)
+            # ─── Render format: text | buttons | list ──────────────────
+            # Operators choose via cfg.options_format. If a `dynamic_source`
+            # variable name is set (e.g. "contratos_lista"), the menu pulls
+            # its options from the SGP-flattened list at runtime; otherwise
+            # falls back to cfg.options (operator-defined static items).
+            options_format = (cfg_menu.get("options_format") or "text").lower()
+            dynamic_source = cfg_menu.get("dynamic_source") or ""
+            dynamic_items = []
+            if dynamic_source and isinstance(vars_.get(dynamic_source), list):
+                dynamic_items = vars_[dynamic_source]
+            static_items = cfg_menu.get("options") or []
+            options_items = dynamic_items or static_items
+
+            sent_interactive = False
+            if options_items and options_format in ("buttons", "list") and not dry_run:
+                if options_format == "buttons" and len(options_items) <= 3:
+                    btns = [
+                        {"id": str(o.get("value") or o.get("id") or i),
+                         "title": str(o.get("title") or o.get("label") or o.get("status") or f"Opção {i}")[:20]}
+                        for i, o in enumerate(options_items)
+                    ]
+                    sent_interactive = await _send_whatsapp_interactive(ticket, {
+                        "mode": "buttons",
+                        "body": text,
+                        "footer": cfg_menu.get("footer") or "",
+                        "buttons": btns,
+                    })
+                else:
+                    # List: more options or operator explicitly asked for list
+                    rows = [
+                        {"id": str(o.get("value") or o.get("id") or i),
+                         "title": str(o.get("title") or o.get("label") or o.get("status") or f"Opção {i}")[:24],
+                         "description": (str(o.get("endereco") or o.get("description") or o.get("plano") or "")[:72] or None)}
+                        for i, o in enumerate(options_items)
+                    ]
+                    sent_interactive = await _send_whatsapp_interactive(ticket, {
+                        "mode": "list",
+                        "header": cfg_menu.get("header") or "",
+                        "body": text,
+                        "footer": cfg_menu.get("footer") or "",
+                        "button_label": cfg_menu.get("button_label") or "Ver opções",
+                        "sections": [{"title": cfg_menu.get("section_title") or "", "rows": rows}],
+                    })
+                # Persist the message so the agent UI shows it (without the
+                # actual interactive widget — just the printable text).
+                if sent_interactive:
+                    await _persist_outgoing(db, ticket["id"], text, flow_id)
+                    sent.append(text)
+
+            if not sent_interactive:
+                # Plain text path (works on any WhatsApp client + agent UI).
+                await _emit_and_persist(text)
             pending_node_id = current_id
             current_id = None
-            logger.info(f"[flow_engine] menu {pending_node_id} posted; waiting for customer reply")
+            logger.info(f"[flow_engine] menu {pending_node_id} posted (format={options_format!r}, interactive={sent_interactive}); waiting for customer reply")
             break
 
         if nt in ("http", "request", "api", "http_request"):
