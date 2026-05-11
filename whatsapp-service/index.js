@@ -414,7 +414,11 @@ async function createConnection(instanceId) {
     // Capture both 'notify' (real-time push) and 'append' (background sync)
     if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
-      if (msg.key.fromMe) continue;
+      // fromMe === true means the operator sent this message from the
+      // linked device (cellphone WhatsApp app, WhatsApp Web, etc). We
+      // MUST forward these so the system reflects the same conversation
+      // state as the phone. The webhook handler stores them as outgoing.
+      const fromMe = !!msg.key.fromMe;
       const remoteJid = msg.key.remoteJid || '';
       // Skip groups and status broadcasts (focus on 1-on-1 DMs for CRM)
       if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
@@ -577,8 +581,9 @@ async function createConnection(instanceId) {
           media_mimetype: mediaMimetype,
           media_filename: mediaFilename,
           media_base64: mediaB64,
+          from_me: fromMe,  // true when operator sent it from the linked phone
         }, { timeout: 30000, maxBodyLength: 50 * 1024 * 1024, maxContentLength: 50 * 1024 * 1024 });
-        console.log(`[${instanceId}] ✓ webhook sent phone=${phone} text="${text.slice(0, 40)}"${mediaKind ? ' media='+mediaKind : ''} -> ${resp.status}`);
+        console.log(`[${instanceId}] ✓ webhook sent phone=${phone} ${fromMe ? '[FROM_ME]' : '[IN]'} text="${text.slice(0, 40)}"${mediaKind ? ' media='+mediaKind : ''} -> ${resp.status}`);
       } catch (e) {
         console.error(`[${instanceId}] ✗ webhook FAILED (${FASTAPI_URL}): ${e.message} — check FASTAPI_URL env var on Render!`);
       }

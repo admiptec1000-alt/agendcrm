@@ -609,6 +609,7 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     #   (b) auto-merge later when /webhook/lid-resolved arrives with the
     #       real phone for the same LID.
     lid_jid = (data.get("lid_jid") or "").strip() or None
+    from_me = bool(data.get("from_me"))  # True when operator sent from phone
     # Optional inbound media (audio/image/video/document). The microservice
     # downloads the encrypted payload via Baileys, decrypts it and forwards
     # the decoded bytes as base64. We persist it to object storage here so
@@ -645,8 +646,10 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     # Log incoming message (raw)
     await db.message_log.insert_one({
         "id": str(uuid.uuid4()), "company_id": company_id, "connection_id": instance_id,
-        "direction": "incoming", "phone": phone, "sender_name": data.get("name"),
+        "direction": "outgoing" if from_me else "incoming",
+        "phone": phone, "sender_name": data.get("name"),
         "message": text, "message_id": msg_id,
+        "from_me": from_me,
         "created_at": datetime.now(timezone.utc).isoformat()
     })
 
@@ -687,7 +690,12 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         return False
 
     fallback_ticket = None
-    if _looks_like_lid(phone):
+    if _looks_like_lid(phone) and not from_me:
+        # @lid fallback is only meaningful for incoming messages: when a
+        # client replies via a privacy-mode JID, we try to find the right
+        # ticket via recent outgoing or push_name. For outgoing messages
+        # from the operator's phone, `phone` is the destination — already
+        # canonical — so we just look up the ticket by phone directly.
         from datetime import timedelta
         # Strategy 1: most recent outgoing within 5 minutes ANYWHERE in the
         # tenant — extremely reliable. If the operator just sent something
@@ -738,12 +746,19 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     new_message = {
         "id": str(uuid.uuid4()),
         "content": text,
-        "sender_type": "user",
+        # Messages with from_me=true were sent by the operator from their
+        # linked phone / WhatsApp Web — render them on the agent side and
+        # tag delivery as already sent (WA confirmed otherwise it would
+        # not have left the device).
+        "sender_type": "agent" if from_me else "user",
         "sender_id": None,
-        "sender_name": name,
+        "sender_name": (conn.get("connected_name") or "Agente") if from_me else name,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "wa_message_id": msg_id,
     }
+    if from_me:
+        new_message["delivery_status"] = "sent"
+        new_message["source"] = "phone"  # so the UI could badge it as 'sent from phone'
 
     # Persist inbound media to object storage so the chat can render an
     # inline <audio>/<img>/<video>/<a> element for the operator. The file
@@ -763,6 +778,18 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             new_message["media_size"] = saved["size"]
 
     if not ticket:
+        if from_me:
+            # Operator sent a message from the phone to a brand-new number
+            # with NO existing ticket. We could auto-create one, but the
+            # safer default is to skip it: the operator is initiating
+            # contact outside the CRM, and creating a ticket would orphan
+            # it from the funnel/flow. We still keep the message_log row
+            # above so audits remain complete.
+            logger.info(
+                f"[webhook/message][from_me] no open ticket for phone={phone}; "
+                f"skipping ticket creation (operator initiated from phone)"
+            )
+            return {"ok": True, "skipped": "from_me_no_existing_ticket"}
         ticket_id = str(uuid.uuid4())
         ticket_number = await next_ticket_number(db, company_id)
         client_id = await find_or_create_client_by_phone(db, company_id, phone, name=name)
@@ -806,29 +833,44 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         except Exception as e:
             logger.warning(f"[webhook/message] flow trigger failed: {e}")
     else:
-        # Idempotency: skip if same wa message id already pushed
+        # Idempotency: skip if same wa message id already pushed.
+        # This is CRITICAL for outgoing-from-phone messages: when the
+        # operator sends from the system's web UI, crm_routes also stamps
+        # `wa_message_id` returned by Baileys. Without dedup, the same
+        # message would appear twice (once from crm_routes, once from the
+        # messages.upsert echo with fromMe=true).
         existing_ids = [m.get("wa_message_id") for m in (ticket.get("messages") or [])]
         if msg_id and msg_id in existing_ids:
             return {"ok": True, "duplicate": True}
+        update_set = {"updated_at": datetime.now(timezone.utc).isoformat()}
+        if from_me:
+            # Track last outgoing so the @lid fallback works for the very
+            # next inbound reply (same as crm_routes does for web-sent
+            # outbound). Mirrors the canonical "operator just talked to
+            # this contact" signal regardless of where the message was
+            # typed from.
+            update_set["last_outgoing_at"] = update_set["updated_at"]
         await db.tickets.update_one(
             {"id": ticket["id"]},
-            {"$push": {"messages": new_message},
-             "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
+            {"$push": {"messages": new_message}, "$set": update_set}
         )
         # Reload ticket to pick up flow state and advance the runtime if it's
-        # waiting on this customer reply.
-        try:
-            from flow_engine import advance_flow, is_flow_active
-            updated = await db.tickets.find_one({"id": ticket["id"]}, {"_id": 0})
-            if updated and await is_flow_active(updated):
-                flow_doc = await db.flow_builders.find_one(
-                    {"id": updated["active_flow_id"], "company_id": updated["company_id"]},
-                    {"_id": 0},
-                )
-                if flow_doc:
-                    await advance_flow(db, updated, flow_doc, incoming_text=text, is_initial=False)
-        except Exception as e:
-            logger.warning(f"[webhook/message] flow advance failed: {e}")
+        # waiting on this customer reply. Outgoing-from-phone messages do
+        # NOT advance flows — they're our own output and would create
+        # infinite loops if a flow waited for "user input".
+        if not from_me:
+            try:
+                from flow_engine import advance_flow, is_flow_active
+                updated = await db.tickets.find_one({"id": ticket["id"]}, {"_id": 0})
+                if updated and await is_flow_active(updated):
+                    flow_doc = await db.flow_builders.find_one(
+                        {"id": updated["active_flow_id"], "company_id": updated["company_id"]},
+                        {"_id": 0},
+                    )
+                    if flow_doc:
+                        await advance_flow(db, updated, flow_doc, incoming_text=text, is_initial=False)
+            except Exception as e:
+                logger.warning(f"[webhook/message] flow advance failed: {e}")
 
     return {"ok": True}
 

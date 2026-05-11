@@ -10,7 +10,35 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-11 — Sync mensagens enviadas pelo celular do operador ✅
+
+**Problema:** Quando o operador enviava uma mensagem via WhatsApp do celular (linked device), ela chegava no cliente mas NAO aparecia na tela de Atendimentos do sistema. Recebimento (cliente → sistema) funcionava normalmente.
+
+**Causa raiz:** O microservico Baileys (`/app/whatsapp-service/index.js`) descartava todas as mensagens com `key.fromMe: true` antes mesmo de chamar o webhook (`continue` na linha 417). Apenas mensagens recebidas eram forwardadas.
+
+**Fix:**
+1. Microservice agora forwarda tambem `fromMe:true` no payload, com flag `from_me: true`.
+2. Backend `/api/channels/webhook/message` reconhece o flag e:
+   - Persiste a mensagem com `sender_type: "agent"`, `sender_name: connected_name`, `delivery_status: "sent"`, `source: "phone"`.
+   - Bypassa `@lid fallback` (phone e o destinatario, ja canonico) e flow trigger (mensagem nossa nao deve avancar flows).
+   - Idempotencia via `wa_message_id` (evita duplicar quando operador envia pelo proprio sistema e o microservico ecoa o `fromMe:true`).
+   - Atualiza `last_outgoing_at` (mantem o fallback @lid funcionando para a proxima resposta).
+   - Se nao existir ticket aberto para o destino, ignora (operador iniciando contato fora do CRM nao cria orfao).
+3. Frontend ja renderiza por `sender_type === 'agent'` (bolha verde direita) — nenhuma mudanca necessaria na UI.
+
+
 ### 2026-05-11 — AgendaPro respeita Horario de Funcionamento ✅
+
+- Endpoint existente `/api/scheduling/business-hours` alimenta os slots do AgendaPro.
+- Day view: slots so dentro do intervalo do dia (Seg-Sex 08:00-18:00 -> 08:00..17:30). Dia inativo mostra empty state "Estabelecimento fechado".
+- Week view: uniao das janelas ativas; celulas fora do expediente ficam dimmed e nao-clicaveis.
+- Botao Novo continua aberto para agendamento manual fora do horario.
+
+**Verificado:** 3 cenarios validados via curl (mensagem nova OK, dedupe OK, no-ticket OK). Backend logs + DB confirmados.
+
+**ATENCAO:** Mudanca tambem no `whatsapp-service/index.js` — precisa rebuild/redeploy do microservico no Render junto com o backend.
+
+
 
 - Endpoint existente `/api/scheduling/business-hours` agora alimenta os slots do AgendaPro.
 - **Day view**: slots renderizam apenas no intervalo configurado para aquele dia (ex.: Seg 08:00-18:00 mostra `08:00..17:30`). Dia inativo (ex.: domingo) mostra estado "Estabelecimento fechado neste dia" com instrucao para usar botao Novo.
