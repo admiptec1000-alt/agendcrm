@@ -675,19 +675,11 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
                   <div>
                     <label className="text-[10px] font-bold uppercase text-slate-400">Servicos</label>
                     <div className="flex flex-wrap gap-1.5 mb-1.5 min-h-[28px]" data-testid="agendapro-selected-chips">
-                      {mainSvc && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary text-white text-xs font-semibold shadow-sm">
-                          <span className="opacity-70 text-[9px] uppercase tracking-wider">Principal</span>
-                          <span>{mainSvc.name}</span>
-                          <span className="opacity-70">· {mainSvc.duration || mainSvc.duration_min || 30}min</span>
-                          <button type="button" onClick={() => removeSvc(mainSvc.id)} className="ml-0.5 hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`agendapro-chip-remove-${mainSvc.id}`}>×</button>
-                        </span>
-                      )}
-                      {extraSvcs.map(s => (
-                        <span key={s.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-medium">
+                      {[...(mainSvc ? [mainSvc] : []), ...extraSvcs].map(s => (
+                        <span key={s.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary text-white text-xs font-semibold shadow-sm" data-testid={`agendapro-chip-${s.id}`}>
                           <span>{s.name}</span>
                           <span className="opacity-70">· {s.duration || s.duration_min || 30}min</span>
-                          <button type="button" onClick={() => removeSvc(s.id)} className="ml-0.5 hover:bg-indigo-200 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`agendapro-chip-remove-${s.id}`}>×</button>
+                          <button type="button" onClick={() => removeSvc(s.id)} className="ml-0.5 hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`agendapro-chip-remove-${s.id}`}>×</button>
                         </span>
                       ))}
                       {!mainSvc && <span className="text-xs text-slate-400 italic">Nenhum servico selecionado ainda</span>}

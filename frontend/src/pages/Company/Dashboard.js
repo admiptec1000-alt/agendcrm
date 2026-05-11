@@ -2602,24 +2602,16 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Detalhes do Agendamento</p>
 
-            {/* Modern service picker — chip + search */}
+            {/* Modern service picker — chip + search (uniform, no Principal/Extra split) */}
             <div className="mb-3">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5 block">Servicos</label>
               {/* Selected chips */}
               <div className="flex flex-wrap gap-1.5 mb-1.5 min-h-[28px]" data-testid="new-apt-selected-chips">
-                {_mainSvc && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary text-white text-xs font-semibold shadow-sm" data-testid={`chip-main-${_mainSvc.id}`}>
-                    <span className="opacity-70 text-[9px] uppercase tracking-wider">Principal</span>
-                    <span>{_mainSvc.name}</span>
-                    <span className="opacity-70">· {_mainSvc.duration || _mainSvc.duration_min || 30}min</span>
-                    <button type="button" onClick={() => removeService(_mainSvc.id)} className="ml-0.5 hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`chip-remove-${_mainSvc.id}`}>×</button>
-                  </span>
-                )}
-                {_extraSvcs.map(s => (
-                  <span key={s.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-medium" data-testid={`chip-extra-${s.id}`}>
+                {[...(_mainSvc ? [_mainSvc] : []), ..._extraSvcs].map(s => (
+                  <span key={s.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary text-white text-xs font-semibold shadow-sm" data-testid={`chip-svc-${s.id}`}>
                     <span>{s.name}</span>
                     <span className="opacity-70">· {s.duration || s.duration_min || 30}min</span>
-                    <button type="button" onClick={() => removeService(s.id)} className="ml-0.5 hover:bg-indigo-200 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`chip-remove-${s.id}`}>×</button>
+                    <button type="button" onClick={() => removeService(s.id)} className="ml-0.5 hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center" data-testid={`chip-remove-${s.id}`}>×</button>
                   </span>
                 ))}
                 {!_mainSvc && (
