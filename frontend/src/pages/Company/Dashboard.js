@@ -12,9 +12,10 @@ import {
   Sparkles, Calendar, CalendarCheck, CalendarDays, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins, Paperclip
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins, Paperclip, PlugZap
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
+import SGPGatewayPage from '../CRM/SGPGatewayPage';
 import PartnerPage from './PartnerPage';
 import AtendimentosPage from '../CRM/AtendimentosPage';
 import TagsPage from '../CRM/TagsPage';
@@ -30,7 +31,7 @@ const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
   Megaphone, GitBranch, Info, Code, UserCog, Bot, Link, Sparkles, Calendar,
   CalendarCheck, UserCheck, FolderOpen, Scissors, CreditCard, Briefcase,
-  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor, Shield, FileText, HandCoins
+  DollarSign, PieChart, Globe, Bell, Settings, Puzzle, BarChart3, LifeBuoy, Monitor, Shield, FileText, HandCoins, PlugZap, CalendarDays, Clock
 };
 
 const FEATURE_META = {
@@ -44,6 +45,7 @@ const FEATURE_META = {
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
+  sgp_gateway:        { icon: 'PlugZap',          label: 'SGP Gateway', group: 'CRM' },
   // 'api' was a placeholder feature without page; merged into 'integrações'
   // to match the customer-facing single menu "API e Integrações".
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
@@ -652,6 +654,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'campanhas': return <CampaignsPage />;
     case 'tags': return <TagsPage />;
     case 'flowbuilder': return <FlowBuilderPage />;
+    case 'sgp_gateway': return <SGPGatewayPage />;
     case 'parceiros': return <PartnerPage />;
     case 'agente_ia': return <AIPage />;
     case 'conexoes': return <ConexoesPage />;

@@ -1,0 +1,398 @@
+"""
+SGP Outbound Gateway
+====================
+
+Lets the SGP (or any external system that follows the "HTTP Generico" SMS
+gateway contract) push WhatsApp messages out through AgentCRM. Each AgentCRM
+company creates one or more `sgp_gateways` rows; each row holds:
+
+  - A long random `token` that goes into the URL path. The token is the only
+    secret needed to call the public endpoint, so it doubles as both
+    authentication AND tenant routing — no JWT/header needed.
+  - A `connection_id` (which Baileys-backed WhatsApp connection should send
+    the message). This is required by design (Q2 = c): every token targets
+    one specific connection.
+  - A `label` so the operator can keep multiple gateways apart in the UI
+    (e.g. "SGP Cobrança", "SGP Avisos").
+
+When the external system hits the public endpoint:
+  1. Resolve the gateway by token (404 if unknown / disabled).
+  2. Resolve the connection (404 if missing) — must belong to the same
+     company. Reject if not connected (so we don't silently drop messages).
+  3. Normalize the phone (E.164 BR by default; client may pass cc_code as
+     prefix like the SGP HTTP Genérico does).
+  4. Find-or-create the contact and OPEN ticket (channel="whatsapp"). If the
+     contact already has an open ticket we reuse it (so the operator sees a
+     single thread per number, like a normal inbound flow).
+  5. Append the message (direction="outgoing", from_me=true, source="sgp")
+     to the ticket and trigger the Baileys send.
+  6. Touch `last_called_at`/`calls_count` for observability in the UI.
+
+Endpoints
+---------
+Authenticated (operator UI):
+  GET    /api/sgp/gateways                — list gateways for current tenant
+  POST   /api/sgp/gateways                — create gateway (auto generates token)
+  PUT    /api/sgp/gateways/{id}           — update label / connection_id / active
+  POST   /api/sgp/gateways/{id}/regenerate-token
+  DELETE /api/sgp/gateways/{id}
+
+Public (called by SGP / any HTTP gateway):
+  GET  /api/sgp/gateway/send/{token}      — query: celular=..., message=...
+  POST /api/sgp/gateway/send/{token}      — same params as query/form/json
+"""
+from fastapi import APIRouter, Depends, HTTPException, Request
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime, timezone
+import uuid
+import secrets
+import re
+import logging
+import os
+import httpx
+
+from database import get_database
+from auth import get_current_user
+from counters import next_ticket_number
+from clients_link import find_or_create_client_by_phone
+
+logger = logging.getLogger("sgp_gateway")
+router = APIRouter(prefix="/sgp", tags=["sgp-gateway"])
+
+WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+
+
+# ─── helpers ────────────────────────────────────────────────────────────────
+
+def _gen_token() -> str:
+    """48-char URL-safe random token. ~282 bits of entropy — collision proof
+    forever, and short enough to fit cleanly in a URL the operator pastes
+    into SGP."""
+    return secrets.token_urlsafe(36)
+
+
+def _normalize_phone(raw: str, cc_code: str = "55") -> str:
+    """SGP usually sends just `999990000` (without country code). We always
+    prefix `cc_code` (default 55) if the digits don't already start with it.
+    Returns digits-only (Baileys expects `5562...@s.whatsapp.net`).
+    """
+    digits = re.sub(r"\D+", "", raw or "")
+    if not digits:
+        return ""
+    if digits.startswith(cc_code):
+        return digits
+    return f"{cc_code}{digits}"
+
+
+def _public_view(g: dict) -> dict:
+    """Strip the token from list responses; the token is only ever shown
+    explicitly via the "show URL" UI affordance (or right after create)."""
+    return {
+        "id": g["id"],
+        "company_id": g["company_id"],
+        "label": g.get("label"),
+        "connection_id": g.get("connection_id"),
+        "active": g.get("active", True),
+        "calls_count": g.get("calls_count", 0),
+        "last_called_at": g.get("last_called_at"),
+        "created_at": g.get("created_at"),
+        # Token IS included in the GET responses — operators copy it from
+        # the listing to paste in SGP. There's no point hiding it: anyone
+        # with read access to the page can already use any other UI hook
+        # to send a message. (Token rotation is one click away.)
+        "token": g.get("token"),
+    }
+
+
+# ─── models ────────────────────────────────────────────────────────────────
+
+class GatewayCreate(BaseModel):
+    label: str
+    connection_id: str
+
+
+class GatewayUpdate(BaseModel):
+    label: Optional[str] = None
+    connection_id: Optional[str] = None
+    active: Optional[bool] = None
+
+
+# ─── admin endpoints (authenticated) ────────────────────────────────────────
+
+@router.get("/gateways")
+async def list_gateways(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    items = await db.sgp_gateways.find(
+        {"company_id": user["company_id"]}, {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    return [_public_view(g) for g in items]
+
+
+@router.post("/gateways")
+async def create_gateway(
+    data: GatewayCreate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    # Validate the connection belongs to the same company.
+    conn = await db.channel_connections.find_one(
+        {"id": data.connection_id, "company_id": user["company_id"]}
+    )
+    if not conn:
+        raise HTTPException(404, "Conexao WhatsApp nao encontrada")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "label": data.label.strip(),
+        "connection_id": data.connection_id,
+        "token": _gen_token(),
+        "active": True,
+        "calls_count": 0,
+        "last_called_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.sgp_gateways.insert_one(doc)
+    return _public_view(doc)
+
+
+@router.put("/gateways/{gid}")
+async def update_gateway(
+    gid: str,
+    data: GatewayUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "connection_id" in update:
+        conn = await db.channel_connections.find_one(
+            {"id": update["connection_id"], "company_id": user["company_id"]}
+        )
+        if not conn:
+            raise HTTPException(404, "Conexao WhatsApp nao encontrada")
+    if not update:
+        raise HTTPException(400, "Nada para atualizar")
+    r = await db.sgp_gateways.update_one(
+        {"id": gid, "company_id": user["company_id"]}, {"$set": update}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(404, "Gateway nao encontrado")
+    doc = await db.sgp_gateways.find_one({"id": gid}, {"_id": 0})
+    return _public_view(doc)
+
+
+@router.post("/gateways/{gid}/regenerate-token")
+async def regenerate_token(
+    gid: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    new_token = _gen_token()
+    r = await db.sgp_gateways.update_one(
+        {"id": gid, "company_id": user["company_id"]},
+        {"$set": {"token": new_token}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(404, "Gateway nao encontrado")
+    doc = await db.sgp_gateways.find_one({"id": gid}, {"_id": 0})
+    return _public_view(doc)
+
+
+@router.delete("/gateways/{gid}")
+async def delete_gateway(
+    gid: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    r = await db.sgp_gateways.delete_one(
+        {"id": gid, "company_id": user["company_id"]}
+    )
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Gateway nao encontrado")
+    return {"deleted": True}
+
+
+# ─── PUBLIC endpoint (called by SGP) ────────────────────────────────────────
+
+async def _handle_send(
+    token: str,
+    celular: str,
+    message: str,
+    cc_code: str,
+    db: AsyncIOMotorDatabase,
+):
+    """Shared logic for GET and POST. Kept synchronous-friendly so we can
+    return the same JSON shape regardless of method."""
+    gw = await db.sgp_gateways.find_one({"token": token}, {"_id": 0})
+    if not gw or not gw.get("active", True):
+        raise HTTPException(404, "Gateway nao encontrado ou desabilitado")
+
+    if not celular or not message:
+        raise HTTPException(400, "Parametros 'celular' e 'message' sao obrigatorios")
+
+    conn = await db.channel_connections.find_one(
+        {"id": gw["connection_id"], "company_id": gw["company_id"]}
+    )
+    if not conn:
+        raise HTTPException(503, "Conexao WhatsApp nao configurada")
+    if conn.get("status") != "connected":
+        raise HTTPException(503, "Conexao WhatsApp nao esta conectada")
+
+    phone = _normalize_phone(celular, cc_code or "55")
+    if len(phone) < 10:
+        raise HTTPException(400, "Numero de celular invalido")
+
+    company_id = gw["company_id"]
+    # Find an OPEN ticket for this number (same connection). Reuse to keep
+    # a single conversation thread per contact.
+    ticket = await db.tickets.find_one(
+        {
+            "company_id": company_id,
+            "customer_phone": phone,
+            "status": {"$nin": ["fechado", "cancelado"]},
+            "channel": {"$ne": "whatsapp_group"},
+        },
+        {"_id": 0},
+    )
+    if not ticket:
+        ticket_id = str(uuid.uuid4())
+        ticket_number = await next_ticket_number(db, company_id)
+        client_id = await find_or_create_client_by_phone(db, company_id, phone, name=None)
+        ticket = {
+            "id": ticket_id,
+            "ticket_number": ticket_number,
+            "company_id": company_id,
+            "connection_id": gw["connection_id"],
+            "client_id": client_id,
+            "customer_name": phone,
+            "customer_phone": phone,
+            "customer_email": None,
+            "status": "aberto",
+            "priority": "medium",
+            "channel": "whatsapp",
+            "is_group": False,
+            "group_jid": None,
+            "group_subject": None,
+            "description": message[:140],
+            "assigned_to": None,
+            "queue_id": (conn.get("queue_ids") or [None])[0]
+            if len(conn.get("queue_ids") or []) == 1 else None,
+            "messages": [],
+            "tags": ["SGP Gateway"],
+            "value": 0.0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            # Hint downstream logic this ticket originated from SGP.
+            "origin": "sgp_gateway",
+        }
+        await db.tickets.insert_one(ticket)
+
+    new_msg = {
+        "id": str(uuid.uuid4()),
+        "direction": "outgoing",
+        "from_me": True,
+        "type": "text",
+        "content": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "status": "sending",
+        "source": "sgp_gateway",
+    }
+
+    # Send via Baileys microservice. We do it BEFORE persisting the message
+    # so we can stamp the wa_message_id if the broker returns one.
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{WA_SERVICE_URL}/instances/{gw['connection_id']}/send",
+                json={"phone": phone, "message": message},
+            )
+            result = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {"success": False, "error": resp.text[:200]}
+    except Exception as e:
+        logger.exception("[sgp_gateway] WA send failed")
+        result = {"success": False, "error": str(e)}
+
+    if result.get("success"):
+        new_msg["status"] = "sent"
+        if result.get("message_id"):
+            new_msg["wa_message_id"] = result["message_id"]
+    else:
+        new_msg["status"] = "failed"
+        new_msg["error"] = result.get("error", "Unknown error")
+
+    await db.tickets.update_one(
+        {"id": ticket["id"]},
+        {
+            "$push": {"messages": new_msg},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+        },
+    )
+
+    # Observability: bump the counter regardless of send result (so the UI
+    # shows the gateway is in use even if WA is offline).
+    await db.sgp_gateways.update_one(
+        {"id": gw["id"]},
+        {
+            "$inc": {"calls_count": 1},
+            "$set": {"last_called_at": datetime.now(timezone.utc).isoformat()},
+        },
+    )
+
+    if not result.get("success"):
+        # Keep parity with SGP's contract: 200 + success=false is the way
+        # the other gateways (superwhats, oratrix) report send failures
+        # without breaking the SGP retry queue.
+        return {
+            "success": False,
+            "error": result.get("error", "Send failed"),
+            "ticket_id": ticket["id"],
+        }
+
+    return {"success": True, "ticket_id": ticket["id"]}
+
+
+@router.get("/gateway/send/{token}")
+async def public_send_get(
+    token: str,
+    request: Request,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """SGP "HTTP Generico" typically calls with `?celular=...&message=...`
+    on GET. We accept both names AND fall back to common aliases (`to`,
+    `phone`, `text`, `msg`) to be friendly to other systems too.
+    """
+    qp = request.query_params
+    celular = qp.get("celular") or qp.get("to") or qp.get("phone") or ""
+    message = qp.get("message") or qp.get("msg") or qp.get("text") or ""
+    cc_code = qp.get("cc_code") or "55"
+    return await _handle_send(token, celular, message, cc_code, db)
+
+
+@router.post("/gateway/send/{token}")
+async def public_send_post(
+    token: str,
+    request: Request,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Accepts JSON body, urlencoded form, or query params (SGP can be
+    configured for any of these)."""
+    ctype = (request.headers.get("content-type") or "").lower()
+    celular = message = ""
+    cc_code = "55"
+    data: dict = {}
+    try:
+        if "application/json" in ctype:
+            data = await request.json()
+        elif "application/x-www-form-urlencoded" in ctype or "multipart/form-data" in ctype:
+            form = await request.form()
+            data = dict(form)
+    except Exception:
+        data = {}
+    # query string overrides body only when body didn't have it
+    qp = request.query_params
+    celular = data.get("celular") or data.get("to") or data.get("phone") or qp.get("celular") or qp.get("to") or qp.get("phone") or ""
+    message = data.get("message") or data.get("msg") or data.get("text") or qp.get("message") or qp.get("msg") or qp.get("text") or ""
+    cc_code = data.get("cc_code") or qp.get("cc_code") or "55"
+    return await _handle_send(token, str(celular), str(message), str(cc_code), db)

@@ -27,6 +27,7 @@ from routes.reports_routes import router as reports_router
 from routes.notification_routes import router as notification_router
 from routes.channels_routes import router as channels_router
 from routes.sgp_routes import router as sgp_router
+from routes.sgp_gateway_routes import router as sgp_gateway_router
 from routes.asaas_routes import router as asaas_router
 from routes.partners_routes import router as partners_router
 from routes.super_admin_finance_routes import router as super_admin_finance_router
@@ -61,6 +62,7 @@ api_router.include_router(reports_router)
 api_router.include_router(quotes_router)
 api_router.include_router(notification_router)
 api_router.include_router(channels_router)
+api_router.include_router(sgp_gateway_router)
 api_router.include_router(sgp_router)
 api_router.include_router(asaas_router)
 api_router.include_router(partners_router)

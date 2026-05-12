@@ -9,6 +9,24 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+### 2026-05-12 (B) — SGP Outbound Gateway (HTTP Genérico) ✅
+
+**Feature inversa**: SGP → AgentCRM → WhatsApp. Permite cadastrar o AgentCRM como "SMS Gateway HTTP Genérico" no SGP para que o ERP dispare mensagens WhatsApp pelo CRM (cobrança/avisos).
+
+- Backend (`backend/routes/sgp_gateway_routes.py` — novo arquivo):
+  - Collection `sgp_gateways`: `{ id, company_id, token, connection_id, label, active, calls_count, last_called_at }`
+  - CRUD autenticado: `GET/POST/PUT/DELETE /api/sgp/gateways` + `POST /gateways/{id}/regenerate-token`
+  - **Endpoint PÚBLICO** (sem JWT, auth por token na URL): `GET/POST /api/sgp/gateway/send/{token}?celular=...&message=...`
+  - Aceita query/form/json com aliases (`celular`/`to`/`phone`, `message`/`msg`/`text`, `cc_code`)
+  - Normaliza telefone (BR default), localiza ou cria ticket aberto no canal `whatsapp`, agrega mensagem ao thread, dispara via Baileys `/instances/{conn}/send`
+  - Tag automática "SGP Gateway", `origin: sgp_gateway`
+  - Registrado ANTES do `sgp_router` no `server.py` para precedência sobre o catch-all `POST /{action}`
+
+- Frontend (`frontend/src/pages/CRM/SGPGatewayPage.js` — novo arquivo): página dedicada no menu CRM (ícone `PlugZap`); lista cards com URL completa + botão copiar e "Copiar Config JSON" para colar em SGP > Sistema > Config SMS Gateway > HTTP Generico.
+
+- Super Admin: nova feature `sgp_gateway` listada em `/api/super-admin/features`.
+
+
 
 ### 2026-05-12 — Lote A+B+C: Bug Aguardando + Layout PDF (PDF/JPG/PNG) + Permissões por Fila + Export Flow + Posição Coluna ✅
 

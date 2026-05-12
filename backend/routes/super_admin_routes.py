@@ -26,6 +26,7 @@ ALL_FEATURES = [
     {"feature_key": "chat_interno", "label": "Chat Interno", "category": "crm", "icon": "MessageSquare"},
     {"feature_key": "campanhas", "label": "Campanhas", "category": "crm", "icon": "Megaphone"},
     {"feature_key": "flowbuilder", "label": "Flowbuilder", "category": "crm", "icon": "GitBranch"},
+    {"feature_key": "sgp_gateway", "label": "SGP Gateway", "category": "crm", "icon": "PlugZap"},
     {"feature_key": "informativos", "label": "Informativos", "category": "crm", "icon": "Info"},
     # NOTE: legacy "api" feature merged into "integrações" — single menu
     # "API e Integrações" handles both API explorer and 3rd-party integrations
