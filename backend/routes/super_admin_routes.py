@@ -1120,3 +1120,159 @@ async def migrate_sgp_flow_endpoint(
     from scripts.migrate_sgp_flow_to_dynamic_menu import run_migration
     report = await run_migration(db, dry_run=dry_run)
     return report
+
+
+# ──── INSERT CONTRACTS MENU INTO SGP FLOW ────
+@router.get("/sgp-flows")
+async def list_sgp_flows(
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """List every SGP flow across all companies. Used by the operator to
+    discover the `flow_id` they want to patch via
+    `/insert-contracts-menu/{flow_id}`."""
+    flows = await db.flow_builders.find(
+        {"$or": [
+            {"name": {"$regex": "SGP", "$options": "i"}},
+            {"nodes.data.config.url": {"$regex": "/sgp/", "$options": "i"}},
+        ]},
+        {"_id": 0, "id": 1, "name": 1, "company_id": 1, "updated_at": 1},
+    ).to_list(500)
+    # Augment with company name for ergonomics.
+    company_ids = list({f["company_id"] for f in flows if f.get("company_id")})
+    company_names = {}
+    if company_ids:
+        async for c in db.companies.find({"id": {"$in": company_ids}}, {"_id": 0, "id": 1, "name": 1}):
+            company_names[c["id"]] = c.get("name")
+    for f in flows:
+        f["company_name"] = company_names.get(f.get("company_id"))
+    return flows
+
+
+@router.post("/insert-contracts-menu/{flow_id}")
+async def insert_contracts_menu(
+    flow_id: str,
+    dry_run: bool = True,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Insert a "contratos" (contracts list) menu node between the
+    `consultacliente` HTTP request and the next downstream menu, on the
+    SGP flow identified by `flow_id`.
+
+    This addresses the second customer's request: after the customer
+    types CPF/CNPJ, list their contracts (via SGP) BEFORE showing the
+    Pix/2nd-via menu.
+
+    Behaviour:
+      - Locates the HTTP-Request node whose URL contains `consultacliente`.
+      - If a menu node with `dynamic_source: contratos_lista` already sits
+        downstream of it, returns `inserted=False` (idempotent).
+      - Otherwise: creates a new menu node, re-wires the consultacliente
+        outbound edges to point to the new node, and chains the new node
+        to whatever was previously downstream.
+    """
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+
+    nodes = flow.get("nodes") or []
+    edges = flow.get("edges") or []
+
+    # 1) Locate consultacliente node
+    cc_node = None
+    for n in nodes:
+        cfg = (n.get("data") or {}).get("config") or {}
+        if "consultacliente" in (cfg.get("url") or "").lower():
+            cc_node = n
+            break
+    if not cc_node:
+        raise HTTPException(400, "No node calling /sgp/consultacliente found in this flow")
+
+    # 2) Check idempotency — any menu downstream already dynamic_source=contratos_lista?
+    cc_id = cc_node["id"]
+    downstream_ids = [e["target"] for e in edges if e.get("source") == cc_id]
+    for n in nodes:
+        if n["id"] in downstream_ids:
+            cfg = (n.get("data") or {}).get("config") or {}
+            if cfg.get("dynamic_source") in ("contratos_lista", "contratos_menu"):
+                return {"inserted": False, "reason": "Menu de contratos ja existe downstream do consultacliente", "flow_id": flow_id}
+
+    # 3) Build the new menu node
+    import uuid as _uuid
+    new_id = f"menu_{_uuid.uuid4().hex[:8]}"
+    # position it visually under the consultacliente
+    cc_pos = cc_node.get("position") or {"x": 0, "y": 0}
+    new_node = {
+        "id": new_id,
+        "type": "flow",
+        "position": {"x": (cc_pos.get("x") or 0), "y": (cc_pos.get("y") or 0) + 180},
+        "data": {
+            "nodeType": "menu",
+            "label": "Menu Contratos (SGP)",
+            "config": {
+                "title": "Seus contratos",
+                "question": "Selecione o contrato que deseja atender:",
+                "options_format": "list",
+                "dynamic_source": "contratos_lista",
+                "footer": "Toque para escolher",
+                "list_button_text": "Ver contratos",
+                "list_section_title": "Contratos disponiveis",
+            },
+        },
+    }
+
+    # 4) Re-wire edges:
+    #    - keep one downstream id (the "main next") to chain after the new node
+    #    - replace consultacliente→downstream edges with consultacliente→newNode
+    #    - add newNode→main_downstream
+    if not downstream_ids:
+        # consultacliente had no outgoing edge. Just add the new node and connect.
+        next_id = None
+    else:
+        next_id = downstream_ids[0]  # main next; if there are alternates we keep them as-is
+
+    new_edges = []
+    seen_main = False
+    for e in edges:
+        if e.get("source") == cc_id and e.get("target") == next_id and not seen_main:
+            # Rewire the main downstream: cc -> newNode (instead of cc -> next_id)
+            seen_main = True
+            new_edges.append({
+                **e,
+                "target": new_id,
+                "id": f"e_{cc_id}_{new_id}",
+            })
+        else:
+            new_edges.append(e)
+    if next_id:
+        new_edges.append({
+            "id": f"e_{new_id}_{next_id}",
+            "source": new_id,
+            "target": next_id,
+        })
+
+    if dry_run:
+        return {
+            "inserted": True,
+            "dry_run": True,
+            "flow_id": flow_id,
+            "new_node_id": new_id,
+            "consultacliente_node": cc_id,
+            "next_node": next_id,
+            "would_add_node": new_node,
+        }
+
+    nodes.append(new_node)
+    await db.flow_builders.update_one(
+        {"id": flow_id},
+        {"$set": {"nodes": nodes, "edges": new_edges, "updated_at": datetime.utcnow().isoformat()}},
+    )
+    return {
+        "inserted": True,
+        "dry_run": False,
+        "flow_id": flow_id,
+        "new_node_id": new_id,
+        "consultacliente_node": cc_id,
+        "next_node": next_id,
+    }

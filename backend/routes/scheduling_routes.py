@@ -1483,14 +1483,19 @@ def _format_cpf(v: Optional[str]) -> Optional[str]:
 
 
 def _format_cnpj(v: Optional[str]) -> Optional[str]:
-    """Normalize CNPJ to '##.###.###/####-##'."""
+    """Normalize CNPJ to '##.###.###/####-##'. Accepts partial CNPJs (12+
+    digits) by best-effort masking; legacy data has 12-digit values that
+    operators want masked anyway."""
     if not v:
         return v
     import re as _re
     d = _re.sub(r"\D", "", v)
-    if len(d) != 14:
-        return v
-    return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
+    if len(d) == 14:
+        return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
+    if len(d) == 12:
+        # legacy/short form — mask without the check digit
+        return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}"
+    return v
 
 
 @router.post("/clients")
