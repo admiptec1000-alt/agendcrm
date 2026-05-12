@@ -11,7 +11,7 @@ import { toast } from 'sonner';
 import {
   Save, Plus, Trash2, X, MessageSquare, MenuSquare, Edit2,
   Shuffle, Clock, Ticket as TicketIcon, Tag, Bot, Globe, Zap,
-  ChevronLeft, Upload
+  ChevronLeft, Upload, Download
 } from 'lucide-react';
 
 const NODE_TYPES = [
@@ -205,6 +205,25 @@ const FlowBuilderPage = () => {
     }
   };
 
+  const exportFlow = async (f) => {
+    try {
+      const { data } = await crmAPI.exportFlow(f.id);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safe = (f.name || 'fluxo').replace(/[^a-z0-9_\-]+/gi, '_').slice(0, 60);
+      a.href = url;
+      a.download = `${safe}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Fluxo exportado');
+    } catch (e) {
+      toast.error('Erro ao exportar');
+    }
+  };
+
   const importSgpFlow = async () => {
     if (!window.confirm('Importar fluxo de atendimento SGP?\n\nSerá criado um fluxo "SGP — Atendimento Web Internet" desativado, com nós já apontando para o proxy interno (sem token hardcoded).\n\nLembre de configurar a integração SGP em Integrações antes de ativar.')) return;
     try {
@@ -306,6 +325,14 @@ const FlowBuilderPage = () => {
                   title="Renomear fluxo"
                 >
                   <Edit2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); exportFlow(f); }}
+                  className="p-1 rounded text-slate-400 hover:text-emerald-500"
+                  data-testid={`export-flow-${f.id}`}
+                  title="Exportar JSON"
+                >
+                  <Download className="w-3.5 h-3.5" />
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); deleteFlow(f); }} className="p-1 rounded text-slate-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
               </div>

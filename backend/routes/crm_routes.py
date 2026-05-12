@@ -25,10 +25,11 @@ def _user_can_view_all_tickets(user: dict) -> bool:
     """Returns True if the user is allowed to see EVERY ticket in the
     company. Otherwise the user only sees:
       (a) tickets currently assigned to them (`assigned_to == user.id`)
-      (b) unassigned tickets in the first kanban column (status='aberto'
-          AND `assigned_to` is null) — these are the public pool. As soon
-          as another user CLAIMS one of these (POST /tickets/{id}/claim),
-          it disappears from this user's listings.
+      (b) unassigned tickets in queues/connections they are allowed to
+          view (when `allowed_queue_ids` / `connection_ids` are set on
+          the user). These act as the public pool — when another user
+          claims one (POST /tickets/{id}/claim) it disappears from
+          everyone else's listing.
     The permission is granted by either:
       - role (super_admin / company_admin) — implicit
       - explicit `view_all_tickets` flag in `user.permissions` (per-user toggle)
@@ -42,15 +43,48 @@ def _user_can_view_all_tickets(user: dict) -> bool:
 
 def _ticket_visibility_filter(user: dict) -> dict:
     """Mongo `$or` clause to enforce the visibility rules above. Returns an
-    empty dict (no filter) for users with the view-all permission."""
+    empty dict (no filter) for users with the view-all permission.
+
+    For non-admin users the "public pool" of unassigned tickets is restricted
+    by the user's `allowed_queue_ids` and `connection_ids`. If both are
+    empty/unset the user falls back to the legacy behaviour (all unassigned
+    aberto tickets) to avoid silently breaking existing tenants that haven't
+    configured the new RBAC yet.
+    """
     if _user_can_view_all_tickets(user):
         return {}
     uid = user["id"]
+    allowed_queues = user.get("allowed_queue_ids") or []
+    allowed_conns = user.get("connection_ids") or []
+
+    unassigned_match = [
+        {"assigned_to": None},
+        {"assigned_to": {"$exists": False}},
+        {"assigned_to": ""},
+    ]
+    # Build the pool clause: tickets that ARE unassigned AND match at
+    # least one queue/connection the user has access to.
+    pool_extra = []
+    if allowed_queues:
+        pool_extra.append({"queue_id": {"$in": allowed_queues}})
+    if allowed_conns:
+        pool_extra.append({"connection_id": {"$in": allowed_conns}})
+
+    if pool_extra:
+        pool_clause = {
+            "$and": [
+                {"$or": unassigned_match},
+                {"$or": pool_extra} if len(pool_extra) > 1 else pool_extra[0],
+            ]
+        }
+    else:
+        # No queue/connection scoping configured — fall back to legacy.
+        pool_clause = {"$or": unassigned_match}
+
     return {
         "$or": [
             {"assigned_to": uid},
-            {"assigned_to": None, "status": "aberto"},
-            {"assigned_to": {"$exists": False}, "status": "aberto"},
+            pool_clause,
         ]
     }
 
@@ -80,10 +114,32 @@ async def list_tickets(
             {"customer_name": {"$regex": search, "$options": "i"}},
             {"customer_phone": {"$regex": search, "$options": "i"}},
         ]
+    # NOTE: the tab filter must mirror the counts in /tickets/counts. The
+    # operator expects "Atendendo" = tickets with an owner, "Aguardando" =
+    # tickets in the public pool without an owner. Earlier this branch
+    # filtered by *status* values (aberto/pago/...) which produced an empty
+    # "Aguardando" list even when the count badge said 185.
     if tab == "atendendo":
-        query["status"] = {"$in": ["aberto", "em_cobranca", "proposta"]}
+        query["status"] = {"$nin": ["fechado", "cancelado"]}
+        query["assigned_to"] = {"$nin": [None, ""]}
+        query.setdefault("channel", {"$ne": "whatsapp_group"})
     elif tab == "aguardando":
-        query["status"] = {"$in": ["pago", "bloqueado"]}
+        query["status"] = {"$nin": ["fechado", "cancelado"]}
+        # Tickets without an assignee, regardless of whether they sit on a
+        # kanban column or not (operator request — Aguardando is "everyone
+        # who hasn't been pulled yet"). `$or` is folded into `$and` below
+        # if a search filter is also active.
+        assigned_clause = {"$or": [
+            {"assigned_to": None},
+            {"assigned_to": {"$exists": False}},
+            {"assigned_to": ""},
+        ]}
+        if "$or" in query:
+            existing_or = query.pop("$or")
+            query["$and"] = [{"$or": existing_or}, assigned_clause]
+        else:
+            query.update(assigned_clause)
+        query.setdefault("channel", {"$ne": "whatsapp_group"})
 
     # Visibility: non-admin users only see their own tickets + the
     # unassigned-aberto pool. Admins / view_all_tickets see everything.
@@ -1548,6 +1604,32 @@ async def create_flow(
     }
     await db.flow_builders.insert_one(flow)
     return {k: v for k, v in flow.items() if k != "_id"}
+
+
+@router.get("/flows/{flow_id}/export")
+async def export_flow(
+    flow_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Export a flow as a portable JSON. Strips tenant metadata so it can be
+    re-imported into any company via /api/crm/flows/import.
+    """
+    flow = await db.flow_builders.find_one(
+        {"id": flow_id, "company_id": user["company_id"]}, {"_id": 0}
+    )
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    out = {
+        "name": flow.get("name"),
+        "description": flow.get("description"),
+        "trigger_type": flow.get("trigger_type"),
+        "nodes": flow.get("nodes") or [],
+        "edges": flow.get("edges") or [],
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_from": "AgentCRM",
+    }
+    return out
 
 
 @router.post("/flows/import")

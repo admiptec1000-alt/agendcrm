@@ -10,6 +10,32 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-12 — Lote A+B+C: Bug Aguardando + Layout PDF (PDF/JPG/PNG) + Permissões por Fila + Export Flow + Posição Coluna ✅
+
+**Bug fix P0 — aba Atendendo/Aguardando**
+- `/api/crm/tickets?tab=...` agora filtra por `assigned_to` (em linha com o contador), não mais por `status` (que tinha valores legados pago/bloqueado). Aba "Aguardando" agora retorna a lista coerente com o badge.
+
+**Bug fix P0 — Layout PDF do orçamento (papel timbrado)**
+- `_build_quote_html` agora faz fallback: se o template do orçamento não tem `layout_image_b64` mas o template padrão da empresa tem, herda. Orçamentos antigos passam a sair com o papel timbrado configurado em qualquer template padrão.
+- Upload de PDF como layout: `_maybe_convert_pdf_layout_to_png()` usa `pypdfium2` para converter a 1ª página em PNG 200dpi antes de salvar. WeasyPrint só sabe lidar com imagens raster — agora aceitamos PDF transparentemente. Aplicado em POST e PUT de templates.
+
+**Permissões por Fila (RBAC ampliado)**
+- Conexão: `ConnectionCreate/Update` ganhou `queue_ids: List[str]`. Modal `WhatsAppConnectionsPage` mostra checkbox-list de filas. Webhook `/api/channels/webhook/message` auto-atribui `queue_id` ao ticket quando a conexão tem exatamente 1 fila vinculada.
+- Usuário: `CompanyUserCreate/Update` ganhou `allowed_queue_ids: List[str]`. Modal `UsuarioForm` (Company/Dashboard.js) tem novo card verde "Filas com acesso (Atendimento)".
+- `_ticket_visibility_filter` (crm_routes.py) reescrito: não-admins veem (a) tickets próprios + (b) pool sem-dono restrito a `allowed_queue_ids` E/OU `connection_ids` configurados. Sem RBAC configurado → fallback legacy (todos os abertos sem dono).
+
+**Quick wins**
+- Endpoint `GET /api/crm/flows/{id}/export` retorna JSON portátil (sem id/company_id/timestamps). Botão "Exportar" (ícone Download) ao lado de Renomear no card do fluxo.
+- Modal "Editar Coluna" do Kanban agora tem campo "Posição na lista" (`order` int) — operador escolhe a ordem direto, sem precisar do long-press 3s.
+
+**IMPORTANTE PARA PRODUÇÃO:** 
+1. "Save to GitHub" do backend + frontend (Render auto-deploy).
+2. Rebuild/redeploy do `whatsapp-service` no Render (apenas se mudanças anteriores SGP buttons + groups + audio PTT ainda não foram). Sem isso o `/send-interactive` não fica acessível.
+3. Rodar `python /app/backend/scripts/migrate_sgp_flow_to_dynamic_menu.py` na produção (após pull) para atualizar fluxos SGP existentes.
+
+**Nova dependência backend**: `pypdfium2==5.8.0` adicionado em requirements.txt (puro python, sem dependências de sistema).
+
+
 ### 2026-05-11 — Mega batch: 15+ melhorias Atendimentos + Orçamentos + Filas + Permissões ✅
 
 **Atendimentos (QW + M1)**

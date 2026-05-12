@@ -12,22 +12,25 @@ const WhatsAppConnectionsPage = () => {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
   const [flows, setFlows] = useState([]);
+  const [queues, setQueues] = useState([]);
   const [connectingId, setConnectingId] = useState(null);
 
   useEffect(() => { load(); }, []);
   const load = async () => {
-    const [c, s, f] = await Promise.all([
+    const [c, s, f, q] = await Promise.all([
       whatsappAPI.getConnections(),
       whatsappAPI.getConnectionStats(),
       crmAPI.getFlows().catch(() => ({ data: [] })),
+      crmAPI.listQueues().catch(() => ({ data: [] })),
     ]);
     setConnections(c.data);
     setStats(s.data);
     setFlows(f.data || []);
+    setQueues(q.data || []);
   };
 
-  const handleCreate = async ({ name, default_flow_id }) => {
-    await whatsappAPI.createConnection({ name, default_flow_id: default_flow_id || null });
+  const handleCreate = async ({ name, default_flow_id, queue_ids }) => {
+    await whatsappAPI.createConnection({ name, default_flow_id: default_flow_id || null, queue_ids: queue_ids || [] });
     toast.success('Conexao criada!');
     setShowAdd(false);
     load();
@@ -216,13 +219,14 @@ const WhatsAppConnectionsPage = () => {
 
       {/* Add Modal */}
       {showAdd && (
-        <ConnectionModal flows={flows} onClose={() => setShowAdd(false)} onSave={handleCreate} />
+        <ConnectionModal flows={flows} queues={queues} onClose={() => setShowAdd(false)} onSave={handleCreate} />
       )}
       {/* Edit Modal — change name, default_flow_id, etc */}
       {editing && (
         <ConnectionModal
           initial={editing}
           flows={flows}
+          queues={queues}
           onClose={() => setEditing(null)}
           onSave={(patch) => handleSaveEdit(editing, patch)}
         />
@@ -231,13 +235,17 @@ const WhatsAppConnectionsPage = () => {
   );
 };
 
-const ConnectionModal = ({ initial, flows, onClose, onSave }) => {
+const ConnectionModal = ({ initial, flows, queues = [], onClose, onSave }) => {
   const [name, setName] = useState(initial?.name || '');
   const [flowId, setFlowId] = useState(initial?.default_flow_id || '');
+  const [queueIds, setQueueIds] = useState(initial?.queue_ids || []);
   const isEdit = !!initial?.id;
+  const toggleQueue = (qid) => {
+    setQueueIds(prev => prev.includes(qid) ? prev.filter(x => x !== qid) : [...prev, qid]);
+  };
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold font-heading" data-testid="connection-modal-title">{isEdit ? 'Editar Conexao' : 'Nova Conexao'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
@@ -267,11 +275,39 @@ const ConnectionModal = ({ initial, flows, onClose, onSave }) => {
               Quando alguem entrar em contato pela primeira vez por esta conexao, o fluxo selecionado sera disparado automaticamente.
             </p>
           </div>
+          <div>
+            <label className="text-sm font-medium text-slate-700 mb-1 block">
+              Filas vinculadas
+            </label>
+            <div className="border border-slate-200 rounded-lg p-2 max-h-44 overflow-y-auto space-y-1" data-testid="conn-queues-list">
+              {(queues || []).length === 0 && (
+                <p className="text-[11px] text-slate-400 px-1 py-2">Nenhuma fila cadastrada. Crie uma em Filas para vincular aqui.</p>
+              )}
+              {(queues || []).map(q => {
+                const checked = queueIds.includes(q.id);
+                return (
+                  <label key={q.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleQueue(q.id)}
+                      data-testid={`conn-queue-${q.id}`}
+                    />
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: q.color || '#94a3b8' }} />
+                    <span className="text-slate-700">{q.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Tickets recebidos por esta conexao ficam associados as filas escolhidas. Se for so 1 fila, o ticket entra direto nela.
+            </p>
+          </div>
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
           <button
-            onClick={() => name.trim() && onSave({ name: name.trim(), default_flow_id: flowId || '' })}
+            onClick={() => name.trim() && onSave({ name: name.trim(), default_flow_id: flowId || '', queue_ids: queueIds })}
             disabled={!name.trim()}
             className="btn-primary text-sm disabled:opacity-50"
             data-testid="save-conn-btn"

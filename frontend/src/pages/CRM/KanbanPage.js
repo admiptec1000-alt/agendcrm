@@ -10,7 +10,7 @@ const KanbanPage = ({ setActivePage }) => {
   const [loading, setLoading] = useState(true);
   const [showColModal, setShowColModal] = useState(false);
   const [editingCol, setEditingCol] = useState(null);
-  const [colForm, setColForm] = useState({ name: '', color: '#4F46E5' });
+  const [colForm, setColForm] = useState({ name: '', color: '#4F46E5', order: 0 });
   const [draggingTicket, setDraggingTicket] = useState(null);
 
   // === Disfarçado: reorder mode ===
@@ -39,13 +39,13 @@ const KanbanPage = ({ setActivePage }) => {
 
   const openNewCol = () => {
     setEditingCol(null);
-    setColForm({ name: '', color: '#4F46E5' });
+    setColForm({ name: '', color: '#4F46E5', order: 0 });
     setShowColModal(true);
   };
 
   const openEditCol = (c) => {
     setEditingCol(c);
-    setColForm({ name: c.name, color: c.color });
+    setColForm({ name: c.name, color: c.color, order: c.order || 0 });
     setShowColModal(true);
   };
 
@@ -260,6 +260,21 @@ const KanbanPage = ({ setActivePage }) => {
                     <button key={c} onClick={() => setColForm({...colForm, color: c})} className={`w-8 h-8 rounded-lg ${colForm.color === c ? 'ring-2 ring-offset-2 ring-slate-900' : ''}`} style={{ background: c }} />
                   ))}
                 </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Posicao na lista</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={colForm.order}
+                  onChange={e => setColForm({ ...colForm, order: parseInt(e.target.value || '0', 10) })}
+                  placeholder="0 = automatico (final)"
+                  className="input-field text-sm"
+                  data-testid="col-order-input"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Menor numero aparece primeiro. Use 0 para deixar no fim. A coluna "Atendimentos" e fixa na posicao 0.
+                </p>
               </div>
               <div className="rounded-lg p-3 text-white" style={{ background: colForm.color }}>
                 <span className="text-sm font-semibold">{colForm.name || 'Preview'}</span>

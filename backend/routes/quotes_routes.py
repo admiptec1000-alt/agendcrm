@@ -26,8 +26,40 @@ import httpx
 import mammoth
 from weasyprint import HTML
 from bs4 import BeautifulSoup, NavigableString
+import io
 
 from database import get_database
+
+
+def _maybe_convert_pdf_layout_to_png(b64: Optional[str], mimetype: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """If the operator uploads a PDF as letterhead, convert the FIRST page to
+    a high-res PNG (CSS `background: url(data:image/pdf;…)` isn't supported
+    by WeasyPrint). Returns the original (b64, mime) when input isn't a PDF
+    or conversion fails.
+    """
+    if not b64 or not mimetype:
+        return b64, mimetype
+    if "pdf" not in (mimetype or "").lower():
+        return b64, mimetype
+    try:
+        import pypdfium2 as pdfium
+        raw = base64.b64decode(b64)
+        pdf = pdfium.PdfDocument(io.BytesIO(raw))
+        if len(pdf) == 0:
+            return b64, mimetype
+        # Render the first page at A4 ≈ 2480×3508 px (300 dpi) to keep
+        # the letterhead crisp on print. 200 dpi is a reasonable balance
+        # for inline base64 size (≈400-800kb png vs multi-MB at 300dpi).
+        page = pdf[0]
+        bitmap = page.render(scale=200 / 72.0)
+        pil = bitmap.to_pil()
+        buf = io.BytesIO()
+        pil.save(buf, format="PNG", optimize=True)
+        new_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return new_b64, "image/png"
+    except Exception as e:
+        logging.getLogger("quotes").warning(f"PDF→PNG layout conversion failed: {e}")
+        return b64, mimetype
 from auth import get_current_user
 from counters import next_sequence
 
@@ -365,6 +397,7 @@ async def delete_quote_freight(fid: str, user=Depends(get_current_user), db: Asy
 async def create_quote_template(data: QuoteTemplateCreate, user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
     if data.is_default:
         await db.quote_templates.update_many({"company_id": user["company_id"]}, {"$set": {"is_default": False}})
+    layout_b64, layout_mime = _maybe_convert_pdf_layout_to_png(data.layout_image_b64, data.layout_image_mimetype)
     doc = {
         "id": str(uuid.uuid4()),
         "company_id": user["company_id"],
@@ -375,8 +408,8 @@ async def create_quote_template(data: QuoteTemplateCreate, user=Depends(get_curr
         "footer_html": data.footer_html or None,
         "header_height_mm": data.header_height_mm or 22,
         "footer_height_mm": data.footer_height_mm or 18,
-        "layout_image_b64": data.layout_image_b64 or None,
-        "layout_image_mimetype": data.layout_image_mimetype or None,
+        "layout_image_b64": layout_b64 or None,
+        "layout_image_mimetype": layout_mime or None,
         "layout_padding_top_mm": data.layout_padding_top_mm or 40,
         "layout_padding_bottom_mm": data.layout_padding_bottom_mm or 30,
         "layout_padding_x_mm": data.layout_padding_x_mm or 18,
@@ -552,6 +585,12 @@ async def update_quote_template(tid: str, data: QuoteTemplateUpdate, user=Depend
     update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
     if update.get("is_default"):
         await db.quote_templates.update_many({"company_id": user["company_id"]}, {"$set": {"is_default": False}})
+    # If the operator uploaded a PDF as layout, convert to PNG before
+    # persisting so WeasyPrint can use it as @page background.
+    if update.get("layout_image_b64") and update.get("layout_image_mimetype"):
+        b64, mime = _maybe_convert_pdf_layout_to_png(update["layout_image_b64"], update["layout_image_mimetype"])
+        update["layout_image_b64"] = b64
+        update["layout_image_mimetype"] = mime
     r = await db.quote_templates.update_one({"id": tid, "company_id": user["company_id"]}, {"$set": update})
     if r.matched_count == 0:
         raise HTTPException(404, "Template nao encontrado")
@@ -1136,6 +1175,22 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
         template = await db.quote_templates.find_one({"company_id": user["company_id"], "is_default": True}, {"_id": 0})
     if not template:
         template = {"content": "<h1>Orcamento #{{quote_number}}</h1><pre>{{notes}}</pre>"}
+
+    # G2 fallback — when the quote's template doesn't have a layout image but
+    # the company's DEFAULT template does, inherit it. Lets the operator turn
+    # an existing quote into a letterhead-rendered PDF without having to
+    # regenerate the quote with a new template_id.
+    if not template.get("layout_image_b64"):
+        default_tpl = await db.quote_templates.find_one(
+            {"company_id": user["company_id"], "is_default": True, "layout_image_b64": {"$ne": None}},
+            {"_id": 0},
+        )
+        if default_tpl and default_tpl.get("id") != template.get("id") and default_tpl.get("layout_image_b64"):
+            template["layout_image_b64"] = default_tpl["layout_image_b64"]
+            template["layout_image_mimetype"] = default_tpl.get("layout_image_mimetype")
+            template["layout_padding_top_mm"] = default_tpl.get("layout_padding_top_mm") or template.get("layout_padding_top_mm")
+            template["layout_padding_bottom_mm"] = default_tpl.get("layout_padding_bottom_mm") or template.get("layout_padding_bottom_mm")
+            template["layout_padding_x_mm"] = default_tpl.get("layout_padding_x_mm") or template.get("layout_padding_x_mm")
 
     client_ctx = await _build_client_ctx(db, user["company_id"], quote.get("client_id"))
     ctx = {

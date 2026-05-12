@@ -181,11 +181,13 @@ class ConnectionCreate(BaseModel):
     type: str = "whatsapp"  # whatsapp, instagram
     phone: Optional[str] = None
     default_flow_id: Optional[str] = None  # Flowbuilder flow auto-triggered on first message
+    queue_ids: List[str] = []  # filas que recebem tickets dessa conexao
 
 class ConnectionUpdate(BaseModel):
     name: Optional[str] = None
     status: Optional[str] = None
     default_flow_id: Optional[str] = None  # set to "" to clear, or new flow id
+    queue_ids: Optional[List[str]] = None  # multi-select de filas
 
 class TemplateCreate(BaseModel):
     process_key: str
@@ -234,6 +236,7 @@ async def create_connection(
         "type": data.type,
         "phone": data.phone,
         "default_flow_id": data.default_flow_id or None,
+        "queue_ids": data.queue_ids or [],
         "status": "disconnected",
         "qr_code": None,
         "last_connected": None,
@@ -825,6 +828,13 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "group_subject": group_subject,
             "description": text[:140] if text else None,
             "assigned_to": None,
+            # Auto-bind queue_id from connection. If the connection is wired
+            # to exactly ONE queue, the ticket is pinned to that queue; if it
+            # is wired to multiple queues, we leave queue_id null so a flow
+            # node can ask the customer / operator to pick the right one
+            # later. Without this, "Aguardando" filters by queue would miss
+            # inbound tickets.
+            "queue_id": (conn.get("queue_ids") or [None])[0] if len(conn.get("queue_ids") or []) == 1 else None,
             "messages": [new_message],
             # Auto-tag hidden-number contacts so the operator immediately sees
             # the situation in the conversation list. The tag is plain string
@@ -1036,6 +1046,9 @@ async def update_connection(
     # Allow empty string to clear default_flow_id (operator unchecks the flow).
     if "default_flow_id" in update and update["default_flow_id"] == "":
         update["default_flow_id"] = None
+    # queue_ids: empty list is valid (clears all queue links)
+    if "queue_ids" in data.model_dump(exclude_unset=True):
+        update["queue_ids"] = data.queue_ids or []
     if not update:
         raise HTTPException(status_code=400, detail="Nada para atualizar")
     result = await db.channel_connections.update_one(

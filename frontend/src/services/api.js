@@ -135,6 +135,7 @@ export const crmAPI = {
   createFlow: (data) => api.post('/crm/flows', data),
   updateFlow: (id, data) => api.put(`/crm/flows/${id}`, data),
   deleteFlow: (id) => api.delete(`/crm/flows/${id}`),
+  exportFlow: (id) => api.get(`/crm/flows/${id}/export`),
   // Tags
   listTags: () => api.get('/crm/tags'),
   createTag: (data) => api.post('/crm/tags', data),

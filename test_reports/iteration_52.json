@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 52 — Backend tests for batch A+B+C (applied 2026-05-12). All 10 tests PASSED. Covered: (A) tickets tab filter atendendo/aguardando matches /counts badge — FIX verified; (B) Connection.queue_ids persists on POST + clears on PUT with empty list; (C) Company-user allowed_queue_ids persists on POST + updates on PUT; (D) GET /api/crm/flows/{id}/export returns portable JSON (strips id/company_id), 404 for missing; (E) webhook /api/channels/webhook/message auto-assigns queue_id when connection has exactly 1 queue; (F) /api/quotes/templates POST with PDF base64 + mimetype application/pdf is converted server-side to image/png (verified PNG magic bytes); (G) GET /api/quotes/{qid}/pdf falls back to default-template letterhead when the quote's template has no layout (size_with > size_without by >1kB); (H) Kanban columns accept order=5 on POST and order=2 on PUT.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_52.py",
+    "/app/test_reports/pytest/iteration_52.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "crm_routes._ticket_visibility_filter (line 44) correctly returns empty dict for admin/super_admin/view_all — Boss admin sees all tickets, so list lengths exactly match counts. Good.",
+    "channels_routes.update_connection (line 1050) uses model_dump(exclude_unset=True) and explicitly handles queue_ids=[] — empty list is preserved as cleared binding. ✓",
+    "channels_routes.webhook_message (line 837): `(conn.get('queue_ids') or [None])[0] if len(...) == 1 else None` — assigns queue_id only when EXACTLY 1 queue. For 0 or 2+ queues, ticket.queue_id stays None. Correct per spec.",
+    "quotes_routes._maybe_convert_pdf_layout_to_png (line 34) catches generic Exception and returns original payload on failure — defensive but masks real bugs in logs. Consider raising in dev, logging stack trace in prod (currently uses logger.warning).",
+    "quotes_routes._build_quote_html fallback (line 1183-1193): default template inheritance covers layout image + paddings, NOT header/footer/content. Behaviour matches spec ('fallback ao layout do default template')."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_52.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Used /app/memory/test_credentials.md — admin@boss.com.br / boss123",
+  "seed_data_creation": "Tests create+delete their own TEST_-prefixed queues, connections, company-users, flows, kanban columns, ticket, quote and quote templates. Fully self-cleaning.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 5 batch items working: (1) tab filter fix for aguardando/atendendo matches badge counts (verified via len(list) == counts['atendendo'] and ==counts['aguardando']); (2) Connection.queue_ids round-trips fine including clear-via-empty-list path; (3) Flow export strips tenant metadata; (4) webhook auto-assigns ticket.queue_id from connection when 1 queue; (5) PDF letterhead is converted to PNG on save (mime image/png + PNG magic bytes) and the default-template fallback in /pdf adds ~32kb (PNG embedded as background) vs 4kb without. Kanban columns custom order works (was pre-existing).",
+  "rca of the issue": "N/A — no bugs reproduced. All fixes from the 2026-05-12 batch are functioning per spec."
+}

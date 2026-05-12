@@ -6284,7 +6284,7 @@ const UsuariosPage = () => {
   const handleSave = async (form) => {
     try {
       if (editing) {
-        const payload = { name: form.name, email: form.email, permission_profile_id: form.permission_profile_id || null, professional_id: form.professional_id || null, connection_ids: form.connection_ids || [] };
+        const payload = { name: form.name, email: form.email, permission_profile_id: form.permission_profile_id || null, professional_id: form.professional_id || null, connection_ids: form.connection_ids || [], allowed_queue_ids: form.allowed_queue_ids || [] };
         if (form.password) payload.password = form.password;
         await schedulingAPI.updateCompanyUser(editing.id, payload);
         toast.success('Usuario atualizado!');
@@ -6355,15 +6355,24 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
     permission_profile_id: user?.permission_profile_id || '',
     professional_id: user?.professional_id || '',
     connection_ids: user?.connection_ids || [],
+    allowed_queue_ids: user?.allowed_queue_ids || [],
   });
   const [connections, setConnections] = useState([]);
+  const [queues, setQueues] = useState([]);
   useEffect(() => {
     channelsAPI.getConnections().then(r => setConnections(r.data || [])).catch(() => {});
+    crmAPI.listQueues().then(r => setQueues(r.data || [])).catch(() => {});
   }, []);
   const toggleConn = (id) => {
     setForm(f => f.connection_ids.includes(id)
       ? { ...f, connection_ids: f.connection_ids.filter(x => x !== id) }
       : { ...f, connection_ids: [...f.connection_ids, id] }
+    );
+  };
+  const toggleQueue = (id) => {
+    setForm(f => f.allowed_queue_ids.includes(id)
+      ? { ...f, allowed_queue_ids: f.allowed_queue_ids.filter(x => x !== id) }
+      : { ...f, allowed_queue_ids: [...f.allowed_queue_ids, id] }
     );
   };
   return (
@@ -6427,6 +6436,42 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
           </div>
         )}
         <p className="text-[10px] text-slate-400 mt-1">Deixe em branco para que o usuario tenha acesso a todas as conexoes.</p>
+      </div>
+      <div>
+        <label className="text-xs font-bold uppercase text-slate-400 flex items-center justify-between">
+          <span>Filas com acesso (Atendimento)</span>
+          {form.allowed_queue_ids.length > 0 && <span className="text-[10px] text-slate-500 normal-case">{form.allowed_queue_ids.length} selecionada(s)</span>}
+        </label>
+        {queues.length === 0 ? (
+          <p className="text-xs text-slate-400 mt-2 italic">Nenhuma fila cadastrada ainda. Vá em CRM → Filas.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-1.5 p-2 border border-slate-200 rounded-lg max-h-40 overflow-y-auto bg-slate-50">
+            {queues.map(q => {
+              const checked = form.allowed_queue_ids.includes(q.id);
+              return (
+                <label
+                  key={q.id}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded-md border cursor-pointer text-xs transition-all ${
+                    checked ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-slate-200 hover:border-emerald-400 text-slate-700'
+                  }`}
+                  data-testid={`user-queue-${q.id}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleQueue(q.id)}
+                    className="rounded"
+                  />
+                  <span className="inline-block w-2 h-2 rounded-sm flex-shrink-0" style={{ background: q.color || '#94a3b8' }} />
+                  <span className="truncate">{q.name}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        <p className="text-[10px] text-slate-400 mt-1">
+          O usuario vera na aba <strong>Aguardando</strong> apenas tickets em filas que ele tem acesso. Deixe em branco para visao ampla (todos os tickets sem dono).
+        </p>
       </div>
       <div className="flex justify-end">
         <button onClick={() => form.name && form.email && onSave(form)} className="btn-primary text-sm" data-testid="save-user-btn">Salvar</button>

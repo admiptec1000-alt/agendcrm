@@ -1103,6 +1103,7 @@ class CompanyUserCreate(BaseModel):
     permission_profile_id: Optional[str] = None
     professional_id: Optional[str] = None
     connection_ids: List[str] = []  # WhatsApp connections this user can act on
+    allowed_queue_ids: List[str] = []  # filas que o usuario pode visualizar/atender
 
 class CompanyUserUpdate(BaseModel):
     name: Optional[str] = None
@@ -1111,6 +1112,7 @@ class CompanyUserUpdate(BaseModel):
     permission_profile_id: Optional[str] = None
     professional_id: Optional[str] = None
     connection_ids: Optional[List[str]] = None
+    allowed_queue_ids: Optional[List[str]] = None
 
 @router.get("/company-users")
 async def list_company_users(
@@ -1139,6 +1141,7 @@ async def create_company_user(
         "permission_profile_id": data.permission_profile_id,
         "professional_id": data.professional_id,
         "connection_ids": data.connection_ids or [],
+        "allowed_queue_ids": data.allowed_queue_ids or [],
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.company_users.insert_one(new_user)
