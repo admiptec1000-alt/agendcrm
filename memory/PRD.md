@@ -9,6 +9,14 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+### 2026-05-12 (C) — Fix CRÍTICO Layout PDF Orçamento ✅
+
+**Root cause** (encontrado por reprodução automatizada): no WeasyPrint, `background` aplicado no `@page` é **clipado pela `margin` do `@page`** — tudo dentro da área de margem renderiza branco POR CIMA do background. Como definimos `margin: 40mm 18mm 30mm 18mm`, o letterhead ficava confinado em uma área diminuta no centro, com tudo em volta branco. Visualmente parecia que o layout não foi aplicado.
+
+**Fix:** quando o template tem `layout_image_b64`, agora aplicamos `@page { margin: 0 }` e simulamos as margens (top/bottom/laterais) via `padding` no `<body>`. O letterhead ocupa a folha A4 INTEIRA, e o conteúdo do orçamento fica posicionado dentro da "safe area" definida pelos `layout_padding_*_mm` do template.
+
+Validado com teste programático: pixels de topo/rodapé renderizam a cor do letterhead, miolo fica disponível para o conteúdo.
+
 ### 2026-05-12 (B) — SGP Outbound Gateway (HTTP Genérico) ✅
 
 **Feature inversa**: SGP → AgentCRM → WhatsApp. Permite cadastrar o AgentCRM como "SMS Gateway HTTP Genérico" no SGP para que o ERP dispare mensagens WhatsApp pelo CRM (cobrança/avisos).

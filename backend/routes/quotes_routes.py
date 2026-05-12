@@ -1455,21 +1455,29 @@ def _generate_pdf_bytes(
     bottom_margin = f"{f + 4}mm" if has_footer else "18mm"
 
     layout_css = ""
+    body_padding_css = ""
     if use_layout:
-        # Use the letterhead image as @page background. WeasyPrint supports
-        # background-image on @page; the image scales to fill A4. The body
-        # margin matches the operator-defined paddings so quote content sits
-        # in the "safe area" of the letterhead.
+        # Use the letterhead image as @page background. CRITICAL: in
+        # WeasyPrint, `@page` backgrounds are clipped by `@page { margin }`
+        # — anything inside the margin area renders WHITE on top of the
+        # background. To get the letterhead to span the FULL A4 sheet
+        # (header + body + footer + bleed) we set `@page { margin: 0 }`
+        # and simulate the "safe area" margins on the BODY via padding.
         mime = layout_image_mimetype or "image/png"
-        top_margin = f"{max(8, min(120, int(layout_padding_top_mm or 40)))}mm"
-        bottom_margin = f"{max(8, min(120, int(layout_padding_bottom_mm or 30)))}mm"
+        pt = max(0, min(120, int(layout_padding_top_mm or 40)))
+        pb = max(0, min(120, int(layout_padding_bottom_mm or 30)))
         px = max(0, min(50, int(layout_padding_x_mm or 18)))
         layout_css = (
-            f"@page {{ background: url('data:{mime};base64,{layout_image_b64}') "
+            f"@page {{ margin: 0; background: url('data:{mime};base64,{layout_image_b64}') "
             "no-repeat center center; background-size: 100% 100%; }\n"
         )
-        # X margin from layout_padding_x
-        page_margin_x = f"{px}mm"
+        body_padding_css = (
+            f"html, body {{ padding: {pt}mm {px}mm {pb}mm {px}mm; }}\n"
+        )
+        # Override the regular @page margin block (defined below).
+        top_margin = "0"
+        bottom_margin = "0"
+        page_margin_x = "0"
     else:
         page_margin_x = "16mm"
 
@@ -1483,6 +1491,12 @@ def _generate_pdf_bytes(
         + page_chrome_css
         + chrome_constraints_css
         + _QUOTE_STYLESHEET
+        # body_padding_css MUST come AFTER _QUOTE_STYLESHEET because the
+        # stylesheet declares `html, body { margin: 0; padding: 0; }` —
+        # if we put our overrides first they get silently stomped, and
+        # the quote content prints flush against the letterhead.
+        + body_padding_css
+        + ("html, body { background: transparent !important; }\n" if use_layout else "")
         + "</style>\n"
     )
     # Wrap header/footer in id'd divs so the CSS `position: running()` rules above
