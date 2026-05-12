@@ -791,8 +791,8 @@ app.post('/instances/:id/send', async (req, res) => {
 //     sections: [{ title, rows: [{ id, title, description }] }],
 //   }
 app.post('/instances/:id/send-interactive', async (req, res) => {
-  const instance = instances[req.params.id];
-  if (!instance || !instance.sock) {
+  const instance = connections[req.params.id];
+  if (!instance?.sock || instance.status !== 'connected') {
     return res.status(503).json({ success: false, error: 'instance not connected' });
   }
   try {
@@ -981,8 +981,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.5',
-    built_at: '2026-05-01',
+    version: 'v2.1.6',
+    built_at: '2026-05-12',
     features: {
       sent_message_store: true,       // anti blank message fix
       multi_message_types: true,      // captions, buttons, lists
