@@ -1097,3 +1097,25 @@ async def migrate_plans_to_business_types(
             else:
                 skipped += 1
     return {"migrated_business_types": migrated, "already_filled": skipped, "plans_scanned": len(plans)}
+
+
+
+# ──── SGP MIGRATION ────
+@router.post("/migrate-sgp-flow")
+async def migrate_sgp_flow_endpoint(
+    dry_run: bool = True,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Run the SGP flow migration (multi-tenant, idempotent).
+
+    Patches every "SGP" flow in `flow_builders`:
+      - converts the contract picker menu to dynamic list (buttons/list)
+      - rewrites the segunda-via follow-up message with PDF + Pix block
+
+    Pass `?dry_run=false` to actually persist; default is dry-run so the
+    operator can preview safely.
+    """
+    from scripts.migrate_sgp_flow_to_dynamic_menu import run_migration
+    report = await run_migration(db, dry_run=dry_run)
+    return report

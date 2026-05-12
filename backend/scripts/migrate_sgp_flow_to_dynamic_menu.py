@@ -107,9 +107,12 @@ def patch_fatura2via_followup(nodes, edges, action_node):
     return changes
 
 
-async def main(dry_run: bool = False):
-    load_dotenv()
-    db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+async def run_migration(db, dry_run: bool = False) -> dict:
+    """Run the migration against the supplied motor `db` and return a
+    structured report (no stdout). Used by the CLI entrypoint AND the
+    admin HTTP endpoint that triggers the migration from production.
+    """
+    log: list = []
     cursor = db.flow_builders.find(
         {"$or": [
             {"name": {"$regex": "SGP", "$options": "i"}},
@@ -117,9 +120,10 @@ async def main(dry_run: bool = False):
         ]},
         {"_id": 0},
     )
-    flows = await cursor.to_list(50)
-    print(f"[migrate] candidate flows: {len(flows)}")
+    flows = await cursor.to_list(200)
+    log.append(f"candidate flows: {len(flows)}")
     total_changes = 0
+    flows_changed = 0
     for f in flows:
         nodes = f.get("nodes") or []
         edges = f.get("edges") or []
@@ -129,27 +133,44 @@ async def main(dry_run: bool = False):
         if menu_node:
             patch_menu(menu_node)
             changes_here += 1
-            print(f"[migrate] flow={f.get('name')!r} menu={menu_node['id']!r} → list+dynamic")
+            log.append(f"flow={f.get('name')!r} company={f.get('company_id','?')[:8]} menu={menu_node['id']!r} → list+dynamic")
 
         fatura_node = find_fatura2via_node(nodes)
         if fatura_node:
             c = patch_fatura2via_followup(nodes, edges, fatura_node)
             if c:
                 changes_here += c
-                print(f"[migrate] flow={f.get('name')!r} segunda-via followup messages updated: {c}")
+                log.append(f"flow={f.get('name')!r} segunda-via followup messages updated: {c}")
 
         if changes_here:
             total_changes += changes_here
+            flows_changed += 1
             if not dry_run:
                 await db.flow_builders.update_one(
                     {"id": f["id"]},
                     {"$set": {"nodes": nodes, "updated_at": __import__("datetime").datetime.utcnow().isoformat()}},
                 )
-                print(f"[migrate]   ↳ flow {f.get('name')!r} saved ({changes_here} changes)")
+                log.append(f"  ↳ saved flow {f.get('name')!r} ({changes_here} changes)")
             else:
-                print(f"[migrate]   ↳ DRY-RUN: would save {changes_here} changes")
+                log.append(f"  ↳ DRY-RUN: would save {changes_here} changes")
 
-    print(f"[migrate] done — total changes: {total_changes}{' (dry-run, nothing saved)' if dry_run else ''}")
+    summary = f"done — total changes: {total_changes}{' (dry-run, nothing saved)' if dry_run else ''}"
+    log.append(summary)
+    return {
+        "dry_run": dry_run,
+        "candidate_flows": len(flows),
+        "flows_changed": flows_changed,
+        "total_changes": total_changes,
+        "log": log,
+    }
+
+
+async def main(dry_run: bool = False):
+    load_dotenv()
+    db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+    report = await run_migration(db, dry_run=dry_run)
+    for line in report["log"]:
+        print(f"[migrate] {line}")
 
 
 if __name__ == "__main__":
