@@ -1009,7 +1009,15 @@ const AtendimentosPage = () => {
                       </div>
                     </a>
                   )}
-                  <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                  {/* Hide the placeholder content (`[Audio]`/`[Imagem]`/
+                     `[Video]`) when the media has already been rendered
+                     above — duplicate label is ugly and the operator
+                     asked to keep just the media bubble. */}
+                  {(() => {
+                    const isMediaPlaceholder = msg.media_url && /^\[(Audio|Imagem|Image|Video|Documento|Document)\]$/i.test(String(msg.content || '').trim());
+                    if (isMediaPlaceholder) return null;
+                    return <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>;
+                  })()}
                   <div className="text-[10px] text-slate-400 text-right mt-1 flex items-center justify-end gap-1">
                     {formatTime(msg.created_at)}
                     {msg.sender_type === 'agent' && (

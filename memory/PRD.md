@@ -9,6 +9,30 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+### 2026-05-12 (E) — Fix CRÍTICO Áudio + Remoção placeholder ✅
+
+**Bug 1: "Este áudio não está mais disponível"** no celular do destinatário sempre que o operador grava áudio na plataforma.
+
+**Root cause:** O frontend grava via MediaRecorder em **webm/opus** (container WEBM) mas envia ao backend com `mimetype: 'audio/ogg; codecs=opus'`. WhatsApp aceita o blob, mas como o conteúdo binário é WEBM/EBML (não OGG), o player do destinatário falha ao decodificar. Erro silencioso, no formato que sai como "áudio não disponível".
+
+**Fix:** Adicionado `ffmpeg-static` + `fluent-ffmpeg` no `whatsapp-service`. Helper `convertToOggOpus(buffer)` converte qualquer formato de entrada para OGG/Opus (48k bitrate, mono, 48kHz) antes de enviar ao Baileys. Validado: input WEBM 10kb → output OGG `4f676753` (magic "OggS") 7kb. Versão `v2.1.7`.
+
+**Bug 2: Placeholder `[Audio]` aparece no chat** mesmo quando o player de áudio já está renderizado acima.
+
+**Fix:** `AtendimentosPage.js` linha 1012 — suprimi o `<p>{msg.content}</p>` quando `media_url` está presente E `content` é um placeholder regex `^[(Audio|Imagem|Image|Video|Documento|Document)]$`.
+
+**Bug 3: Áudios enviados pelo operador não aparecem como player no chat**, só "[Audio]".
+
+**Root cause:** `send_media_to_ticket` salvava em `attachment_data_b64` inline. O frontend só renderiza áudio quando `media_url` está presente (era só populado para mensagens inbound do webhook).
+
+**Fix:** `send_media_to_ticket` agora persiste o áudio em object storage via `_persist_inbound_media()` (mesmo helper do webhook) e popula `media_url/media_kind/media_mimetype/media_filename` na mensagem. Adicionado também endpoint fallback `GET /api/crm/tickets/{tid}/messages/{mid}/attachment` para tickets antigos que ainda têm `attachment_data_b64` legado.
+
+**Para produção:**
+1. Save to GitHub (3 arquivos: `crm_routes.py`, `AtendimentosPage.js`, `whatsapp-service/index.js` + `package.json`)
+2. Render auto-deploy do backend ✓
+3. **Redeploy MANUAL do whatsapp-service** (precisa puxar `ffmpeg-static` no build) — `built_at` esperado: `2026-05-12 v2.1.7`
+
+
 ### 2026-05-12 (D) — Fix DEFINITIVO Layout PDF (repete em TODAS as páginas) + Preview Web com layout ✅
 
 **Problema anterior:** O fix anterior (D-1) usava `@page { margin: 0 } + body padding`, mas padding do body só reserva espaço na PRIMEIRA e ÚLTIMA página. Páginas intermediárias tinham o conteúdo sobrepondo o cabeçalho/rodapé do letterhead. Outras tentativas (`bleed`, `position: fixed`) também falharam: backgrounds @page são clipados pelo `@page margin`, e position:fixed em WeasyPrint 68 clipa nas páginas 2+.

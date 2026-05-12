@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
@@ -10,6 +10,7 @@ from models import (
 )
 import uuid
 import io
+import base64
 import re
 from datetime import datetime, timezone
 from typing import List, Optional, Any
@@ -206,7 +207,55 @@ async def get_ticket(
     )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    # Synthesize media_url / media_kind / media_mimetype on outbound messages
+    # so the frontend renders the playable bubble for audios/images/videos
+    # sent FROM the platform (not only inbound ones from the webhook).
+    # The actual bytes live in `attachment_data_b64`; we expose them via
+    # the streaming endpoint below to keep the JSON light.
+    for m in (ticket.get("messages") or []):
+        if m.get("attachment_kind") and m.get("attachment_data_b64") and not m.get("media_url"):
+            m["media_url"] = f"/api/crm/tickets/{ticket_id}/messages/{m.get('id')}/attachment"
+            m["media_kind"] = m.get("attachment_kind")
+            m["media_mimetype"] = m.get("attachment_mimetype")
+            m["media_filename"] = m.get("attachment_filename")
+        # Drop the heavy base64 blob from the JSON response.
+        m.pop("attachment_data_b64", None)
     return ticket
+
+
+@router.get("/tickets/{ticket_id}/messages/{message_id}/attachment")
+async def stream_message_attachment(
+    ticket_id: str,
+    message_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Stream the binary stored in `attachment_data_b64` so <audio>, <img>,
+    <video> and <a> tags can fetch the asset by URL instead of paying the
+    base64 inflation cost in the ticket JSON.
+
+    Audio uploads from the operator (PTT recordings) are persisted as
+    base64 inline on the message — without this endpoint the chat would
+    never render a player for them (only inbound ones get a `media_url`).
+    """
+    ticket = await db.tickets.find_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"_id": 0, "messages": 1},
+    )
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    msg = next((m for m in (ticket.get("messages") or []) if m.get("id") == message_id), None)
+    if not msg or not msg.get("attachment_data_b64"):
+        raise HTTPException(404, "Anexo nao encontrado")
+    try:
+        raw = base64.b64decode(msg["attachment_data_b64"])
+    except Exception:
+        raise HTTPException(500, "Anexo corrompido")
+    mime = msg.get("attachment_mimetype") or "application/octet-stream"
+    headers = {}
+    if msg.get("attachment_filename"):
+        headers["Content-Disposition"] = f'inline; filename="{msg["attachment_filename"]}"'
+    return Response(content=raw, media_type=mime, headers=headers)
 
 @router.post("/tickets")
 async def create_ticket(
@@ -741,6 +790,14 @@ async def send_media_to_ticket(
     attachment_kind = "audio" if is_audio else ("image" if is_image else (
         "video" if mimetype.startswith("video/") else "document"
     ))
+    # Persist the bytes to object storage so the chat can render an inline
+    # player/preview via a normal URL (no base64 inflation in the ticket
+    # JSON, no auth wall on <audio src>).
+    from routes.channels_routes import _persist_inbound_media
+    saved = await _persist_inbound_media(
+        db, user["company_id"], data_b64,
+        mimetype=mimetype, kind=attachment_kind, filename=filename,
+    )
     message_id = str(uuid.uuid4())
     message = {
         "id": message_id,
@@ -754,8 +811,15 @@ async def send_media_to_ticket(
         "attachment_kind": attachment_kind,
         "attachment_filename": filename,
         "attachment_mimetype": mimetype,
-        "attachment_data_b64": data_b64,  # stored so the chat can replay
     }
+    # Surface as `media_*` so the chat UI renders the playable bubble
+    # (the same fields used for inbound media coming from the webhook).
+    if saved:
+        message["media_url"] = saved["url"]
+        message["media_kind"] = attachment_kind
+        message["media_mimetype"] = saved["mimetype"]
+        message["media_filename"] = saved["filename"]
+        message["media_size"] = saved["size"]
     await db.tickets.update_one(
         {"id": ticket_id},
         {"$push": {"messages": message}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},

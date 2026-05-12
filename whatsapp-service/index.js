@@ -7,6 +7,35 @@ const path = require('path');
 const fs = require('fs');
 const pino = require('pino');
 
+// Audio conversion to OGG/Opus — required for WhatsApp PTT bubbles to play
+// on the destination phone. MediaRecorder in Chrome/Firefox produces
+// webm/opus (or audio/webm), and WhatsApp can't decode that even when we
+// label it as audio/ogg. ffmpeg-static bundles the ffmpeg binary so this
+// works on Render without a system ffmpeg install.
+const ffmpegPath = require('ffmpeg-static');
+const ffmpeg = require('fluent-ffmpeg');
+if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+
+function convertToOggOpus(inputBuffer) {
+  return new Promise((resolve, reject) => {
+    const { Readable, PassThrough } = require('stream');
+    const inputStream = Readable.from(inputBuffer);
+    const outChunks = [];
+    const out = new PassThrough();
+    out.on('data', (c) => outChunks.push(c));
+    out.on('end', () => resolve(Buffer.concat(outChunks)));
+    out.on('error', reject);
+    ffmpeg(inputStream)
+      .audioCodec('libopus')
+      .audioBitrate('48k')
+      .audioChannels(1)
+      .audioFrequency(48000)
+      .format('ogg')
+      .on('error', reject)
+      .pipe(out, { end: true });
+  });
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -889,8 +918,16 @@ app.post('/instances/:id/send-media', async (req, res) => {
     if (isImage) {
       payload = { image: buffer, caption: caption || '', mimetype: mimetype || 'image/png' };
     } else if (isAudio) {
-      // Send as voice note (ptt=true) so WA shows as audio bubble with play
-      payload = { audio: buffer, mimetype: mimetype || 'audio/ogg; codecs=opus', ptt: true };
+      // Force the audio bytes into OGG/Opus before forwarding to WA.
+      // Without this, MediaRecorder-produced webm/opus blobs are
+      // rejected by the receiving phone with "audio not available".
+      let audioBuf = buffer;
+      try {
+        audioBuf = await convertToOggOpus(buffer);
+      } catch (convErr) {
+        console.error(`[${req.params.id}] audio convert failed, sending raw:`, convErr.message);
+      }
+      payload = { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true };
     } else if (isVideo) {
       payload = { video: buffer, caption: caption || '', mimetype: mimetype || 'video/mp4' };
     } else {
@@ -981,7 +1018,7 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.6',
+    version: 'v2.1.7',
     built_at: '2026-05-12',
     features: {
       sent_message_store: true,       // anti blank message fix
