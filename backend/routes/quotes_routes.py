@@ -31,6 +31,47 @@ import io
 from database import get_database
 
 
+def _slice_letterhead_image(b64: Optional[str], mime: Optional[str], top_mm: int, bottom_mm: int) -> tuple[Optional[str], Optional[str]]:
+    """Split the letterhead image into a top slice and a bottom slice
+    proportional to the operator-defined paddings (A4 = 297mm tall).
+
+    Both slices are returned as PNG base64 strings. We always return PNGs
+    (regardless of input format) so the downstream CSS can hardcode the
+    mimetype and we don't have to track it per-slice.
+
+    If the image can't be opened (corrupted upload, unexpected format) we
+    return `(None, None)` and the caller skips the letterhead.
+    """
+    if not b64:
+        return None, None
+    try:
+        from PIL import Image
+        import io as _io
+        raw = base64.b64decode(b64)
+        img = Image.open(_io.BytesIO(raw))
+        # Convert to RGB for consistent PNG output (no random alpha bands).
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        w, h = img.size
+        # The image is meant to represent a full A4 sheet (297mm tall).
+        # Cut at top_mm / 297 and (297-bottom_mm) / 297.
+        top_px = max(1, int(round(h * (top_mm / 297.0))))
+        bot_px = max(1, int(round(h * (bottom_mm / 297.0))))
+        top_slice = img.crop((0, 0, w, top_px))
+        bottom_slice = img.crop((0, h - bot_px, w, h))
+        out_t = _io.BytesIO()
+        out_b = _io.BytesIO()
+        top_slice.save(out_t, format="PNG", optimize=True)
+        bottom_slice.save(out_b, format="PNG", optimize=True)
+        return (
+            base64.b64encode(out_t.getvalue()).decode("ascii"),
+            base64.b64encode(out_b.getvalue()).decode("ascii"),
+        )
+    except Exception as e:
+        logging.getLogger("quotes").warning(f"letterhead slice failed: {e}")
+        return None, None
+
+
 def _maybe_convert_pdf_layout_to_png(b64: Optional[str], mimetype: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """If the operator uploads a PDF as letterhead, convert the FIRST page to
     a high-res PNG (CSS `background: url(data:image/pdf;…)` isn't supported
@@ -1112,6 +1153,11 @@ async def preview_pdf_html(qid: str, user=Depends(get_current_user), db: AsyncIO
         body_html, header_html, footer_html,
         header_height_mm=quote.get("__header_height_mm") or 22,
         footer_height_mm=quote.get("__footer_height_mm") or 18,
+        layout_image_b64=quote.get("__layout_image_b64"),
+        layout_image_mimetype=quote.get("__layout_image_mimetype"),
+        layout_padding_top_mm=quote.get("__layout_padding_top_mm") or 40,
+        layout_padding_bottom_mm=quote.get("__layout_padding_bottom_mm") or 30,
+        layout_padding_x_mm=quote.get("__layout_padding_x_mm") or 18,
     )
     return {"html": composed, "quote_number": quote.get("quote_number")}
 
@@ -1305,38 +1351,85 @@ def _build_browser_preview_html(
     footer_html: Optional[str] = None,
     header_height_mm: int = 22,
     footer_height_mm: int = 18,
+    layout_image_b64: Optional[str] = None,
+    layout_image_mimetype: Optional[str] = None,
+    layout_padding_top_mm: int = 40,
+    layout_padding_bottom_mm: int = 30,
+    layout_padding_x_mm: int = 18,
 ) -> str:
     """Wraps the rendered body in an A4-shaped page mockup using the SAME
     stylesheet WeasyPrint uses, so the iframe preview visually matches the
-    downloaded PDF. The "page" is a fixed 210mm wide white sheet with
-    ~18mm padding; if header/footer are provided they sit at the top and
-    bottom of the sheet with thin separators (mirroring the PDF chrome).
-    `header_height_mm`/`footer_height_mm` come from the template config —
-    operator can adjust them in the editor (default 22/18)."""
+    downloaded PDF."""
     nbsp_clean = (body_html or "").replace("\u00a0", " ")
     cleaned_header = (header_html or "").replace("\u00a0", " ")
     cleaned_footer = (footer_html or "").replace("\u00a0", " ")
-    chrome_top = (
-        f'<div id="__quote_header" style="margin-bottom:8mm;">{cleaned_header}</div>'
-        if cleaned_header.strip() else ""
-    )
-    chrome_bottom = (
-        f'<div id="__quote_footer" style="margin-top:8mm;">{cleaned_footer}</div>'
-        if cleaned_footer.strip() else ""
-    )
+    use_layout = bool(layout_image_b64)
+
+    # When a letterhead image is configured, mirror the PDF behaviour: the
+    # operator-defined text header/footer are SUPPRESSED (the image is the
+    # chrome). Otherwise, render header/footer at the top/bottom of the
+    # mock A4 sheet.
+    if not use_layout:
+        chrome_top = (
+            f'<div id="__quote_header" style="margin-bottom:8mm;">{cleaned_header}</div>'
+            if cleaned_header.strip() else ""
+        )
+        chrome_bottom = (
+            f'<div id="__quote_footer" style="margin-top:8mm;">{cleaned_footer}</div>'
+            if cleaned_footer.strip() else ""
+        )
+    else:
+        chrome_top = ""
+        chrome_bottom = ""
+
     h = max(8, min(80, int(header_height_mm or 22)))
     f = max(8, min(80, int(footer_height_mm or 18)))
+
+    # Letterhead overlay — uses the SAME `_slice_letterhead_image` logic
+    # as the PDF generator so the preview is pixel-accurate with what the
+    # client will receive.
+    letterhead_html = ""
+    page_padding = "18mm 16mm"
+    if use_layout:
+        pt = max(0, min(120, int(layout_padding_top_mm or 40)))
+        pb = max(0, min(120, int(layout_padding_bottom_mm or 30)))
+        px = max(0, min(50, int(layout_padding_x_mm or 18)))
+        top_b64, bot_b64 = _slice_letterhead_image(
+            layout_image_b64, layout_image_mimetype, pt, pb
+        )
+        slices = []
+        if top_b64:
+            slices.append(
+                f'<img class="__lh_top_img" src="data:image/png;base64,{top_b64}" alt="">'
+            )
+        if bot_b64:
+            slices.append(
+                f'<img class="__lh_bot_img" src="data:image/png;base64,{bot_b64}" alt="">'
+            )
+        letterhead_html = "".join(slices)
+        page_padding = f"{pt}mm {px}mm {pb}mm {px}mm"
+
+    extra_css = (
+        ".__a4_page { position: relative; }\n"
+        ".__lh_top_img { position: absolute; top: 0; left: 0; right: 0; "
+        f"width: 100%; height: {layout_padding_top_mm}mm; "
+        "object-fit: cover; object-position: top; pointer-events: none; z-index: 0; }\n"
+        ".__lh_bot_img { position: absolute; bottom: 0; left: 0; right: 0; "
+        f"width: 100%; height: {layout_padding_bottom_mm}mm; "
+        "object-fit: cover; object-position: bottom; pointer-events: none; z-index: 0; }\n"
+        ".__quote_content { position: relative; z-index: 1; }\n"
+        if use_layout else ""
+    )
+
     return (
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>\n"
         + _QUOTE_STYLESHEET
         + "/* On-screen-only chrome: emulate a real A4 sheet inside the iframe. */\n"
         + "body { background: #f1f5f9; padding: 16px; }\n"
         + ".__a4_page { width: 210mm; min-height: 297mm; max-width: 100%;\n"
-        + "             margin: 0 auto 16px; padding: 18mm 16mm;\n"
+        + f"             margin: 0 auto 16px; padding: {page_padding};\n"
         + "             background: #fff; box-shadow: 0 2px 12px rgba(15,23,42,0.08);\n"
         + "             border-radius: 4px; }\n"
-        # Match the constraints applied to the actual PDF chrome so the
-        # iframe preview is visually the same as the downloaded PDF.
         + "#__quote_header, #__quote_footer { width: 100%; box-sizing: border-box;\n"
         + "  text-align: center; line-height: 1.15; font-size: 9pt; }\n"
         + f"#__quote_header {{ height: {h}mm; max-height: {h}mm; overflow: hidden; }}\n"
@@ -1346,10 +1439,14 @@ def _build_browser_preview_html(
         + f"#__quote_header img {{ max-height: {h}mm; }}\n"
         + f"#__quote_footer img {{ max-height: {f}mm; }}\n"
         + "#__quote_header p, #__quote_footer p { margin: 0; }\n"
+        + extra_css
         + "</style></head><body>"
         + '<div class="__a4_page">'
+        + letterhead_html
         + chrome_top
+        + ('<div class="__quote_content">' if use_layout else "")
         + nbsp_clean
+        + ('</div>' if use_layout else "")
         + chrome_bottom
         + "</div></body></html>"
     )
@@ -1418,10 +1515,14 @@ def _generate_pdf_bytes(
     # also expose `string(page-counter)` and `counter(pages)` so footer
     # templates can include "Página X de Y" if the operator wants.
     page_chrome_css = ""
-    if has_header:
+    # When a letterhead image is in use it OWNS the @top-center and
+    # @bottom-center margin boxes. Skip the operator-defined header/footer
+    # HTML chrome in that case — the image already plays that role and we
+    # cannot have two `running()` elements anchored to the same box.
+    if has_header and not use_layout:
         page_chrome_css += "\n@page { @top-center { content: element(quote_header); width: 100%; } }\n"
         page_chrome_css += "#__quote_header { position: running(quote_header); width: 100%; }\n"
-    if has_footer:
+    if has_footer and not use_layout:
         page_chrome_css += "\n@page { @bottom-center { content: element(quote_footer); width: 100%; } }\n"
         page_chrome_css += "#__quote_footer { position: running(quote_footer); width: 100%; }\n"
 
@@ -1455,29 +1556,50 @@ def _generate_pdf_bytes(
     bottom_margin = f"{f + 4}mm" if has_footer else "18mm"
 
     layout_css = ""
-    body_padding_css = ""
+    letterhead_html = ""
     if use_layout:
-        # Use the letterhead image as @page background. CRITICAL: in
-        # WeasyPrint, `@page` backgrounds are clipped by `@page { margin }`
-        # — anything inside the margin area renders WHITE on top of the
-        # background. To get the letterhead to span the FULL A4 sheet
-        # (header + body + footer + bleed) we set `@page { margin: 0 }`
-        # and simulate the "safe area" margins on the BODY via padding.
-        mime = layout_image_mimetype or "image/png"
+        # Letterhead strategy (the robust one): split the supplied
+        # letterhead image into a TOP slice and a BOTTOM slice using the
+        # operator-defined padding (in mm) as cut points. Inject each
+        # slice as a `position: running()` element that WeasyPrint hoists
+        # into `@page { @top-center }` and `@page { @bottom-center }`,
+        # repeated on EVERY printed page. This way:
+        #   - Header graphics print at the very top of every page (size:
+        #     `layout_padding_top_mm`)
+        #   - Footer graphics print at the very bottom of every page
+        #     (size: `layout_padding_bottom_mm`)
+        #   - Body content sits between them, respecting both paddings
+        #
+        # Why not @page background? Because `@page { background }` is
+        # clipped to the @page margin-box; setting margin:0 to expand it
+        # collapses the content area. Why not position:fixed? Because
+        # WeasyPrint v68 clips fixed elements to the content rect on
+        # pages 2+ (only the top half prints). Slicing avoids both.
         pt = max(0, min(120, int(layout_padding_top_mm or 40)))
         pb = max(0, min(120, int(layout_padding_bottom_mm or 30)))
         px = max(0, min(50, int(layout_padding_x_mm or 18)))
+        top_b64, bot_b64 = _slice_letterhead_image(
+            layout_image_b64, layout_image_mimetype, pt, pb
+        )
         layout_css = (
-            f"@page {{ margin: 0; background: url('data:{mime};base64,{layout_image_b64}') "
-            "no-repeat center center; background-size: 100% 100%; }\n"
+            f"@page {{ @top-center {{ content: element(__lh_top); width: 100%; height: {pt}mm; }} }}\n"
+            f"@page {{ @bottom-center {{ content: element(__lh_bot); width: 100%; height: {pb}mm; }} }}\n"
+            "#__lh_top { position: running(__lh_top); width: 100%; line-height: 0; }\n"
+            "#__lh_bot { position: running(__lh_bot); width: 100%; line-height: 0; }\n"
+            f"#__lh_top img {{ width: 100%; height: {pt}mm; display: block; "
+            "  margin: 0; padding: 0; object-fit: cover; object-position: top; }\n"
+            f"#__lh_bot img {{ width: 100%; height: {pb}mm; display: block; "
+            "  margin: 0; padding: 0; object-fit: cover; object-position: bottom; }\n"
         )
-        body_padding_css = (
-            f"html, body {{ padding: {pt}mm {px}mm {pb}mm {px}mm; }}\n"
-        )
-        # Override the regular @page margin block (defined below).
-        top_margin = "0"
-        bottom_margin = "0"
-        page_margin_x = "0"
+        parts = []
+        if top_b64:
+            parts.append(f'<div id="__lh_top"><img src="data:image/png;base64,{top_b64}" alt=""></div>')
+        if bot_b64:
+            parts.append(f'<div id="__lh_bot"><img src="data:image/png;base64,{bot_b64}" alt=""></div>')
+        letterhead_html = "".join(parts)
+        top_margin = f"{pt}mm"
+        bottom_margin = f"{pb}mm"
+        page_margin_x = f"{px}mm"
     else:
         page_margin_x = "16mm"
 
@@ -1491,11 +1613,8 @@ def _generate_pdf_bytes(
         + page_chrome_css
         + chrome_constraints_css
         + _QUOTE_STYLESHEET
-        # body_padding_css MUST come AFTER _QUOTE_STYLESHEET because the
-        # stylesheet declares `html, body { margin: 0; padding: 0; }` —
-        # if we put our overrides first they get silently stomped, and
-        # the quote content prints flush against the letterhead.
-        + body_padding_css
+        # When layout is active, the body's white background would mask
+        # the fixed letterhead element. Force transparent.
         + ("html, body { background: transparent !important; }\n" if use_layout else "")
         + "</style>\n"
     )
@@ -1507,7 +1626,7 @@ def _generate_pdf_bytes(
         chrome_blocks += '<div id="__quote_header">' + cleaned_header + '</div>'
     if has_footer:
         chrome_blocks += '<div id="__quote_footer">' + cleaned_footer + '</div>'
-    html_with_css = css_prefix + chrome_blocks + cleaned_html
+    html_with_css = css_prefix + letterhead_html + chrome_blocks + cleaned_html
     return HTML(string=html_with_css, base_url=base_url).write_pdf()
 
 

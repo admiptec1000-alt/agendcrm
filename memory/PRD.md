@@ -9,7 +9,21 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
-### 2026-05-12 (C) — Fix CRÍTICO Layout PDF Orçamento ✅
+### 2026-05-12 (D) — Fix DEFINITIVO Layout PDF (repete em TODAS as páginas) + Preview Web com layout ✅
+
+**Problema anterior:** O fix anterior (D-1) usava `@page { margin: 0 } + body padding`, mas padding do body só reserva espaço na PRIMEIRA e ÚLTIMA página. Páginas intermediárias tinham o conteúdo sobrepondo o cabeçalho/rodapé do letterhead. Outras tentativas (`bleed`, `position: fixed`) também falharam: backgrounds @page são clipados pelo `@page margin`, e position:fixed em WeasyPrint 68 clipa nas páginas 2+.
+
+**Solução definitiva:**
+1. Adicionada função `_slice_letterhead_image(b64, mime, pt_mm, pb_mm)` que recorta a imagem do letterhead em 2 partes (topo + rodapé) usando PIL.
+2. As duas partes são injetadas como **`position: running()` elements** em `@page { @top-center }` e `@page { @bottom-center }`. WeasyPrint repete elementos running em TODAS as páginas automaticamente.
+3. O `@page { margin: pt x pb x }` continua reservando o espaço para o conteúdo do orçamento sem sobreposição.
+4. Quando `use_layout=True`, header_html/footer_html textuais são suprimidos (o letterhead OWN's os margin boxes).
+
+**Validado:** PDF de 6 páginas: cabeçalho e rodapé verde em todas as 6, miolo branco para conteúdo. ✅
+
+**Preview web do orçamento agora mostra layout:** `_build_browser_preview_html` ganhou os parâmetros `layout_image_*` e renderiza as 2 fatias (topo/rodapé) como `<img position:absolute>` no mock A4 do iframe. O preview no modal "Visualizar Orcamento" agora é pixel-accurate com o PDF.
+
+### 2026-05-12 (C) — Tentativa anterior (NÃO FUNCIONAVA em multi-páginas)
 
 **Root cause** (encontrado por reprodução automatizada): no WeasyPrint, `background` aplicado no `@page` é **clipado pela `margin` do `@page`** — tudo dentro da área de margem renderiza branco POR CIMA do background. Como definimos `margin: 40mm 18mm 30mm 18mm`, o letterhead ficava confinado em uma área diminuta no centro, com tudo em volta branco. Visualmente parecia que o layout não foi aplicado.
 
