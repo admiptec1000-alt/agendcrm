@@ -1276,3 +1276,44 @@ async def insert_contracts_menu(
         "consultacliente_node": cc_id,
         "next_node": next_id,
     }
+
+
+@router.get("/inspect-flow/{flow_id}")
+async def inspect_flow(
+    flow_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Diagnostic helper: returns a compact summary of a flow so the
+    operator can see WHY a menu / node isn't reaching the customer
+    without having to open the Flowbuilder UI."""
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    nodes = flow.get("nodes") or []
+    edges = flow.get("edges") or []
+    summary = []
+    for n in nodes:
+        cfg = (n.get("data") or {}).get("config") or {}
+        nt = (n.get("data") or {}).get("nodeType")
+        outs = [e.get("target") for e in edges if e.get("source") == n.get("id")]
+        ins = [e.get("source") for e in edges if e.get("target") == n.get("id")]
+        summary.append({
+            "id": n.get("id"),
+            "type": nt,
+            "label": (n.get("data") or {}).get("label"),
+            "url": cfg.get("url"),
+            "dynamic_source": cfg.get("dynamic_source"),
+            "options_format": cfg.get("options_format"),
+            "question": (cfg.get("question") or "")[:80],
+            "next": outs,
+            "from": ins,
+        })
+    return {
+        "flow_id": flow_id,
+        "name": flow.get("name"),
+        "trigger_type": flow.get("trigger_type"),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes": summary,
+    }
