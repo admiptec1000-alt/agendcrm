@@ -9,6 +9,10 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+### 2026-05-12 (F) — Lote bugs P0 + features ✅
+
+(detalhes acima)
+
 ### 2026-05-12 (E) — Fix CRÍTICO Áudio + Remoção placeholder ✅
 
 **Bug 1: "Este áudio não está mais disponível"** no celular do destinatário sempre que o operador grava áudio na plataforma.

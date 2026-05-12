@@ -1469,6 +1469,30 @@ async def list_clients(
         client["active_subscription"] = sub
     return clients
 
+def _format_cpf(v: Optional[str]) -> Optional[str]:
+    """Normalize CPF to '###.###.###-##'. If the input has fewer/more
+    digits than 11 we return the original (preserve whatever the
+    operator typed)."""
+    if not v:
+        return v
+    import re as _re
+    d = _re.sub(r"\D", "", v)
+    if len(d) != 11:
+        return v
+    return f"{d[0:3]}.{d[3:6]}.{d[6:9]}-{d[9:11]}"
+
+
+def _format_cnpj(v: Optional[str]) -> Optional[str]:
+    """Normalize CNPJ to '##.###.###/####-##'."""
+    if not v:
+        return v
+    import re as _re
+    d = _re.sub(r"\D", "", v)
+    if len(d) != 14:
+        return v
+    return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
+
+
 @router.post("/clients")
 async def create_client(
     data: ClientCreate,
@@ -1487,8 +1511,11 @@ async def create_client(
         "birth_date": data.birth_date,
         "notes": data.notes,
         "person_type": data.person_type or "fisica",
-        "cpf": data.cpf,
-        "cnpj": data.cnpj,
+        # Always store the punctuated form so the chat, kanban, quote PDF
+        # and CSV exports show a consistent value. Search continues to
+        # normalize on the fly (see quotes_routes list_quotes).
+        "cpf": _format_cpf(data.cpf),
+        "cnpj": _format_cnpj(data.cnpj),
         "company_name": data.company_name,
         "cep": data.cep,
         "address": data.address,
@@ -1508,6 +1535,10 @@ async def update_client(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "cpf" in update_data:
+        update_data["cpf"] = _format_cpf(update_data["cpf"])
+    if "cnpj" in update_data:
+        update_data["cnpj"] = _format_cnpj(update_data["cnpj"])
     await db.clients.update_one({"id": client_id, "company_id": user["company_id"]}, {"$set": update_data})
     return await db.clients.find_one({"id": client_id}, {"_id": 0})
 

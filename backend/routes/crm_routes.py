@@ -196,6 +196,94 @@ async def get_ticket_counts(
     return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "total": total}
 
 
+@router.post("/tickets/open-for-client")
+async def open_ticket_for_client(
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Find-or-create an OPEN WhatsApp ticket for the given client.
+
+    Used by the "Abrir atendimento" shortcut on the Clientes page so the
+    operator can jump straight to the chat without searching by hand.
+    The caller passes `{ client_id, phone, name }`. We:
+
+      1) Look for an open ticket (`status not in [fechado, cancelado]`,
+         not a group) bound either to the client_id or the phone.
+      2) If none exists, create a new whatsapp ticket bound to the
+         company's first connected WhatsApp connection. If no connection
+         is connected, we still create the ticket so the operator can
+         enqueue a message; sending will be queued by the existing logic.
+      3) Return the full ticket so the frontend can navigate to it.
+    """
+    company_id = user["company_id"]
+    client_id = payload.get("client_id")
+    phone = (payload.get("phone") or "").strip()
+    name = (payload.get("name") or phone).strip()
+    if not phone and not client_id:
+        raise HTTPException(400, "client_id ou phone obrigatorio")
+
+    digits_only = re.sub(r"\D", "", phone) if phone else ""
+
+    # Find an open ticket by client_id OR by phone (digits-only OR raw).
+    candidates_or = []
+    if client_id:
+        candidates_or.append({"client_id": client_id})
+    if digits_only:
+        candidates_or.append({"customer_phone": digits_only})
+    if phone and phone != digits_only:
+        candidates_or.append({"customer_phone": phone})
+    ticket = None
+    if candidates_or:
+        ticket = await db.tickets.find_one(
+            {
+                "company_id": company_id,
+                "status": {"$nin": ["fechado", "cancelado"]},
+                "channel": {"$ne": "whatsapp_group"},
+                "$or": candidates_or,
+            },
+            {"_id": 0},
+        )
+
+    if not ticket:
+        # Pick first connected WhatsApp connection (or first one if none
+        # are connected) so the new ticket has a sensible default channel.
+        conn = await db.channel_connections.find_one(
+            {"company_id": company_id, "status": "connected"}, {"_id": 0}
+        ) or await db.channel_connections.find_one(
+            {"company_id": company_id}, {"_id": 0}
+        )
+        new_id = str(uuid.uuid4())
+        from counters import next_ticket_number as _next
+        n = await _next(db, company_id)
+        ticket = {
+            "id": new_id,
+            "ticket_number": n,
+            "company_id": company_id,
+            "connection_id": (conn or {}).get("id"),
+            "client_id": client_id,
+            "customer_name": name,
+            "customer_phone": digits_only or phone,
+            "customer_email": None,
+            "status": "aberto",
+            "priority": "medium",
+            "channel": "whatsapp",
+            "is_group": False,
+            "description": None,
+            "assigned_to": user["id"],
+            "queue_id": ((conn or {}).get("queue_ids") or [None])[0] if len((conn or {}).get("queue_ids") or []) == 1 else None,
+            "messages": [],
+            "tags": [],
+            "value": 0.0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "origin": "client_shortcut",
+        }
+        await db.tickets.insert_one(ticket)
+        ticket.pop("_id", None)
+    return ticket
+
+
 @router.get("/tickets/{ticket_id}")
 async def get_ticket(
     ticket_id: str,
@@ -777,7 +865,10 @@ async def send_media_to_ticket(
     ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket nao encontrado")
-    if ticket.get("channel") != "whatsapp":
+    # Accept any WhatsApp channel — `whatsapp` (private chat) AND
+    # `whatsapp_group`. Previously only `whatsapp` was allowed, which made
+    # attachments/quotes fail on group tickets with "Ticket nao e WhatsApp".
+    if ticket.get("channel") not in ("whatsapp", "whatsapp_group"):
         raise HTTPException(status_code=400, detail="Ticket nao e WhatsApp")
     filename = (payload.get("filename") or "arquivo").strip()
     mimetype = (payload.get("mimetype") or "application/octet-stream").strip()

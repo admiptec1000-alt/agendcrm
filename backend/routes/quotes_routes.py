@@ -195,6 +195,7 @@ class QuoteCreate(BaseModel):
     minimum_billing_kg: Optional[str] = None
     payment_terms: Optional[str] = None     # ex: "30"
     payment_method: Optional[str] = None    # ex: "Boleto"
+    average_delivery_days: Optional[str] = None  # ex: "5 dias úteis" — placeholder {{prazo_medio}}
     seller_name: Optional[str] = None
     seller_contact: Optional[str] = None
     validity_days: int = 15
@@ -207,6 +208,7 @@ class QuoteUpdate(BaseModel):
     minimum_billing_kg: Optional[str] = None
     payment_terms: Optional[str] = None
     payment_method: Optional[str] = None
+    average_delivery_days: Optional[str] = None
     seller_name: Optional[str] = None
     seller_contact: Optional[str] = None
     validity_days: Optional[int] = None
@@ -949,6 +951,7 @@ async def create_quote(data: QuoteCreate, user=Depends(get_current_user), db: As
         "minimum_billing_kg": data.minimum_billing_kg,
         "payment_terms": data.payment_terms,
         "payment_method": data.payment_method,
+        "average_delivery_days": data.average_delivery_days,
         "seller_name": data.seller_name or user.get("name"),
         "seller_contact": data.seller_contact,
         "validity_days": data.validity_days or 15,
@@ -1037,10 +1040,17 @@ async def list_quotes(
         cfilter = {"company_id": user["company_id"]}
         if document:
             digits = re.sub(r"\D", "", document)
+            # The CPF/CNPJ in the clients collection is inconsistent: some
+            # rows have only digits ("22454878000100"), some have full
+            # punctuation ("22.454.878/0001-00"). To match BOTH, build a
+            # regex that allows any non-digit between every digit of the
+            # search query — this matches "22.454.878..." when user typed
+            # "22454878..." and vice-versa.
+            digit_regex = r"\D*".join(re.escape(d) for d in digits) if digits else document
             cfilter["$or"] = [
-                {"cpf": digits}, {"cpf": document},
-                {"cnpj": digits}, {"cnpj": document},
-                {"document": digits}, {"document": document},
+                {"cpf": {"$regex": digit_regex}},
+                {"cnpj": {"$regex": digit_regex}},
+                {"document": {"$regex": digit_regex}},
             ]
         if customer:
             ored = cfilter.pop("$or", [])
@@ -1264,6 +1274,10 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
         "minimum_billing_kg": quote.get("minimum_billing_kg") or "",
         "payment_terms": quote.get("payment_terms") or "",
         "payment_method": quote.get("payment_method") or "",
+        "average_delivery_days": quote.get("average_delivery_days") or "",
+        "prazo_medio": quote.get("average_delivery_days") or "",
+        "Prazo_medio": quote.get("average_delivery_days") or "",  # case-insensitive sugar
+        "PRAZO_MEDIO": quote.get("average_delivery_days") or "",
         "seller_name": quote.get("seller_name") or "",
         "seller_contact": quote.get("seller_contact") or "",
         "validity_days": quote.get("validity_days") or 15,

@@ -288,6 +288,7 @@ const PLACEHOLDERS = [
   { group: 'Condicoes', token: '{{minimum_billing_kg}}', label: 'Faturamento minimo' },
   { group: 'Condicoes', token: '{{payment_terms}}', label: 'Prazo de pagamento (dias)' },
   { group: 'Condicoes', token: '{{payment_method}}', label: 'Forma de pagamento' },
+  { group: 'Condicoes', token: '{{prazo_medio}}', label: 'Prazo medio (texto livre)' },
   { group: 'Vendedor', token: '{{seller_name}}', label: 'Nome do vendedor' },
   { group: 'Vendedor', token: '{{seller_contact}}', label: 'Contato do vendedor' },
   { group: 'Observacoes', token: '{{notes}}', label: 'Observacoes livres' },
@@ -922,6 +923,7 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
     minimum_billing_kg: initial?.minimum_billing_kg || '',
     payment_terms: initial?.payment_terms || '30',
     payment_method: initial?.payment_method || 'Boleto',
+    average_delivery_days: initial?.average_delivery_days || '',
     seller_name: initial?.seller_name || '',
     seller_contact: initial?.seller_contact || '',
     validity_days: initial?.validity_days || 15,
@@ -1154,6 +1156,15 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
           </Field>
           <Field label="Forma de pagamento">
             <input data-testid="quote-payment-method" className="w-full border rounded px-3 py-2 text-sm" value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })} />
+          </Field>
+          <Field label="Prazo médio (placeholder {{prazo_medio}})">
+            <input
+              data-testid="quote-average-delivery"
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="Ex: 5 dias úteis, 48h, conforme disponibilidade..."
+              value={form.average_delivery_days}
+              onChange={(e) => setForm({ ...form, average_delivery_days: e.target.value })}
+            />
           </Field>
           <Field label="Vendedor (nome)">
             <input data-testid="quote-seller-name" className="w-full border rounded px-3 py-2 text-sm" value={form.seller_name} onChange={(e) => setForm({ ...form, seller_name: e.target.value })} />

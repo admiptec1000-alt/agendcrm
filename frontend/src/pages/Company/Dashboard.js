@@ -663,7 +663,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'agenda': return <AgendaPage />;
     case 'agenda_pro': return <AgendaProPage />;
     case 'agendamentos': return <MessageSchedulingPage />;
-    case 'clientes': return <ClientsPage />;
+    case 'clientes': return <ClientsPage setActivePage={setActivePage} />;
     case 'servicos_produtos': return <ServicesPageFull />;
     case 'profissionais': return <ProfessionalsPageFull />;
     case 'assinaturas': return <SubscriptionsPageFull />;
@@ -1034,7 +1034,7 @@ const TicketsPage = () => {
 const ContactsPage = () => <CrudListPage title="Contatos" fetchFn={() => crmAPI.getTickets()} columns={[{key:'customer_name',label:'Nome'},{key:'customer_phone',label:'Telefone'},{key:'customer_email',label:'Email'}]} testId="contacts-page" />;
 
 /* ========== CLIENTS PAGE (ENHANCED) ========== */
-const ClientsPage = () => {
+const ClientsPage = ({ setActivePage }) => {
   const [clients, setClients] = useState([]);
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
@@ -1070,6 +1070,23 @@ const ClientsPage = () => {
     } else {
       setExpandedId(client.id);
       if (!historyByPhone[client.phone]) loadHistory(client.phone);
+    }
+  };
+
+  const openTicketFromClient = async (client) => {
+    if (!client?.phone) {
+      toast.error('Cliente sem telefone — adicione um número para abrir atendimento');
+      return;
+    }
+    try {
+      const { data } = await crmAPI.openTicketForClient({ client_id: client.id, phone: client.phone, name: client.name });
+      // Stash the ticket id so AtendimentosPage knows which ticket to open
+      // as soon as it mounts (works whether or not the user was already
+      // in that page).
+      sessionStorage.setItem('focus_ticket_id', data.id);
+      setActivePage && setActivePage('atendimentos');
+    } catch (e) {
+      toast.error('Erro ao abrir atendimento');
     }
   };
 
@@ -1240,6 +1257,15 @@ const ClientsPage = () => {
                     <p className="text-xs text-slate-500">{c.total_appointments || 0} agend.</p>
                     {c.active_subscription && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Assinante</span>}
                   </div>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); openTicketFromClient(c); }}
+                    className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                    title="Abrir atendimento"
+                    data-testid={`open-ticket-from-client-${c.id}`}
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                  </button>
                   <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
               </button>

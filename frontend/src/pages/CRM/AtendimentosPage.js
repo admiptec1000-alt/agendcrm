@@ -224,11 +224,14 @@ const AtendimentosPage = () => {
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { loadTags(); loadAux(); }, []);
 
-  // Auto-open ticket via sessionStorage (used by Kanban "open atendimento" icon)
+  // Auto-open ticket via sessionStorage. Two keys supported:
+  //   - `open_ticket_id`  (Kanban "open atendimento" icon)
+  //   - `focus_ticket_id` (Clientes page "Abrir atendimento" shortcut)
   useEffect(() => {
-    const tid = sessionStorage.getItem('open_ticket_id');
+    const tid = sessionStorage.getItem('open_ticket_id') || sessionStorage.getItem('focus_ticket_id');
     if (tid) {
       sessionStorage.removeItem('open_ticket_id');
+      sessionStorage.removeItem('focus_ticket_id');
       crmAPI.getTicket(tid).then(r => setSelectedTicket(r.data)).catch(() => {});
     }
   }, []);
