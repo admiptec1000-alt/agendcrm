@@ -1317,3 +1317,110 @@ async def inspect_flow(
         "edge_count": len(edges),
         "nodes": summary,
     }
+
+
+@router.post("/split-contract-menu/{flow_id}")
+async def split_contract_menu(
+    flow_id: str,
+    dry_run: bool = True,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Fix the legacy SGP migration where the `found_menu` node had both
+    `dynamic_source: contratos_lista` AND multiple outgoing edges to
+    static "service" options (Pix, 2nd-via, Support, Promise, Attendant).
+
+    Splits the menu in two: keeps the original node as the contracts
+    picker (single outgoing edge to the service menu) and creates a new
+    `service_menu` node that inherits the outgoing edges (Pix, 2via, ...).
+    """
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    nodes = flow.get("nodes") or []
+    edges = flow.get("edges") or []
+    # Find the menu that has both dynamic_source AND multiple outgoing edges.
+    target_menu = None
+    for n in nodes:
+        cfg = (n.get("data") or {}).get("config") or {}
+        nt = (n.get("data") or {}).get("nodeType")
+        if nt == "menu" and cfg.get("dynamic_source") in ("contratos_lista", "contratos_menu"):
+            outs = [e for e in edges if e.get("source") == n.get("id")]
+            if len(outs) > 1:
+                target_menu = n
+                break
+    if not target_menu:
+        return {"split": False, "reason": "Nenhum menu de contratos com multiplas saidas encontrado"}
+
+    target_id = target_menu["id"]
+    target_pos = target_menu.get("position") or {"x": 0, "y": 0}
+
+    # Build the new service_menu using the SAME static options that already
+    # exist as outgoing edges from the contracts menu, but preserving the
+    # node labels (Pix, 2via, Acesso, Promessa, Atendente).
+    import uuid as _uuid
+    new_id = f"service_menu_{_uuid.uuid4().hex[:6]}"
+    new_node = {
+        "id": new_id,
+        "type": "flow",
+        "position": {"x": target_pos.get("x", 0), "y": (target_pos.get("y", 0) or 0) + 180},
+        "data": {
+            "nodeType": "menu",
+            "label": "Tipo de Atendimento",
+            "config": {
+                "title": "O que voce precisa?",
+                "question": "Escolha o tipo de atendimento:",
+                "options_format": "list",
+                "footer": "Toque para escolher",
+                "list_button_text": "Ver opcoes",
+                "list_section_title": "Servicos disponiveis",
+            },
+        },
+    }
+    # Reroute: every edge that was source=target_id → keep target the same,
+    # but change source to new_id. Then add one new edge target_id → new_id.
+    new_edges = []
+    rerouted = 0
+    for e in edges:
+        if e.get("source") == target_id:
+            new_edges.append({**e, "source": new_id, "id": f"e_{new_id}_{e.get('target')}"})
+            rerouted += 1
+        else:
+            new_edges.append(e)
+    new_edges.append({
+        "id": f"e_{target_id}_{new_id}",
+        "source": target_id,
+        "target": new_id,
+    })
+
+    # Update the original menu to make it clear it is now the contracts picker.
+    for n in nodes:
+        if n.get("id") == target_id:
+            cfg = (n.get("data") or {}).get("config") or {}
+            cfg["question"] = cfg.get("question") or "Selecione o contrato para atendimento:"
+            cfg["title"] = cfg.get("title") or "Seus contratos"
+            cfg["options_format"] = "list"
+            cfg["dynamic_source"] = "contratos_lista"
+            cfg["list_button_text"] = cfg.get("list_button_text") or "Ver contratos"
+            cfg["list_section_title"] = cfg.get("list_section_title") or "Contratos disponiveis"
+            cfg["footer"] = cfg.get("footer") or "Toque para escolher"
+            n["data"]["config"] = cfg
+            n["data"]["label"] = "Menu Contratos (SGP)"
+
+    if dry_run:
+        return {
+            "split": True, "dry_run": True, "flow_id": flow_id,
+            "target_menu": target_id, "new_service_menu": new_id,
+            "rerouted_edges": rerouted,
+        }
+
+    nodes.append(new_node)
+    await db.flow_builders.update_one(
+        {"id": flow_id},
+        {"$set": {"nodes": nodes, "edges": new_edges, "updated_at": datetime.utcnow().isoformat()}},
+    )
+    return {
+        "split": True, "dry_run": False, "flow_id": flow_id,
+        "target_menu": target_id, "new_service_menu": new_id,
+        "rerouted_edges": rerouted,
+    }
