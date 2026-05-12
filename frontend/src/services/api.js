@@ -334,7 +334,7 @@ export const quotesAPI = {
   updateFreight: (id, data) => api.put(`/quotes/freights/${id}`, data),
   deleteFreight: (id) => api.delete(`/quotes/freights/${id}`),
   // Templates
-  listTemplates: () => api.get('/quotes/templates'),
+  listTemplates: (params) => api.get('/quotes/templates', { params }),
   getTemplate: (id) => api.get(`/quotes/templates/${id}`),
   createTemplate: (data) => api.post('/quotes/templates', data),
   updateTemplate: (id, data) => api.put(`/quotes/templates/${id}`, data),

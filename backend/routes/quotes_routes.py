@@ -567,9 +567,23 @@ async def _ensure_default_template(db, company_id: str):
 
 
 @router.get("/templates")
-async def list_quote_templates(user=Depends(get_current_user), db: AsyncIOMotorDatabase = Depends(get_database)):
+async def list_quote_templates(
+    slim: bool = False,
+    user=Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Returns the company's quote templates.
+
+    `slim=true` returns only `id, name, is_default` — used by the select
+    dropdown when creating a new quote (where the huge `layout_image_b64`
+    payload was making the modal hang for several seconds).
+    """
     await _ensure_default_template(db, user["company_id"])
-    return await db.quote_templates.find({"company_id": user["company_id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    proj = {"_id": 0}
+    if slim:
+        # MongoDB projection: keep only the fields the select needs.
+        proj.update({"id": 1, "name": 1, "is_default": 1})
+    return await db.quote_templates.find({"company_id": user["company_id"]}, proj).sort("created_at", -1).to_list(1000)
 
 
 @router.get("/templates/{tid}")

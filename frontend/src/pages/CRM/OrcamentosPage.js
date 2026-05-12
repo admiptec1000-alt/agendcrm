@@ -942,7 +942,10 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
   useEffect(() => {
     Promise.all([
       schedulingAPI.getClients(),
-      quotesAPI.listTemplates(),
+      // Use slim=true: only id/name/is_default — avoids loading huge
+      // `layout_image_b64` payloads when the modal opens (was the
+      // 5-10s freeze users reported when clicking the template select).
+      quotesAPI.listTemplates({ slim: true }),
       quotesAPI.listServices(),
       quotesAPI.listFreights(),
     ]).then(([cs, ts, ss, fs]) => {
@@ -1082,10 +1085,11 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
 
         {/* Template */}
         <Field label="Template do Orcamento">
-          <select data-testid="quote-template" className="w-full border rounded px-3 py-2 text-sm" value={form.template_id} onChange={(e) => setForm({ ...form, template_id: e.target.value })}>
-            <option value="">— Padrao —</option>
-            {templates.map(t => <option key={t.id} value={t.id}>{t.name}{t.is_default ? ' (padrao)' : ''}</option>)}
-          </select>
+          <TemplatePicker
+            templates={templates}
+            value={form.template_id}
+            onChange={(id) => setForm({ ...form, template_id: id })}
+          />
         </Field>
 
         {/* Itens */}
@@ -1320,6 +1324,84 @@ const Field = ({ label, children }) => (
     <div className="mt-1">{children}</div>
   </label>
 );
+
+const TemplatePicker = ({ templates, value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const wrapRef = useRef(null);
+  const selected = templates.find(t => t.id === value);
+  const filtered = (templates || []).filter(t =>
+    !q || (t.name || '').toLowerCase().includes(q.toLowerCase())
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className={`w-full text-left border rounded px-3 py-2 text-sm flex items-center justify-between gap-2 hover:border-slate-400 transition-colors ${
+          selected ? 'bg-white text-slate-900' : 'bg-white text-slate-400'
+        }`}
+        data-testid="quote-template-picker"
+      >
+        <span className="truncate">
+          {selected ? selected.name : '— Selecione um template —'}
+        </span>
+        <svg className={`w-4 h-4 text-slate-400 transition-transform flex-shrink-0 ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-72 overflow-hidden flex flex-col">
+          <div className="p-2 border-b">
+            <input
+              autoFocus
+              type="text"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Pesquisar template..."
+              className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-emerald-500"
+              data-testid="template-search-input"
+            />
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {filtered.length === 0 && (
+              <div className="px-3 py-4 text-sm text-slate-400 text-center">Nenhum template encontrado</div>
+            )}
+            {filtered.map(t => {
+              const active = t.id === value;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => { onChange(t.id); setOpen(false); setQ(''); }}
+                  className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 transition-colors ${
+                    active ? 'bg-emerald-50 text-emerald-700' : 'hover:bg-slate-50 text-slate-700'
+                  }`}
+                  data-testid={`template-option-${t.id}`}
+                >
+                  <span className="truncate">{t.name}</span>
+                  {t.is_default && (
+                    <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded flex-shrink-0">padrao</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const ModalShell = ({ title, children, onClose, large }) => {
   return createPortal(
