@@ -1424,3 +1424,352 @@ async def split_contract_menu(
         "target_menu": target_id, "new_service_menu": new_id,
         "rerouted_edges": rerouted,
     }
+
+
+# === SGP FLOW AUDIT + AUTO-REPAIR =============================================
+#
+# The "Web Fibra" customer's SGP flow has a recurring failure mode: after the
+# `consultacliente` HTTP node, the operator-built flow jumps straight to a
+# static "Tipo de Atendimento" menu (Pix / 2ª via / Suporte / …) WITHOUT a
+# dynamic menu in-between to pick which contract. As a result:
+#   • the contract list never renders in WhatsApp (no buttons/list);
+#   • `{{contrato_id}}` is never captured, so the downstream /api/sgp/fatura2via
+#     call ends up with an empty parameter and SGP returns nothing → no PDF,
+#     no Pix.
+#
+# `/super-admin/audit-sgp-flow/{flow_id}` returns a structured report.
+# `/super-admin/repair-sgp-flow/{flow_id}` inserts the missing contract picker
+# AND rewrites the 2ª-via downstream message to include boleto + Pix + linha
+# digitavel. Both endpoints accept `dry_run=true|false`. The repair is
+# idempotent — re-running on an already-repaired flow is a no-op.
+
+SECOND_VIA_RICH_TEMPLATE = (
+    "Aqui esta sua 2a via!\n\n"
+    "📄 Boleto / link de cobranca:\n{{boleto_url}}\n\n"
+    "💳 Linha digitavel:\n{{linha_digitavel}}\n\n"
+    "⚡ PIX Copia-e-Cola:\n{{pix_copia_e_cola}}\n\n"
+    "Vencimento: {{vencimento_fatura}}\n"
+    "Valor: R$ {{valor_fatura}}\n\n"
+    "_Se ja pagou, desconsidere esta mensagem._"
+)
+
+
+def _sgp_action_of(node: dict) -> Optional[str]:
+    """Return the SGP action ('consultacliente', 'fatura2via', …) called by
+    the node's HTTP URL, or None if it isn't an SGP node."""
+    cfg = (node.get("data") or {}).get("config") or {}
+    nt = (node.get("data") or {}).get("nodeType") or node.get("type") or ""
+    if nt not in ("http", "http_request", "request", "api"):
+        return None
+    url = cfg.get("url") or ""
+    if "/api/sgp/" not in url:
+        return None
+    return url.split("/api/sgp/", 1)[1].rstrip("/").split("?")[0]
+
+
+def _audit_sgp_flow_report(flow: dict) -> dict:
+    nodes = flow.get("nodes") or []
+    edges = flow.get("edges") or []
+    issues: list = []
+    info: list = []
+    by_id = {n.get("id"): n for n in nodes}
+    edges_by_src: dict = {}
+    for e in edges:
+        edges_by_src.setdefault(e.get("source"), []).append(e)
+
+    consult_nodes = [n for n in nodes if _sgp_action_of(n) == "consultacliente"]
+    if not consult_nodes:
+        issues.append({
+            "code": "missing_consultacliente",
+            "message": "Nenhum HTTP node chamando /api/sgp/consultacliente foi encontrado.",
+        })
+    for cn in consult_nodes:
+        downstream = [by_id.get(e["target"]) for e in edges_by_src.get(cn["id"], [])]
+        downstream = [d for d in downstream if d]
+        has_picker = False
+        for d in downstream:
+            dcfg = (d.get("data") or {}).get("config") or {}
+            dnt = (d.get("data") or {}).get("nodeType") or d.get("type")
+            if dnt == "menu" and dcfg.get("dynamic_source") in ("contratos_lista", "contratos_menu"):
+                has_picker = True
+                info.append({
+                    "code": "contract_picker_ok",
+                    "consultacliente_node": cn["id"],
+                    "picker_node": d["id"],
+                })
+                break
+        if not has_picker:
+            issues.append({
+                "code": "missing_contract_picker",
+                "message": (
+                    "Após o HTTP consultacliente, deveria existir um Menu dinâmico "
+                    "com `dynamic_source=contratos_lista` para o cliente escolher "
+                    "qual contrato. O fluxo atual pula direto para outro nó, então "
+                    "a lista de contratos nunca é exibida e `contrato_id` nunca é "
+                    "capturado."
+                ),
+                "consultacliente_node": cn["id"],
+                "current_downstream": [d.get("id") for d in downstream],
+            })
+
+    fatura_nodes = [n for n in nodes if _sgp_action_of(n) == "fatura2via"]
+    for fn in fatura_nodes:
+        downstream = [by_id.get(e["target"]) for e in edges_by_src.get(fn["id"], [])]
+        downstream = [d for d in downstream if d]
+        rich = False
+        for d in downstream:
+            dnt = (d.get("data") or {}).get("nodeType") or d.get("type")
+            if dnt not in ("message", "welcome", "send_message", "text"):
+                continue
+            txt = ((d.get("data") or {}).get("config") or {}).get("text") or \
+                  ((d.get("data") or {}).get("config") or {}).get("question") or ""
+            keys = ("boleto_url", "linha_digitavel", "pix_copia_e_cola")
+            present = [k for k in keys if k in txt]
+            if len(present) >= 2:
+                rich = True
+                info.append({
+                    "code": "second_via_template_ok",
+                    "fatura2via_node": fn["id"],
+                    "message_node": d["id"],
+                    "placeholders_present": present,
+                })
+                break
+        if not rich:
+            issues.append({
+                "code": "second_via_template_poor",
+                "message": (
+                    "O nó de mensagem após o HTTP fatura2via não inclui os "
+                    "placeholders {{boleto_url}}, {{linha_digitavel}} e "
+                    "{{pix_copia_e_cola}} simultaneamente — então o cliente "
+                    "não recebe o pacote completo (PDF + Linha + Pix)."
+                ),
+                "fatura2via_node": fn["id"],
+                "downstream_messages": [d.get("id") for d in downstream
+                                         if ((d.get("data") or {}).get("nodeType") or d.get("type")) in ("message","welcome","send_message","text")],
+            })
+
+    for fn in fatura_nodes:
+        cfg = (fn.get("data") or {}).get("config") or {}
+        body = cfg.get("body") or {}
+        params = (body.get("params") if isinstance(body, dict) else None) or {}
+        contrato_val = ""
+        for k in ("contrato", "contratoId", "contrato_id"):
+            v = params.get(k)
+            if isinstance(v, str) and v.strip():
+                contrato_val = v.strip()
+                break
+        if "{{contrato_id}}" not in contrato_val and "{{contratoId}}" not in contrato_val:
+            issues.append({
+                "code": "fatura2via_missing_contrato_placeholder",
+                "message": (
+                    "O nó HTTP fatura2via NÃO passa {{contrato_id}} no body — "
+                    "sem isso, o SGP devolve vazio. Esperado algo como "
+                    "`{ \"params\": { \"contrato\": \"{{contrato_id}}\" } }`."
+                ),
+                "fatura2via_node": fn["id"],
+                "current_body_params": list(params.keys()),
+            })
+
+    return {
+        "flow_id": flow.get("id"),
+        "flow_name": flow.get("name"),
+        "company_id": flow.get("company_id"),
+        "nodes_count": len(nodes),
+        "edges_count": len(edges),
+        "issues": issues,
+        "info": info,
+        "ok": not issues,
+    }
+
+
+@router.get("/audit-sgp-flow/{flow_id}")
+async def audit_sgp_flow(
+    flow_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Inspect a flow and report missing/misconfigured SGP nodes.
+    Read-only — never modifies the flow."""
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    return _audit_sgp_flow_report(flow)
+
+
+@router.get("/audit-sgp-flow-by-company/{company_id}")
+async def audit_sgp_flow_by_company(
+    company_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Audit ALL flows of a company that look like SGP flows
+    (name contains 'SGP' OR has at least one /api/sgp/* node).
+    Useful when you don't know the flow_id from production."""
+    cursor = db.flow_builders.find({"company_id": company_id}, {"_id": 0})
+    flows = await cursor.to_list(200)
+    reports = []
+    for f in flows:
+        looks_sgp = bool(f.get("name") and "sgp" in f["name"].lower())
+        if not looks_sgp:
+            looks_sgp = any(_sgp_action_of(n) for n in (f.get("nodes") or []))
+        if looks_sgp:
+            reports.append(_audit_sgp_flow_report(f))
+    return {"company_id": company_id, "flows_audited": len(reports), "reports": reports}
+
+
+@router.post("/repair-sgp-flow/{flow_id}")
+async def repair_sgp_flow(
+    flow_id: str,
+    dry_run: bool = True,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Insert the missing contract-picker menu between consultacliente and
+    its downstream node(s), AND rewrite the message after fatura2via to
+    include boleto + linha digitavel + Pix copia-e-cola. Idempotent.
+
+    Pass `dry_run=false` to actually persist."""
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+
+    nodes = flow.get("nodes") or []
+    edges = flow.get("edges") or []
+    by_id = {n.get("id"): n for n in nodes}
+    edges_by_src: dict = {}
+    for e in edges:
+        edges_by_src.setdefault(e.get("source"), []).append(e)
+
+    changes: list = []
+
+    consult_nodes = [n for n in nodes if _sgp_action_of(n) == "consultacliente"]
+    new_nodes: list = []
+    new_edges = list(edges)
+    for cn in consult_nodes:
+        out_edges = edges_by_src.get(cn["id"], [])
+        downstream = [by_id.get(e["target"]) for e in out_edges]
+        downstream = [d for d in downstream if d]
+        has_picker = False
+        for d in downstream:
+            dcfg = (d.get("data") or {}).get("config") or {}
+            dnt = (d.get("data") or {}).get("nodeType") or d.get("type")
+            if dnt == "menu" and dcfg.get("dynamic_source") in ("contratos_lista", "contratos_menu"):
+                has_picker = True
+                break
+        if has_picker:
+            continue
+
+        picker_id = f"contract_picker_{uuid.uuid4().hex[:6]}"
+        cn_pos = cn.get("position") or {"x": 0, "y": 0}
+        picker_node = {
+            "id": picker_id,
+            "type": "flow",
+            "position": {"x": cn_pos.get("x", 0), "y": (cn_pos.get("y", 0) or 0) + 160},
+            "data": {
+                "nodeType": "menu",
+                "label": "Selecione o Contrato (SGP)",
+                "config": {
+                    "title": "Seus contratos",
+                    "question": "Ola {{nome_cliente}}!\nSelecione abaixo o contrato que deseja consultar:",
+                    "options_format": "list",
+                    "dynamic_source": "contratos_lista",
+                    "capture_var": "contrato_id",
+                    "header": "Selecione o contrato",
+                    "footer": "Toque para escolher",
+                    "button_label": "Ver contratos",
+                    "list_button_text": "Ver contratos",
+                    "list_section_title": "Contratos disponíveis",
+                },
+            },
+        }
+        new_nodes.append(picker_node)
+        rerouted = 0
+        rewired_edges = []
+        for e in new_edges:
+            if e.get("source") == cn["id"]:
+                rewired_edges.append({**e, "source": picker_id,
+                                       "id": f"e_{picker_id}_{e.get('target')}"})
+                rerouted += 1
+            else:
+                rewired_edges.append(e)
+        rewired_edges.append({
+            "id": f"e_{cn['id']}_{picker_id}",
+            "source": cn["id"],
+            "target": picker_id,
+        })
+        new_edges = rewired_edges
+        changes.append({
+            "action": "insert_contract_picker",
+            "consultacliente_node": cn["id"],
+            "picker_node": picker_id,
+            "rerouted_edges": rerouted,
+        })
+
+    nodes = nodes + new_nodes
+
+    edges_by_src = {}
+    for e in new_edges:
+        edges_by_src.setdefault(e.get("source"), []).append(e)
+    by_id = {n.get("id"): n for n in nodes}
+    fatura_nodes = [n for n in nodes if _sgp_action_of(n) == "fatura2via"]
+    for fn in fatura_nodes:
+        outs = edges_by_src.get(fn["id"], [])
+        downstream = [by_id.get(e["target"]) for e in outs]
+        downstream = [d for d in downstream if d]
+        for d in downstream:
+            dnt = (d.get("data") or {}).get("nodeType") or d.get("type")
+            if dnt not in ("message", "welcome", "send_message", "text"):
+                continue
+            cfg = (d.get("data") or {}).get("config") or {}
+            cur = cfg.get("text") or cfg.get("question") or ""
+            keys = ("boleto_url", "linha_digitavel", "pix_copia_e_cola")
+            present = sum(1 for k in keys if k in cur)
+            if present >= 2:
+                continue
+            cfg["text"] = SECOND_VIA_RICH_TEMPLATE
+            d["data"]["config"] = cfg
+            changes.append({
+                "action": "rewrite_second_via_message",
+                "fatura2via_node": fn["id"],
+                "message_node": d["id"],
+                "placeholders_present_before": present,
+            })
+
+        cfg_fn = (fn.get("data") or {}).get("config") or {}
+        body = cfg_fn.get("body") or {}
+        params = (body.get("params") if isinstance(body, dict) else None) or {}
+        needs_patch = True
+        for k in ("contrato", "contratoId", "contrato_id"):
+            v = params.get(k)
+            if isinstance(v, str) and ("{{contrato_id}}" in v or "{{contratoId}}" in v):
+                needs_patch = False
+                break
+        if needs_patch:
+            params["contrato"] = "{{contrato_id}}"
+            body["params"] = params
+            cfg_fn["body"] = body
+            fn["data"]["config"] = cfg_fn
+            changes.append({
+                "action": "patch_fatura2via_body",
+                "fatura2via_node": fn["id"],
+                "now_passes": "contrato={{contrato_id}}",
+            })
+
+    if dry_run:
+        return {"dry_run": True, "flow_id": flow_id, "changes": changes,
+                "changes_count": len(changes)}
+
+    if not changes:
+        return {"dry_run": False, "flow_id": flow_id, "changes": [],
+                "changes_count": 0, "message": "Nothing to repair."}
+
+    await db.flow_builders.update_one(
+        {"id": flow_id},
+        {"$set": {
+            "nodes": nodes,
+            "edges": new_edges,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"dry_run": False, "flow_id": flow_id, "changes": changes,
+            "changes_count": len(changes)}
