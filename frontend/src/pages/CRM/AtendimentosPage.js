@@ -266,9 +266,19 @@ const AtendimentosPage = () => {
     return () => { clearInterval(ticketInterval); clearInterval(listInterval); clearInterval(presenceInterval); };
   }, [loadData]);
 
-  const handleSelectTicket = (ticket) => {
+  const handleSelectTicket = async (ticket) => {
     setSelectedTicket(ticket);
     setShowContactInfo(false);
+    // Hit GET /tickets/{id} so the backend stamps `read_state[user_id]`,
+    // then mirror that change in our local list — otherwise the unread
+    // badge on the sidebar keeps showing the old count until the next
+    // 5s polling refresh.
+    try {
+      const r = await crmAPI.getTicket(ticket.id);
+      const fresh = r.data;
+      setSelectedTicket(fresh);
+      setTickets(prev => prev.map(t => t.id === fresh.id ? { ...t, read_state: fresh.read_state } : t));
+    } catch (e) { /* keep the offline UX usable */ }
   };
   // Send media file (image/audio/video/document) to the customer
   const handleSendFile = async (file) => {

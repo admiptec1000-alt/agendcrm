@@ -38,7 +38,11 @@ function convertToOggOpus(inputBuffer) {
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Generous body-size limits — quote PDFs with letterhead images can
+// easily reach 5-15 MB after base64 encoding. Express default of 100KB
+// was rejecting them with "413 Payload Too Large".
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const logger = pino({ level: 'warn' });
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8001';
@@ -1018,8 +1022,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.7',
-    built_at: '2026-05-12',
+    version: 'v2.1.8',
+    built_at: '2026-05-13',
     features: {
       sent_message_store: true,       // anti blank message fix
       multi_message_types: true,      // captions, buttons, lists
