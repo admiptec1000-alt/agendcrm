@@ -1705,12 +1705,16 @@ async def send_quote_whatsapp(
     if not target_phone:
         raise HTTPException(400, "Telefone do destinatario nao informado e nao pode ser resolvido pelo cliente/ticket")
 
-    # Verify connection belongs to tenant
+    # Verify connection belongs to tenant + is connected. Early validation
+    # avoids the generic "503 not connected" round-trip and gives the
+    # operator an actionable message.
     conn = await db.channel_connections.find_one(
-        {"id": data.connection_id, "company_id": user["company_id"]}, {"_id": 0, "status": 1}
+        {"id": data.connection_id, "company_id": user["company_id"]}, {"_id": 0, "status": 1, "name": 1}
     )
     if not conn:
-        raise HTTPException(404, "Conexao WhatsApp nao encontrada")
+        raise HTTPException(404, "Conexao WhatsApp nao encontrada — selecione outra na lista")
+    if conn.get("status") != "connected":
+        raise HTTPException(400, f"A conexao '{conn.get('name','sem nome')}' esta {conn.get('status','offline')}. Abra Conexoes e reconecte o QR antes de enviar.")
 
     pdf_bytes = _generate_pdf_bytes(
         html,
@@ -1790,12 +1794,18 @@ async def send_quote_whatsapp(
     await db.quotes.update_one({"id": qid}, {"$set": quote_update})
 
     if delivery_status == "failed":
-        # Avoid leaking raw stack/internal IPs to the client; full error stays
-        # logged on the ticket and in our backend logger above.
+        # Surface the actual error to the operator. The generic fallback
+        # was masking the root cause (wrong connection_id, conn offline,
+        # invalid phone). Returning `delivery_error` makes triage 10x
+        # faster when the customer reports a failure.
         public_msg = "Microservico WhatsApp indisponivel ou nao conectado"
         if delivery_error and "Not connected" in delivery_error:
             public_msg = "Conexao WhatsApp nao esta conectada — escaneie o QR e tente novamente"
-        elif delivery_error and "404" in delivery_error and "send-media" in delivery_error:
+        elif delivery_error and "404" in (delivery_error or ""):
             public_msg = "Microservico WhatsApp ainda nao foi atualizado (redeploy pendente)"
-        raise HTTPException(502, f"Falha ao enviar via WhatsApp: {public_msg}")
+        elif delivery_error and "Falha de rede" in delivery_error:
+            public_msg = "Microservico WhatsApp inacessivel — verifique o servico no Render"
+        elif delivery_error and "instance not connected" in (delivery_error or "").lower():
+            public_msg = "A conexao WhatsApp esta offline — abra Conexoes e reconecte"
+        raise HTTPException(502, f"Falha ao enviar via WhatsApp: {public_msg}. Detalhe tecnico: {delivery_error or 'sem detalhe'}")
     return {"success": True, "delivery_status": delivery_status, "wa_message_id": wa_message_id, "filename": filename}
