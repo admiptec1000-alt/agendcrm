@@ -1755,6 +1755,108 @@ async def repair_sgp_flow(
                 "now_passes": "contrato={{contrato_id}}",
             })
 
+    # ── 3) Clean other menus that wrongly carry the contracts metadata ────
+    #
+    # A common malformed state: the original "Tipo de Atendimento" menu
+    # still has `dynamic_source=contratos_lista` and `capture_var=contrato_id`
+    # left over from a botched migration. When the engine reaches that menu,
+    # it expects a contract reply (not Pix/2ª via/...) and rejects the user's
+    # tap. We strip those fields from ANY menu downstream of the contract
+    # picker (excluding the picker itself).
+    picker_ids = {c["picker_node"] for c in changes if c.get("action") == "insert_contract_picker"}
+    # ALSO consider already-existing pickers (idempotency for flows that
+    # were partially repaired before): any menu downstream of an SGP
+    # consultacliente that has the dynamic source AND no static options.
+    edges_by_src_now: dict = {}
+    for e in new_edges:
+        edges_by_src_now.setdefault(e.get("source"), []).append(e)
+    by_id_now = {n.get("id"): n for n in nodes}
+    for cn in consult_nodes:
+        for e in edges_by_src_now.get(cn["id"], []):
+            tgt = by_id_now.get(e["target"])
+            if not tgt:
+                continue
+            tcfg = (tgt.get("data") or {}).get("config") or {}
+            tnt = (tgt.get("data") or {}).get("nodeType") or tgt.get("type")
+            if tnt == "menu" and tcfg.get("dynamic_source") in ("contratos_lista", "contratos_menu"):
+                picker_ids.add(tgt["id"])
+    for n in nodes:
+        if n.get("id") in picker_ids:
+            continue
+        cfg = (n.get("data") or {}).get("config") or {}
+        nt = (n.get("data") or {}).get("nodeType") or n.get("type")
+        if nt != "menu":
+            continue
+        if cfg.get("dynamic_source") not in ("contratos_lista", "contratos_menu"):
+            continue
+        # If this menu has its own STATIC options (Pix/2ª via/etc), it's
+        # the misclassified service menu — strip the contracts metadata.
+        opts = cfg.get("options") or []
+        looks_service = any(
+            isinstance(o, dict) and (o.get("key") or o.get("label"))
+            and not str(o.get("label", "")).lower().startswith("contrato")
+            for o in opts
+        )
+        if not looks_service:
+            continue
+        removed = []
+        for k in ("dynamic_source", "capture_var", "header", "button_label",
+                  "list_button_text", "list_section_title"):
+            if k in cfg:
+                cfg.pop(k)
+                removed.append(k)
+        # Repair the user-facing prompt: legacy summaries like "Seus contratos"
+        # are wrong for a service menu.
+        if cfg.get("title") in ("Seus contratos",):
+            cfg["title"] = "Tipo de Atendimento"
+        if not (cfg.get("question") or cfg.get("text")):
+            cfg["question"] = "Como posso te ajudar?"
+        # Make sure each option has a `key` so the engine can match by number.
+        for i, o in enumerate(opts):
+            if isinstance(o, dict) and not o.get("key"):
+                o["key"] = str(i + 1)
+        cfg["options"] = opts
+        n["data"]["config"] = cfg
+        if (n["data"].get("label") or "").lower().startswith("menu contratos"):
+            n["data"]["label"] = "Tipo de Atendimento"
+        changes.append({
+            "action": "strip_dynamic_from_service_menu",
+            "menu_node": n["id"],
+            "removed_keys": removed,
+        })
+
+    # ── 4) Clean stray static options inside the contract picker ──────────
+    for pid in picker_ids:
+        pnode = next((n for n in nodes if n.get("id") == pid), None)
+        if not pnode:
+            continue
+        cfg = (pnode.get("data") or {}).get("config") or {}
+        if cfg.get("options"):
+            cfg["options"] = []
+            pnode["data"]["config"] = cfg
+            changes.append({
+                "action": "clear_picker_static_options",
+                "picker_node": pid,
+            })
+
+    # ── 5) Repair HTTP nodes whose `body` was serialised as "[object Object]"
+    # (a JS bug elsewhere — `String(obj)` instead of `JSON.stringify(obj)`).
+    # We replace it with an empty {} so the request at least doesn't crash;
+    # operators can re-edit it from the UI.
+    for n in nodes:
+        nt = (n.get("data") or {}).get("nodeType") or n.get("type")
+        if nt not in ("http", "http_request", "request", "api"):
+            continue
+        cfg = (n.get("data") or {}).get("config") or {}
+        if cfg.get("body") == "[object Object]":
+            cfg["body"] = {}
+            n["data"]["config"] = cfg
+            changes.append({
+                "action": "fix_corrupt_http_body",
+                "http_node": n["id"],
+                "url": cfg.get("url", ""),
+            })
+
     if dry_run:
         return {"dry_run": True, "flow_id": flow_id, "changes": changes,
                 "changes_count": len(changes)}

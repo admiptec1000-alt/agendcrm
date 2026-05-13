@@ -1,0 +1,746 @@
+{
+  "name": "SGP — Atendimento Web Internet",
+  "description": "Fluxo de atendimento ISP (consulta cliente, 2via boleto, suporte, liberação por confiança). Use o nó SGP do CRM/proxy para chamadas API.",
+  "trigger_type": "manual",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "flow",
+      "position": {
+        "x": 50,
+        "y": 50
+      },
+      "data": {
+        "nodeType": "start",
+        "label": "Inicio",
+        "config": {
+          "summary": "Inicio do fluxo"
+        }
+      },
+      "width": 220,
+      "height": 70,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "welcome",
+      "type": "flow",
+      "position": {
+        "x": 50,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "message",
+        "label": "Boas-vindas",
+        "config": {
+          "summary": "Seja bem-vindo à central de atendimento da Web Internet 100% Fibra 🌐\n\nPara que eu possa lhe ajudar,",
+          "text": "Seja bem-vindo à central de atendimento da Web Internet 100% Fibra 🌐\n\nPara que eu possa lhe ajudar, escolha uma das opções:"
+        }
+      },
+      "width": 280,
+      "height": 88,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "main_menu",
+      "type": "flow",
+      "position": {
+        "x": 50,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "menu",
+        "label": "Menu Principal",
+        "config": {
+          "summary": "4 opcoes: Já sou cliente, Não sou cliente...",
+          "text": "Escolha uma opção:",
+          "options": [
+            {
+              "label": "Já sou cliente",
+              "key": "1"
+            },
+            {
+              "label": "Não sou cliente",
+              "key": "2"
+            },
+            {
+              "label": "Suporte técnico",
+              "key": "3"
+            },
+            {
+              "label": "Contratar plano",
+              "key": "4"
+            }
+          ],
+          "options_format": "list"
+        }
+      },
+      "width": 255,
+      "height": 214,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "ask_cpf",
+      "type": "flow",
+      "position": {
+        "x": -300,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "message",
+        "label": "Solicitar CPF",
+        "config": {
+          "summary": "Pede CPF/CNPJ do titular",
+          "text": "Informe o CPF ou CNPJ do titular do plano:",
+          "capture_var": "cpf_cliente"
+        }
+      },
+      "width": 220,
+      "height": 70,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "sgp_consulta",
+      "type": "flow",
+      "position": {
+        "x": -555.6533239184497,
+        "y": 543.0777609448913
+      },
+      "data": {
+        "nodeType": "http",
+        "label": "SGP: consultar cliente",
+        "config": {
+          "summary": "POST {{API_URL}}/api/sgp/consultacliente",
+          "method": "POST",
+          "url": "{{API_URL}}/api/sgp/consultacliente",
+          "headers": {
+            "Authorization": "Bearer {{token}}"
+          },
+          "body": {
+            "params": {
+              "cpfcnpj": "{{cpf_cliente}}",
+              "number": "{{number}}"
+            }
+          }
+        }
+      },
+      "width": 260,
+      "height": 70,
+      "selected": false,
+      "dragging": false,
+      "positionAbsolute": {
+        "x": -555.6533239184497,
+        "y": 543.0777609448913
+      }
+    },
+    {
+      "id": "found_menu",
+      "type": "flow",
+      "position": {
+        "x": -239.09579798973587,
+        "y": 660.6671782138525
+      },
+      "data": {
+        "nodeType": "menu",
+        "label": "Tipo de Atendimento",
+        "config": {
+          "summary": "5 opcoes: Pix, 2ª via, Suporte, Atendente, Liberação",
+          "text": "Pronto, {{response.contratos.0.razaoSocial}}! Como posso ajudar?",
+          "options": [
+            {
+              "label": "Pix",
+              "key": "1"
+            },
+            {
+              "label": "2ª via de boleto",
+              "key": "2"
+            },
+            {
+              "label": "Suporte técnico",
+              "key": "3"
+            },
+            {
+              "label": "Falar com atendente",
+              "key": "4"
+            },
+            {
+              "label": "Liberação por confiança",
+              "key": "5"
+            }
+          ],
+          "options_format": "list",
+          "footer": "Toque para escolher",
+          "question": "Pronto, {{nome_cliente}}! Como posso te ajudar com o contrato {{contrato_id}}?"
+        }
+      },
+      "width": 220,
+      "height": 244,
+      "selected": false,
+      "positionAbsolute": {
+        "x": -239.09579798973587,
+        "y": 660.6671782138525
+      },
+      "dragging": false
+    },
+    {
+      "id": "sgp_fatura",
+      "type": "flow",
+      "position": {
+        "x": -540,
+        "y": 920
+      },
+      "data": {
+        "nodeType": "http",
+        "label": "SGP: 2ª via",
+        "config": {
+          "summary": "POST /api/sgp/fatura2via",
+          "method": "POST",
+          "url": "{{API_URL}}/api/sgp/fatura2via",
+          "headers": {
+            "Authorization": "Bearer {{token}}"
+          },
+          "body": {
+            "params": {
+              "cpfcnpj": "{{cpf_cliente}}",
+              "contrato": "{{contrato_id}}"
+            }
+          }
+        }
+      },
+      "width": 220,
+      "height": 70,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "send_boleto",
+      "type": "flow",
+      "position": {
+        "x": -540,
+        "y": 1060
+      },
+      "data": {
+        "nodeType": "message",
+        "label": "Enviar boleto",
+        "config": {
+          "summary": "Aqui está sua 2ª via: {{response.links.0.link}}",
+          "text": "Aqui esta sua 2a via!\n\n📄 Boleto / link de cobranca:\n{{boleto_url}}\n\n💳 Linha digitavel:\n{{linha_digitavel}}\n\n⚡ PIX Copia-e-Cola:\n{{pix_copia_e_cola}}\n\nVencimento: {{vencimento_fatura}}\nValor: R$ {{valor_fatura}}\n\n_Se ja pagou, desconsidere esta mensagem._"
+        }
+      },
+      "width": 267,
+      "height": 70,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "sgp_acesso",
+      "type": "flow",
+      "position": {
+        "x": -300,
+        "y": 920
+      },
+      "data": {
+        "nodeType": "http",
+        "label": "SGP: verifica acesso",
+        "config": {
+          "summary": "POST /api/sgp/verificaacesso",
+          "method": "POST",
+          "url": "{{API_URL}}/api/sgp/verificaacesso",
+          "headers": {
+            "Authorization": "Bearer {{token}}"
+          },
+          "body": {
+            "params": {
+              "contrato": "{{numero_contrato}}"
+            }
+          }
+        }
+      },
+      "width": 220,
+      "height": 70
+    },
+    {
+      "id": "support_menu",
+      "type": "flow",
+      "position": {
+        "x": -213.1217188372238,
+        "y": 1065.7156763922878
+      },
+      "data": {
+        "nodeType": "menu",
+        "label": "Diagnostico",
+        "config": {
+          "summary": "3 opcoes: Sem conexão, Conexão lenta...",
+          "text": "Status: {{response.0.online}}. O que está acontecendo?",
+          "options": [
+            {
+              "label": "Sem conexão",
+              "key": "1"
+            },
+            {
+              "label": "Conexão lenta",
+              "key": "2"
+            },
+            {
+              "label": "Falar com atendente",
+              "key": "3"
+            }
+          ],
+          "options_format": "buttons"
+        }
+      },
+      "width": 249,
+      "height": 183,
+      "selected": true,
+      "dragging": false,
+      "positionAbsolute": {
+        "x": -213.1217188372238,
+        "y": 1065.7156763922878
+      }
+    },
+    {
+      "id": "queue_attendant",
+      "type": "flow",
+      "position": {
+        "x": -60,
+        "y": 920
+      },
+      "data": {
+        "nodeType": "ticket",
+        "label": "Fila atendente",
+        "config": {
+          "summary": "Move ticket para atendimento humano",
+          "queue": "Atendimento"
+        }
+      },
+      "width": 236,
+      "height": 70
+    },
+    {
+      "id": "sgp_promessa",
+      "type": "flow",
+      "position": {
+        "x": 203.38957146638552,
+        "y": 908.9207293053963
+      },
+      "data": {
+        "nodeType": "http",
+        "label": "SGP: liberação confiança",
+        "config": {
+          "summary": "POST {{API_URL}}/api/sgp/liberacaopromessa",
+          "method": "POST",
+          "url": "{{API_URL}}/api/sgp/liberacaopromessa",
+          "headers": {
+            "Authorization": "Bearer {{token}}"
+          },
+          "body": {
+            "params": {
+              "contrato": "{{numero_contrato}}"
+            }
+          }
+        }
+      },
+      "width": 280,
+      "height": 70,
+      "selected": false,
+      "positionAbsolute": {
+        "x": 203.38957146638552,
+        "y": 908.9207293053963
+      },
+      "dragging": false
+    },
+    {
+      "id": "promessa_done",
+      "type": "flow",
+      "position": {
+        "x": 180,
+        "y": 1060
+      },
+      "data": {
+        "nodeType": "message",
+        "label": "Liberação confirmada",
+        "config": {
+          "summary": "Mensagem de confirmacao",
+          "text": "Pronto! Sua liberação foi solicitada. Um único pedido por mês."
+        }
+      },
+      "width": 220,
+      "height": 70
+    },
+    {
+      "id": "not_customer",
+      "type": "flow",
+      "position": {
+        "x": 581.5002788644183,
+        "y": 209.2313542883042
+      },
+      "data": {
+        "nodeType": "menu",
+        "label": "Não cliente",
+        "config": {
+          "summary": "3 opcoes: Conhecer planos, Consultar viabilidade...",
+          "text": "Em que posso ajudar?",
+          "options": [
+            {
+              "label": "Conhecer planos",
+              "key": "1"
+            },
+            {
+              "label": "Consultar viabilidade",
+              "key": "2"
+            },
+            {
+              "label": "Falar com atendente",
+              "key": "3"
+            }
+          ],
+          "options_format": "buttons"
+        }
+      },
+      "width": 280,
+      "height": 201,
+      "selected": false,
+      "positionAbsolute": {
+        "x": 581.5002788644183,
+        "y": 209.2313542883042
+      },
+      "dragging": false
+    },
+    {
+      "id": "plans_msg",
+      "type": "flow",
+      "position": {
+        "x": 600,
+        "y": 620
+      },
+      "data": {
+        "nodeType": "message",
+        "label": "Planos",
+        "config": {
+          "summary": "Lista de planos",
+          "text": "Nossos planos PRÉ-PAGO (sem fidelidade):\n• 250MB R$74,90\n• 500MB R$99,99\n• 750MB R$124,99\n• 1000MB R$149,00"
+        }
+      },
+      "width": 220,
+      "height": 70
+    },
+    {
+      "id": "sgp_manutencao",
+      "type": "flow",
+      "position": {
+        "x": 1000,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "http",
+        "label": "SGP: manutencao em curso",
+        "config": {
+          "summary": "GET /api/sgp/manutencao",
+          "method": "POST",
+          "url": "{{API_URL}}/api/sgp/manutencao",
+          "headers": {
+            "Authorization": "Bearer {{token}}"
+          },
+          "body": {
+            "params": {}
+          }
+        }
+      },
+      "width": 220,
+      "height": 70
+    },
+    {
+      "id": "maintenance_msg",
+      "type": "flow",
+      "position": {
+        "x": 1000,
+        "y": 620
+      },
+      "data": {
+        "nodeType": "message",
+        "label": "Aviso de manutencao",
+        "config": {
+          "summary": "Mostra manutencoes ativas",
+          "text": "{{response.manutencoes.0.descricao}} — {{response.manutencoes.0.mensagem}}\nStatus: {{response.manutencoes.0.status}}"
+        }
+      },
+      "width": 220,
+      "height": 70
+    },
+    {
+      "id": "contract_queue",
+      "type": "flow",
+      "position": {
+        "x": 1400,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "ticket",
+        "label": "Fila vendas",
+        "config": {
+          "summary": "Encaminha para vendas",
+          "queue": "Vendas"
+        }
+      },
+      "width": 220,
+      "height": 70
+    },
+    {
+      "id": "http_1778614864475",
+      "type": "flow",
+      "position": {
+        "x": -816.056302302957,
+        "y": 920.4342418101094
+      },
+      "data": {
+        "nodeType": "http",
+        "label": "SGP: Pix (via fatura2via)",
+        "config": {
+          "summary": "POST /api/sgp/fatura2via (para extrair Pix)",
+          "method": "POST",
+          "url": "{{API_URL}}/api/sgp/fatura2via",
+          "body": {
+            "params": {
+              "cpfcnpj": "{{cpf_cliente}}",
+              "contrato": "{{contrato_id}}"
+            }
+          }
+        }
+      },
+      "width": 274,
+      "height": 70,
+      "selected": false,
+      "positionAbsolute": {
+        "x": -816.056302302957,
+        "y": 920.4342418101094
+      },
+      "dragging": false
+    },
+    {
+      "id": "contract_picker_27046e",
+      "type": "flow",
+      "position": {
+        "x": -664.9331773946947,
+        "y": 638.3193292552647
+      },
+      "data": {
+        "nodeType": "menu",
+        "label": "Selecione o Contrato (SGP)",
+        "config": {
+          "title": "Seus contratos",
+          "question": "Ola {{nome_cliente}}!\nSelecione abaixo o contrato que deseja consultar:",
+          "options_format": "list",
+          "dynamic_source": "contratos_lista",
+          "capture_var": "contrato_id",
+          "header": "Selecione o contrato",
+          "footer": "Toque para escolher",
+          "button_label": "Ver contratos",
+          "list_button_text": "Ver contratos",
+          "list_section_title": "Contratos disponíveis",
+          "options": [],
+          "summary": "Lista dinâmica de contratos (SGP)"
+        }
+      },
+      "width": 280,
+      "height": 140,
+      "selected": false,
+      "positionAbsolute": {
+        "x": -664.9331773946947,
+        "y": 638.3193292552647
+      },
+      "dragging": false
+    },
+    {
+      "id": "pix_send_msg",
+      "type": "flow",
+      "position": {
+        "x": 500,
+        "y": 1600
+      },
+      "data": {
+        "nodeType": "message",
+        "label": "Enviar Pix",
+        "config": {
+          "text": "Aqui está o seu Pix Copia-e-Cola para pagamento imediato:\n\n⚡ {{pix_copia_e_cola}}\n\nVencimento: {{vencimento_fatura}}\nValor: R$ {{valor_fatura}}\n\n_Se já pagou, desconsidere esta mensagem._"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "start-welcome",
+      "source": "start",
+      "target": "welcome",
+      "type": "default"
+    },
+    {
+      "id": "welcome-main_menu",
+      "source": "welcome",
+      "target": "main_menu",
+      "type": "default"
+    },
+    {
+      "id": "main_menu-ask_cpf-option-0",
+      "source": "main_menu",
+      "target": "ask_cpf",
+      "type": "default",
+      "sourceHandle": "option-0"
+    },
+    {
+      "id": "ask_cpf-sgp_consulta",
+      "source": "ask_cpf",
+      "target": "sgp_consulta",
+      "type": "default"
+    },
+    {
+      "id": "sgp_fatura-send_boleto",
+      "source": "sgp_fatura",
+      "target": "send_boleto",
+      "type": "default",
+      "selected": false
+    },
+    {
+      "id": "sgp_acesso-support_menu",
+      "source": "sgp_acesso",
+      "target": "support_menu",
+      "type": "default"
+    },
+    {
+      "id": "sgp_promessa-promessa_done",
+      "source": "sgp_promessa",
+      "target": "promessa_done",
+      "type": "default"
+    },
+    {
+      "id": "main_menu-not_customer-option-1",
+      "source": "main_menu",
+      "target": "not_customer",
+      "type": "default",
+      "sourceHandle": "option-1"
+    },
+    {
+      "id": "not_customer-plans_msg-option-0",
+      "source": "not_customer",
+      "target": "plans_msg",
+      "type": "default",
+      "sourceHandle": "option-0"
+    },
+    {
+      "id": "main_menu-sgp_manutencao-option-2",
+      "source": "main_menu",
+      "target": "sgp_manutencao",
+      "type": "default",
+      "sourceHandle": "option-2"
+    },
+    {
+      "id": "sgp_manutencao-maintenance_msg",
+      "source": "sgp_manutencao",
+      "target": "maintenance_msg",
+      "type": "default"
+    },
+    {
+      "id": "main_menu-contract_queue-option-3",
+      "source": "main_menu",
+      "target": "contract_queue",
+      "type": "default",
+      "sourceHandle": "option-3"
+    },
+    {
+      "source": "found_menu",
+      "sourceHandle": "option-1",
+      "target": "sgp_fatura",
+      "targetHandle": null,
+      "markerEnd": {
+        "type": "arrowclosed"
+      },
+      "style": {
+        "strokeWidth": 2
+      },
+      "animated": true,
+      "id": "reactflow__edge-found_menuoption-1-sgp_fatura"
+    },
+    {
+      "source": "found_menu",
+      "sourceHandle": "option-2",
+      "target": "sgp_acesso",
+      "targetHandle": null,
+      "markerEnd": {
+        "type": "arrowclosed"
+      },
+      "style": {
+        "strokeWidth": 2
+      },
+      "animated": true,
+      "id": "reactflow__edge-found_menuoption-2-sgp_acesso"
+    },
+    {
+      "source": "found_menu",
+      "sourceHandle": "option-3",
+      "target": "queue_attendant",
+      "targetHandle": null,
+      "markerEnd": {
+        "type": "arrowclosed"
+      },
+      "style": {
+        "strokeWidth": 2
+      },
+      "animated": true,
+      "id": "reactflow__edge-found_menuoption-3-queue_attendant"
+    },
+    {
+      "source": "found_menu",
+      "sourceHandle": "option-4",
+      "target": "sgp_promessa",
+      "targetHandle": null,
+      "markerEnd": {
+        "type": "arrowclosed"
+      },
+      "style": {
+        "strokeWidth": 2
+      },
+      "animated": true,
+      "id": "reactflow__edge-found_menuoption-4-sgp_promessa"
+    },
+    {
+      "source": "found_menu",
+      "sourceHandle": "option-0",
+      "target": "http_1778614864475",
+      "targetHandle": null,
+      "markerEnd": {
+        "type": "arrowclosed"
+      },
+      "style": {
+        "strokeWidth": 2
+      },
+      "animated": true,
+      "id": "reactflow__edge-found_menuoption-0-http_1778614864475"
+    },
+    {
+      "id": "e_sgp_consulta_contract_picker_27046e",
+      "source": "sgp_consulta",
+      "target": "contract_picker_27046e"
+    },
+    {
+      "source": "contract_picker_27046e",
+      "sourceHandle": "option-0",
+      "target": "found_menu",
+      "targetHandle": null,
+      "markerEnd": {
+        "type": "arrowclosed"
+      },
+      "style": {
+        "strokeWidth": 2
+      },
+      "animated": true,
+      "id": "reactflow__edge-contract_picker_27046eoption-0-found_menu"
+    },
+    {
+      "id": "e_http_1778614864475_pix_send_msg",
+      "source": "http_1778614864475",
+      "target": "pix_send_msg"
+    }
+  ]
+}
