@@ -9,6 +9,7 @@ from models import (
 )
 import uuid
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, EmailStr
@@ -1450,24 +1451,50 @@ async def delete_category(
 async def list_clients(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
-    search: str = None
+    search: str = None,
+    limit: int = 200,
+    skip: int = 0,
 ):
+    """List clients for a company.
+
+    - `limit` defaults to 200 (was unbounded — for tenants with thousands
+      of clients the page would freeze for 5-10s).
+    - `search` matches name/phone/cpf/cnpj (digits-only normalized).
+    - Subscriptions are now fetched in a SINGLE bulk query instead of one
+      lookup per client (N+1 → 1).
+    """
     query = {"company_id": user["company_id"]}
     if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"phone": {"$regex": search, "$options": "i"}}
+        s = search.strip()
+        digits = re.sub(r"\D", "", s)
+        or_clauses = [
+            {"name": {"$regex": s, "$options": "i"}},
+            {"phone": {"$regex": s, "$options": "i"}},
+            {"email": {"$regex": s, "$options": "i"}},
         ]
-    clients = await db.clients.find(query, {"_id": 0}).to_list(1000)
-    # Enrich with subscription info
+        if digits:
+            # Build a "any-format" CPF/CNPJ regex (digits separated by `\D*`)
+            digit_regex = r"\D*".join(re.escape(d) for d in digits)
+            or_clauses += [
+                {"cpf": {"$regex": digit_regex}},
+                {"cnpj": {"$regex": digit_regex}},
+            ]
+        query["$or"] = or_clauses
+    # Sort newest first; cap to `limit`.
+    clients = await db.clients.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    # Bulk-fetch subscriptions for all phones (1 query instead of N).
+    phones = [c["phone"] for c in clients if c.get("phone")]
+    sub_map = {}
+    if phones:
+        async for s in db.client_subscriptions.find(
+            {"company_id": user["company_id"], "client_phone": {"$in": phones}, "status": "active"},
+            {"_id": 0},
+        ):
+            sub_map[s["client_phone"]] = s
     for client in clients:
-        sub = await db.client_subscriptions.find_one({
-            "company_id": user["company_id"],
-            "client_phone": client["phone"],
-            "status": "active"
-        }, {"_id": 0})
-        client["active_subscription"] = sub
+        client["active_subscription"] = sub_map.get(client.get("phone"))
     return clients
+
 
 def _format_cpf(v: Optional[str]) -> Optional[str]:
     """Normalize CPF to '###.###.###-##'. If the input has fewer/more

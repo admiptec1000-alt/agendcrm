@@ -113,7 +113,7 @@ export const crmAPI = {
   removeTicketTag: (ticketId, tag) => api.post(`/crm/tickets/${ticketId}/tags/remove`, { tag }),
   // Kanban
   getKanban: () => api.get('/crm/kanban'),
-  getKanbanV2: () => api.get('/crm/kanban-v2'),
+  getKanbanV2: (params) => api.get('/crm/kanban-v2', { params }),
   listKanbanColumns: () => api.get('/crm/kanban-columns'),
   createKanbanColumn: (data) => api.post('/crm/kanban-columns', data),
   updateKanbanColumn: (id, data) => api.put(`/crm/kanban-columns/${id}`, data),

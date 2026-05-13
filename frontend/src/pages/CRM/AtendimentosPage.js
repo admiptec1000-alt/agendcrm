@@ -674,11 +674,26 @@ const AtendimentosPage = () => {
                   </div>
                 </div>
                 <div className="flex flex-col items-center gap-1 flex-shrink-0">
-                  {ticket.messages?.length > 0 && (
-                    <span className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] flex items-center justify-center font-bold">
-                      {ticket.messages.length}
-                    </span>
-                  )}
+                  {(() => {
+                    // Unread = inbound messages (from_me=false) whose timestamp
+                    // is AFTER the last time the current operator opened the
+                    // ticket. The backend sets `read_state[uid]` to "now" on
+                    // GET /tickets/{id}, so the badge resets the moment we
+                    // select the conversation. Falls back to total inbound
+                    // count when there is no read marker yet.
+                    const inboundMsgs = (ticket.messages || []).filter(m => !m.from_me && m.direction !== 'outgoing');
+                    const myUid = (JSON.parse(localStorage.getItem('user_data') || '{}')?.id) || null;
+                    const lastRead = ticket.read_state && myUid ? ticket.read_state[myUid] : null;
+                    const unread = lastRead
+                      ? inboundMsgs.filter(m => (m.timestamp || m.created_at) > lastRead).length
+                      : inboundMsgs.length;
+                    if (unread <= 0) return null;
+                    return (
+                      <span className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] flex items-center justify-center font-bold" data-testid={`unread-badge-${ticket.id}`}>
+                        {unread > 99 ? '99+' : unread}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
             );

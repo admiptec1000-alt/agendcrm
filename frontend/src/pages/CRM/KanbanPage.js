@@ -12,6 +12,13 @@ const KanbanPage = ({ setActivePage }) => {
   const [editingCol, setEditingCol] = useState(null);
   const [colForm, setColForm] = useState({ name: '', color: '#4F46E5', order: 0 });
   const [draggingTicket, setDraggingTicket] = useState(null);
+  const [days, setDays] = useState(90);  // window filter: 30, 60, 90, all (0)
+  const [search, setSearch] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // === Disfarçado: reorder mode ===
   // Activated via secret long-press (3s) on the page TITLE OR by pressing
@@ -32,10 +39,15 @@ const KanbanPage = ({ setActivePage }) => {
 
   const reload = async () => {
     setLoading(true);
-    try { const r = await crmAPI.getKanbanV2(); setData(r.data); }
-    catch (e) {} finally { setLoading(false); }
+    try {
+      const params = {};
+      if (days > 0) params.days = days;
+      if (searchDebounced) params.search = searchDebounced;
+      const r = await crmAPI.getKanbanV2(params);
+      setData(r.data);
+    } catch (e) {} finally { setLoading(false); }
   };
-  useEffect(() => { reload(); }, []);
+  useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [days, searchDebounced]);
 
   const openNewCol = () => {
     setEditingCol(null);
@@ -139,6 +151,39 @@ const KanbanPage = ({ setActivePage }) => {
         <button onClick={openNewCol} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-column-btn">
           <Plus className="w-4 h-4" /> Nova Coluna
         </button>
+      </div>
+
+      {/* Filtros — janela temporal + busca textual. Apresentados como
+          uma barra leve para nao competir com os cards do kanban. */}
+      <div className="flex flex-wrap items-center gap-2 mb-3 px-1" data-testid="kanban-filters">
+        <div className="relative flex-1 max-w-sm">
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar por nome, telefone ou #ticket..."
+            className="w-full text-sm border border-slate-200 rounded-lg pl-8 pr-3 py-1.5 focus:outline-none focus:border-emerald-500"
+            data-testid="kanban-search-input"
+          />
+          <svg className="absolute left-2.5 top-2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        </div>
+        <div className="flex items-center gap-1 text-xs">
+          <span className="text-slate-500">Periodo:</span>
+          {[
+            { v: 30, l: '30d' },
+            { v: 90, l: '3 meses' },
+            { v: 180, l: '6 meses' },
+            { v: 0, l: 'Tudo' },
+          ].map(opt => (
+            <button
+              key={opt.v}
+              onClick={() => setDays(opt.v)}
+              className={`px-2.5 py-1 rounded-md transition-colors ${days === opt.v ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+              data-testid={`kanban-window-${opt.v}`}
+            >
+              {opt.l}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading ? (

@@ -12,7 +12,7 @@ import uuid
 import io
 import base64
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import os
@@ -141,6 +141,12 @@ async def list_tickets(
         else:
             query.update(assigned_clause)
         query.setdefault("channel", {"$ne": "whatsapp_group"})
+    elif tab == "grupos":
+        # The "Grupos" tab ONLY shows whatsapp group conversations. Without
+        # this branch the query fell through with no channel filter at all,
+        # so every ticket in the company appeared under it.
+        query["status"] = {"$nin": ["fechado", "cancelado"]}
+        query["channel"] = "whatsapp_group"
 
     # Visibility: non-admin users only see their own tickets + the
     # unassigned-aberto pool. Admins / view_all_tickets see everything.
@@ -295,6 +301,16 @@ async def get_ticket(
     )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket nao encontrado")
+    # Mark this ticket as read for the current user. The unread badge in
+    # the sidebar uses `ticket.read_state[user_id]` to know which inbound
+    # messages are still pending — opening the conversation resets the
+    # counter immediately.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.tickets.update_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"$set": {f"read_state.{user['id']}": now_iso}},
+    )
+    ticket.setdefault("read_state", {})[user["id"]] = now_iso
     # Synthesize media_url / media_kind / media_mimetype on outbound messages
     # so the frontend renders the playable bubble for audios/images/videos
     # sent FROM the platform (not only inbound ones from the webhook).
@@ -2141,23 +2157,60 @@ async def delete_kanban_column(
 # Override kanban endpoint to use custom columns
 @router.get("/kanban-v2")
 async def get_kanban_v2(
+    days: int = 90,
+    search: Optional[str] = None,
+    column_id: Optional[str] = None,
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    """Kanban grouped by company-defined columns (plus the native first one)."""
+    """Kanban grouped by company-defined columns (plus the native first one).
+
+    Default window: last 90 days. Pass `days=0` to disable. Also accepts
+    `search` (matches customer_name/phone/ticket_number) and `column_id`
+    (limit to a single column — useful when the operator focuses on one
+    column with thousands of tickets in it).
+    """
     custom_cols = await db.kanban_columns.find(
         {"company_id": user["company_id"]}, {"_id": 0}
     ).sort("order", 1).to_list(100)
     columns = [NATIVE_FIRST_COLUMN] + custom_cols
     custom_ids = {c["id"] for c in custom_cols}
 
-    # Apply per-user visibility (Feature #5): non-admins only see their
-    # own claimed tickets + the unassigned-aberto pool.
     query = {"company_id": user["company_id"]}
     vis = _ticket_visibility_filter(user)
     if vis:
         query.update(vis)
-    tickets = await db.tickets.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+    if days and days > 0:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        # Tickets with NO `updated_at` (legacy) are kept visible to avoid
+        # silently hiding old data.
+        query["$or"] = (query.get("$or") or []) + [
+            {"updated_at": {"$gte": cutoff}},
+            {"created_at": {"$gte": cutoff}},
+        ] if not query.get("$or") else query.get("$or")
+        # If we already had an $or, AND-combine with the time window:
+        if "$or" in query and not query.get("$and"):
+            # rebuild as $and to combine cleanly
+            time_clause = {"$or": [{"updated_at": {"$gte": cutoff}}, {"created_at": {"$gte": cutoff}}]}
+            vis_or = query.pop("$or")
+            query["$and"] = [{"$or": vis_or}, time_clause]
+        else:
+            query.setdefault("$and", []).append({"$or": [{"updated_at": {"$gte": cutoff}}, {"created_at": {"$gte": cutoff}}]})
+
+    if search:
+        s = search.strip()
+        digits = re.sub(r"\D", "", s)
+        sr = []
+        sr.append({"customer_name": {"$regex": s, "$options": "i"}})
+        if digits:
+            sr.append({"customer_phone": {"$regex": digits}})
+            sr.append({"ticket_number": int(digits) if digits.isdigit() else digits})
+        query.setdefault("$and", []).append({"$or": sr})
+
+    if column_id and column_id != NATIVE_FIRST_COLUMN["id"]:
+        query["kanban_column_id"] = column_id
+    tickets = await db.tickets.find(query, {"_id": 0, "messages": 0}).sort("updated_at", -1).to_list(2000)
 
     grouped = {c["id"]: [] for c in columns}
     for t in tickets:
@@ -2167,13 +2220,12 @@ async def get_kanban_v2(
         else:
             grouped[NATIVE_FIRST_COLUMN["id"]].append(t)
 
-    # Compute total value per column
     totals_by_column = {
         col_id: sum(float(t.get("value") or 0) for t in items)
         for col_id, items in grouped.items()
     }
 
-    return {"columns": columns, "tickets_by_column": grouped, "totals_by_column": totals_by_column}
+    return {"columns": columns, "tickets_by_column": grouped, "totals_by_column": totals_by_column, "window_days": days}
 
 
 class KanbanReorderRequest(BaseModel):
