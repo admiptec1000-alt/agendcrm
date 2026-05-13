@@ -367,6 +367,39 @@ async def create_ticket(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    # Duplicate guard: refuse to open a second OPEN ticket for the same
+    # phone in the same tenant unless the operator explicitly forces it.
+    # The match is digits-only so "5511999..." and "(55) 11 999..." are
+    # treated as the same person. Group tickets are excluded — they're
+    # keyed by group_jid, not by individual phone.
+    digits_phone = re.sub(r"\D", "", data.customer_phone or "")
+    if digits_phone and not data.force_create:
+        candidates_or = [{"customer_phone": digits_phone}]
+        if data.customer_phone and data.customer_phone != digits_phone:
+            candidates_or.append({"customer_phone": data.customer_phone})
+        existing = await db.tickets.find_one(
+            {
+                "company_id": user["company_id"],
+                "status": {"$nin": ["fechado", "cancelado"]},
+                "channel": {"$ne": "whatsapp_group"},
+                "$or": candidates_or,
+            },
+            {"_id": 0, "id": 1, "ticket_number": 1, "customer_name": 1,
+             "customer_phone": 1, "status": 1, "assigned_to": 1,
+             "updated_at": 1},
+        )
+        if existing:
+            # 409 Conflict — frontend reads `detail.existing_ticket` to offer
+            # "open existing" vs. "create anyway".
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "duplicate_open_ticket",
+                    "message": f"Já existe um atendimento aberto (#{existing.get('ticket_number')}) para o telefone {data.customer_phone}.",
+                    "existing_ticket": existing,
+                },
+            )
+
     ticket_id = str(uuid.uuid4())
     ticket_number = await next_ticket_number(db, user["company_id"])
     client_id = await find_or_create_client_by_phone(

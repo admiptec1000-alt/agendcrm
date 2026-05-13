@@ -649,7 +649,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'atendimentos': return <AtendimentosPage />;
     case 'relatorio_atendimentos': return <TicketsReportPage />;
     case 'orcamentos': return <OrcamentosPage />;
-    case 'contatos': return <ClientsPage />;
+    case 'contatos': return <ClientsPage setActivePage={setActivePage} />;
     case 'respostas_rapidas': return <QuickResponsesPage />;
     case 'campanhas': return <CampaignsPage />;
     case 'tags': return <TagsPage />;

@@ -390,15 +390,54 @@ const AtendimentosPage = () => {
     }
   };
 
-  const handleCreateTicket = async (form) => {
+  const handleCreateTicket = async (form, { forceCreate = false } = {}) => {
     try {
-      const res = await crmAPI.createTicket(form);
+      const res = await crmAPI.createTicket({ ...form, force_create: forceCreate });
       toast.success('Ticket criado!');
       setShowNewTicket(false);
       await loadData();
       setSelectedTicket(res.data);
     } catch (e) {
-      toast.error(e?.response?.data?.detail || 'Erro ao criar ticket');
+      // Backend returns 409 + { detail: { code: 'duplicate_open_ticket', existing_ticket: {...} } }
+      // when a ticket already exists for this phone. Offer the operator to
+      // open the existing one or force-create a second one.
+      const detail = e?.response?.data?.detail;
+      const isDup = e?.response?.status === 409 && detail?.code === 'duplicate_open_ticket';
+      if (isDup && detail?.existing_ticket?.id) {
+        const ex = detail.existing_ticket;
+        const num = ex.ticket_number ? `#${ex.ticket_number}` : '';
+        const choice = window.confirm(
+          `Já existe um atendimento aberto ${num} para o telefone ${form.customer_phone}.\n\n` +
+          `Clique em OK para ABRIR o atendimento existente.\n` +
+          `Clique em CANCELAR e use o botão "Criar mesmo assim" se realmente quiser duplicar.`
+        );
+        if (choice) {
+          // Open existing
+          setShowNewTicket(false);
+          try {
+            const r = await crmAPI.getTicket(ex.id);
+            setSelectedTicket(r.data);
+            setTickets(prev => {
+              const has = prev.some(t => t.id === ex.id);
+              return has ? prev : [r.data, ...prev];
+            });
+            await loadData();
+          } catch (_) { toast.error('Não foi possível abrir o atendimento existente'); }
+        } else {
+          // Surface a second confirm so the operator must really insist
+          // on duplicating. We DO NOT close the modal silently.
+          const force = window.confirm(
+            `Tem certeza que deseja criar um SEGUNDO atendimento para ${form.customer_phone}?\n\n` +
+            `Recomendamos abrir o existente para evitar histórico duplicado.`
+          );
+          if (force) {
+            return handleCreateTicket(form, { forceCreate: true });
+          }
+        }
+        return;
+      }
+      const fallback = e?.response?.data?.detail;
+      toast.error(typeof fallback === 'string' ? fallback : 'Erro ao criar ticket');
       setShowNewTicket(false);
     }
   };

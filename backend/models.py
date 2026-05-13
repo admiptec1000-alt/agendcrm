@@ -156,6 +156,10 @@ class TicketCreate(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     value: Optional[float] = 0.0
+    # When False (default), POST /tickets refuses to create a second open
+    # ticket for the same phone and returns 409 with the existing ticket.
+    # The operator can override by setting True in the modal.
+    force_create: Optional[bool] = False
 
     @field_validator("customer_email", mode="before")
     @classmethod

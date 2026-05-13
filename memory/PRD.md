@@ -9,6 +9,34 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+### 2026-05-13 (B) — Botão "Abrir atendimento" em Contatos + Bloqueio de tickets duplicados ✅
+
+**Bug 1: Botão "Abrir atendimento" (ícone de chat verde) nos cards de Contatos não fazia nada**
+
+**Root cause:** `Dashboard.js` linha 652 (`case 'contatos'`) renderizava `<ClientsPage />` SEM passar a prop `setActivePage`. A linha 666 (`case 'clientes'`) já passava. O handler `openTicketFromClient` faz `setActivePage && setActivePage('atendimentos')` — quando a prop é undefined, o short-circuit ignora silenciosamente e nada acontece.
+
+**Fix:** `case 'contatos': return <ClientsPage setActivePage={setActivePage} />;`
+
+**Bug 2: Sistema permitia criar múltiplos tickets para o mesmo telefone**
+
+**Fix (backend `crm_routes.py POST /tickets`):** Adicionado guarda contra duplicidade. Antes de inserir, busca um ticket OPEN (status ∉ {fechado, cancelado}, channel ≠ whatsapp_group) com o mesmo `customer_phone` (matching tanto pelo valor cru quanto pelo digits-only). Se existir, retorna `409 Conflict` com payload:
+```
+{ "code": "duplicate_open_ticket",
+  "message": "Já existe um atendimento aberto (#NNNN) para o telefone XXX.",
+  "existing_ticket": { id, ticket_number, customer_name, ... } }
+```
+O frontend pode forçar a criação enviando `force_create: true` no body.
+
+**Fix (frontend `AtendimentosPage.handleCreateTicket`):** Detecta o 409 → `window.confirm` pergunta se deseja **abrir o atendimento existente** (OK) ou **criar duplicado** (Cancel + segundo confirm). Ao "Abrir existente": `crmAPI.getTicket()` e seleciona; "Criar duplicado": re-submete com `force_create=true`.
+
+**Pydantic (`models.py TicketCreate`):** Adicionado `force_create: Optional[bool] = False`.
+
+**Validação curl:**
+- POST `{phone:"...111"}` → 200 (criou)
+- POST mesmo phone → **409** com `existing_ticket` ✓
+- POST mesmo phone + `force_create:true` → 200 (criou novo) ✓
+
+
 ### 2026-05-13 (A) — Fix Badge "Mensagens não lidas" não zera ao abrir ticket ✅
 
 **Bug:** Em `AtendimentosPage.js`, o contador de mensagens não lidas (badge verde no card do ticket) NÃO zerava quando o operador clicava na conversa. Ficava "congelado" mostrando o número antigo (ou um número inflado, como 99+) mesmo após o backend ter marcado a conversa como lida.
