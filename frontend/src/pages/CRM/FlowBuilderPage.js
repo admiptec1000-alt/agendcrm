@@ -240,6 +240,27 @@ const FlowBuilderPage = () => {
     }
   };
 
+  // Read a .json exported via the Export button (or shipped by support),
+  // parse it, and POST to /crm/flows/import so it lands as a NEW disabled
+  // flow on the current tenant. The backend strips company-specific ids.
+  const importFlowFromFile = async (file) => {
+    try {
+      const text = await file.text();
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch (_) { toast.error('Arquivo JSON inválido'); return; }
+      if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+        toast.error('JSON sem nodes/edges — exporte um fluxo deste sistema antes de importar.');
+        return;
+      }
+      const { data } = await crmAPI.importFlow(parsed);
+      toast.success(`Fluxo "${data.name}" importado!`);
+      reload();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Erro ao importar fluxo');
+    }
+  };
+
   const saveFlow = async () => {
     if (!currentFlow) return;
     try {

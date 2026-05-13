@@ -1617,22 +1617,13 @@ async def audit_sgp_flow_by_company(
     return {"company_id": company_id, "flows_audited": len(reports), "reports": reports}
 
 
-@router.post("/repair-sgp-flow/{flow_id}")
-async def repair_sgp_flow(
-    flow_id: str,
-    dry_run: bool = True,
-    user: dict = Depends(require_super_admin),
-    db: AsyncIOMotorDatabase = Depends(get_database),
-):
-    """Insert the missing contract-picker menu between consultacliente and
-    its downstream node(s), AND rewrite the message after fatura2via to
-    include boleto + linha digitavel + Pix copia-e-cola. Idempotent.
-
-    Pass `dry_run=false` to actually persist."""
-    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
-    if not flow:
-        raise HTTPException(404, "Fluxo nao encontrado")
-
+def _repair_sgp_flow_data(flow: dict) -> tuple:
+    """Pure function — takes a flow dict, returns (nodes, edges, changes)
+    after applying the SGP repair. Does NOT touch the database. Used by
+    both /repair-sgp-flow (persists) and /export-repaired-sgp-flow (returns
+    the JSON ready for download/import)."""
+    import copy as _copy
+    flow = _copy.deepcopy(flow)
     nodes = flow.get("nodes") or []
     edges = flow.get("edges") or []
     by_id = {n.get("id"): n for n in nodes}
@@ -1641,7 +1632,6 @@ async def repair_sgp_flow(
         edges_by_src.setdefault(e.get("source"), []).append(e)
 
     changes: list = []
-
     consult_nodes = [n for n in nodes if _sgp_action_of(n) == "consultacliente"]
     new_nodes: list = []
     new_edges = list(edges)
@@ -1670,15 +1660,17 @@ async def repair_sgp_flow(
                 "label": "Selecione o Contrato (SGP)",
                 "config": {
                     "title": "Seus contratos",
-                    "question": "Ola {{nome_cliente}}!\nSelecione abaixo o contrato que deseja consultar:",
-                    "options_format": "list",
+                    "question": (
+                        "Ola {{nome_cliente}}!\n"
+                        "Selecione o contrato para o atendimento:\n\n"
+                        "{{contratos_menu}}\n\n"
+                        "Digite o numero da opcao (ex: 0)."
+                    ),
+                    "options_format": "text",
                     "dynamic_source": "contratos_lista",
                     "capture_var": "contrato_id",
-                    "header": "Selecione o contrato",
-                    "footer": "Toque para escolher",
-                    "button_label": "Ver contratos",
-                    "list_button_text": "Ver contratos",
-                    "list_section_title": "Contratos disponíveis",
+                    "footer": "",
+                    "summary": "Lista dinâmica de contratos (SGP)",
                 },
             },
         }
@@ -1755,18 +1747,7 @@ async def repair_sgp_flow(
                 "now_passes": "contrato={{contrato_id}}",
             })
 
-    # ── 3) Clean other menus that wrongly carry the contracts metadata ────
-    #
-    # A common malformed state: the original "Tipo de Atendimento" menu
-    # still has `dynamic_source=contratos_lista` and `capture_var=contrato_id`
-    # left over from a botched migration. When the engine reaches that menu,
-    # it expects a contract reply (not Pix/2ª via/...) and rejects the user's
-    # tap. We strip those fields from ANY menu downstream of the contract
-    # picker (excluding the picker itself).
     picker_ids = {c["picker_node"] for c in changes if c.get("action") == "insert_contract_picker"}
-    # ALSO consider already-existing pickers (idempotency for flows that
-    # were partially repaired before): any menu downstream of an SGP
-    # consultacliente that has the dynamic source AND no static options.
     edges_by_src_now: dict = {}
     for e in new_edges:
         edges_by_src_now.setdefault(e.get("source"), []).append(e)
@@ -1789,8 +1770,6 @@ async def repair_sgp_flow(
             continue
         if cfg.get("dynamic_source") not in ("contratos_lista", "contratos_menu"):
             continue
-        # If this menu has its own STATIC options (Pix/2ª via/etc), it's
-        # the misclassified service menu — strip the contracts metadata.
         opts = cfg.get("options") or []
         looks_service = any(
             isinstance(o, dict) and (o.get("key") or o.get("label"))
@@ -1805,13 +1784,10 @@ async def repair_sgp_flow(
             if k in cfg:
                 cfg.pop(k)
                 removed.append(k)
-        # Repair the user-facing prompt: legacy summaries like "Seus contratos"
-        # are wrong for a service menu.
         if cfg.get("title") in ("Seus contratos",):
             cfg["title"] = "Tipo de Atendimento"
         if not (cfg.get("question") or cfg.get("text")):
             cfg["question"] = "Como posso te ajudar?"
-        # Make sure each option has a `key` so the engine can match by number.
         for i, o in enumerate(opts):
             if isinstance(o, dict) and not o.get("key"):
                 o["key"] = str(i + 1)
@@ -1825,24 +1801,39 @@ async def repair_sgp_flow(
             "removed_keys": removed,
         })
 
-    # ── 4) Clean stray static options inside the contract picker ──────────
     for pid in picker_ids:
         pnode = next((n for n in nodes if n.get("id") == pid), None)
         if not pnode:
             continue
         cfg = (pnode.get("data") or {}).get("config") or {}
+        touched = False
         if cfg.get("options"):
             cfg["options"] = []
+            touched = True
+        if cfg.get("options_format") != "text":
+            cfg["options_format"] = "text"
+            touched = True
+        q = cfg.get("question") or ""
+        if "{{contratos_menu}}" not in q:
+            cfg["question"] = (
+                "Ola {{nome_cliente}}!\n"
+                "Selecione o contrato para o atendimento:\n\n"
+                "{{contratos_menu}}\n\n"
+                "Digite o numero da opcao (ex: 0)."
+            )
+            touched = True
+        for k in ("header", "button_label", "list_button_text",
+                  "list_section_title"):
+            if k in cfg:
+                cfg.pop(k)
+                touched = True
+        if touched:
             pnode["data"]["config"] = cfg
             changes.append({
-                "action": "clear_picker_static_options",
+                "action": "force_picker_text_mode",
                 "picker_node": pid,
             })
 
-    # ── 5) Repair HTTP nodes whose `body` was serialised as "[object Object]"
-    # (a JS bug elsewhere — `String(obj)` instead of `JSON.stringify(obj)`).
-    # We replace it with an empty {} so the request at least doesn't crash;
-    # operators can re-edit it from the UI.
     for n in nodes:
         nt = (n.get("data") or {}).get("nodeType") or n.get("type")
         if nt not in ("http", "http_request", "request", "api"):
@@ -1856,6 +1847,23 @@ async def repair_sgp_flow(
                 "http_node": n["id"],
                 "url": cfg.get("url", ""),
             })
+
+    return nodes, new_edges, changes
+
+
+@router.post("/repair-sgp-flow/{flow_id}")
+async def repair_sgp_flow(
+    flow_id: str,
+    dry_run: bool = True,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Persist the SGP repair on the given flow. Pass `dry_run=false` to
+    actually save. Idempotent."""
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    nodes, new_edges, changes = _repair_sgp_flow_data(flow)
 
     if dry_run:
         return {"dry_run": True, "flow_id": flow_id, "changes": changes,
@@ -1875,3 +1883,45 @@ async def repair_sgp_flow(
     )
     return {"dry_run": False, "flow_id": flow_id, "changes": changes,
             "changes_count": len(changes)}
+
+
+@router.get("/export-repaired-sgp-flow/{flow_id}")
+async def export_repaired_sgp_flow(
+    flow_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Return the FULL repaired flow as a downloadable JSON in the exact
+    shape consumed by /api/crm/flows/import — does NOT persist to the
+    source flow. Use this to:
+      1. curl -OJ on production to download the file
+      2. delete or rename the broken flow on the operator UI
+      3. import the downloaded JSON via the Flowbuilder "Importar Fluxo"
+         button — the new flow lands disabled, you toggle it active.
+    Idempotent on already-repaired flows.
+    """
+    from fastapi.responses import Response
+    import json as _json
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    nodes, new_edges, changes = _repair_sgp_flow_data(flow)
+    out = {
+        "name": (flow.get("name") or "Fluxo SGP") + " (corrigido)",
+        "description": (flow.get("description") or ""),
+        "trigger_type": flow.get("trigger_type") or "manual",
+        "nodes": nodes,
+        "edges": new_edges,
+        "_repair_changes": changes,
+        "_repair_changes_count": len(changes),
+    }
+    safe = (flow.get("name") or "fluxo").replace("/", "_").replace(" ", "_")
+    # HTTP headers are latin-1 only — strip non-ASCII (em-dashes, accents)
+    safe = safe.encode("ascii", "ignore").decode("ascii")[:60] or "fluxo"
+    filename = f"{safe}_FIXED.json"
+    body = _json.dumps(out, ensure_ascii=False, indent=2)
+    return Response(
+        content=body,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
