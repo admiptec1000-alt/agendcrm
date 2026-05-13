@@ -269,10 +269,22 @@ const AtendimentosPage = () => {
   const handleSelectTicket = async (ticket) => {
     setSelectedTicket(ticket);
     setShowContactInfo(false);
-    // Hit GET /tickets/{id} so the backend stamps `read_state[user_id]`,
-    // then mirror that change in our local list — otherwise the unread
-    // badge on the sidebar keeps showing the old count until the next
-    // 5s polling refresh.
+    // OPTIMISTIC: zero the badge locally the instant the operator clicks,
+    // BEFORE the backend round-trip completes. We stamp `read_state[uid]`
+    // with "now" so the badge calculation below treats every existing
+    // message as already-read. If the API call later returns a more
+    // accurate timestamp we merge it; if it fails we keep the optimistic
+    // stamp until the 8s list-poll reconciles.
+    const myUid = user?.id;
+    if (myUid) {
+      const optimisticIso = new Date().toISOString();
+      setTickets(prev => prev.map(t => t.id === ticket.id
+        ? { ...t, read_state: { ...(t.read_state || {}), [myUid]: optimisticIso } }
+        : t));
+    }
+    // Hit GET /tickets/{id} so the backend persists `read_state[user_id]`
+    // and returns the canonical timestamp. Mirror that into the list so
+    // the next render uses the server-side value.
     try {
       const r = await crmAPI.getTicket(ticket.id);
       const fresh = r.data;
@@ -685,17 +697,33 @@ const AtendimentosPage = () => {
                 </div>
                 <div className="flex flex-col items-center gap-1 flex-shrink-0">
                   {(() => {
-                    // Unread = inbound messages (from_me=false) whose timestamp
-                    // is AFTER the last time the current operator opened the
-                    // ticket. The backend sets `read_state[uid]` to "now" on
-                    // GET /tickets/{id}, so the badge resets the moment we
-                    // select the conversation. Falls back to total inbound
-                    // count when there is no read marker yet.
-                    const inboundMsgs = (ticket.messages || []).filter(m => !m.from_me && m.direction !== 'outgoing');
-                    const myUid = (JSON.parse(localStorage.getItem('user_data') || '{}')?.id) || null;
+                    // Unread = inbound (customer-sent) messages whose
+                    // timestamp is AFTER the last time the current operator
+                    // opened the ticket. The backend stamps
+                    // `read_state[uid]` on GET /tickets/{id}, so opening
+                    // the conversation zeroes the badge immediately.
+                    //
+                    // A message is "inbound" when none of the outgoing
+                    // flags apply. Different code paths set different
+                    // fields (webhook → sender_type, manual/system →
+                    // from_me + direction), so we treat any positive
+                    // outgoing signal as "not unread".
+                    const isOutgoing = (m) => (
+                      m.from_me === true ||
+                      m.direction === 'outgoing' ||
+                      m.sender_type === 'agent' ||
+                      m.sender_type === 'system' ||
+                      m.sender_type === 'bot'
+                    );
+                    const inboundMsgs = (ticket.messages || []).filter(m => !isOutgoing(m));
+                    // Use the auth-context user, NOT a stale localStorage
+                    // key (the codebase stores the session under "user",
+                    // never "user_data" — the old lookup returned null and
+                    // the badge effectively never used read_state).
+                    const myUid = user?.id;
                     const lastRead = ticket.read_state && myUid ? ticket.read_state[myUid] : null;
                     const unread = lastRead
-                      ? inboundMsgs.filter(m => (m.timestamp || m.created_at) > lastRead).length
+                      ? inboundMsgs.filter(m => ((m.timestamp || m.created_at) || '') > lastRead).length
                       : inboundMsgs.length;
                     if (unread <= 0) return null;
                     return (

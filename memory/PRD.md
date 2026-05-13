@@ -9,6 +9,24 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+### 2026-05-13 (A) — Fix Badge "Mensagens não lidas" não zera ao abrir ticket ✅
+
+**Bug:** Em `AtendimentosPage.js`, o contador de mensagens não lidas (badge verde no card do ticket) NÃO zerava quando o operador clicava na conversa. Ficava "congelado" mostrando o número antigo (ou um número inflado, como 99+) mesmo após o backend ter marcado a conversa como lida.
+
+**Root cause (duplo):**
+1. A função do badge buscava o user id em `localStorage.getItem('user_data')`, mas a app armazena a sessão na chave `user` (via `AuthContext.js`). Portanto `myUid` era sempre `null`, `lastRead` era sempre `null`, e o cálculo caía no fallback `unread = inboundMsgs.length` (= todas as mensagens, sempre).
+2. O filtro de "inbound" usava `!m.from_me && m.direction !== 'outgoing'`. Porém mensagens persistidas pelo webhook (`channels_routes.py`) gravam apenas `sender_type: 'agent'|'user'` (sem `from_me`/`direction`). Resultado: mensagens do próprio operador eram contadas como "não lidas", inflando o badge.
+
+**Fix em `/app/frontend/src/pages/CRM/AtendimentosPage.js`:**
+- Substituído `localStorage.getItem('user_data')` por `user?.id` (já vem do `useAuth()` no topo do componente).
+- Filtro de outgoing agora cobre os 3 esquemas: `from_me === true || direction === 'outgoing' || sender_type ∈ {agent, system, bot}`.
+- `handleSelectTicket` faz update OTIMISTA: marca `read_state[uid] = now` localmente ANTES da chamada API, então o badge some no instante do clique mesmo se a rede demorar.
+
+**Validação:** Login `crm@test.com`, abrir Atendimentos → 3 tickets com badges "1, 1, 3". Clicar no #1523 → badge do #1523 some imediatamente, os outros 2 ficam intactos. ✓
+
+**Produção:** Save to GitHub apenas o arquivo `AtendimentosPage.js`; Render auto-deploy do frontend resolve em ~3min.
+
+
 ### 2026-05-12 (F) — Lote bugs P0 + features ✅
 
 (detalhes acima)
