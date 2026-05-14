@@ -70,7 +70,22 @@ def _node_text(n: dict, vars_: dict, missing: Optional[set] = None) -> Optional[
             for i, opt in enumerate(opts):
                 key = opt.get("key") or str(i + 1)
                 label = opt.get("label") or opt.get("text") or ""
-                lines.append(f"{key}. {label}")
+                # Bracketed format gives a more "modern" feel than "1. label"
+                # and matches the contracts picker style ([ N ] - ...).
+                lines.append(f"[ {key} ] - {label}")
+            # Auto-append a "Voltar ao menu anterior" entry when the operator
+            # didn't add one and the menu isn't flagged as root. The handler
+            # in `advance_flow` rewinds to the previous menu when the user
+            # picks "9". Operators can disable by setting `no_back: true`
+            # on the menu node config.
+            no_back = cfg.get("no_back") or cfg.get("hide_back")
+            already_has_back = any(
+                str(o.get("key") or "") == "9"
+                or "voltar" in str(o.get("label", "")).lower()
+                for o in opts
+            )
+            if not no_back and not already_has_back:
+                lines.append("[ 9 ] - Voltar ao menu anterior")
             out = (out + "\n\n" + "\n".join(lines)).strip()
     return out
 
@@ -304,10 +319,23 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
             out["contratos_count"] = len(contratos_lista)
             # Numbered text menu (used by the "text" options_format and as
             # fallback for chat UIs that don't support interactive messages).
-            out["contratos_menu"] = "\n".join([
-                f"[ {i} ] - {ci['status']} - {ci['endereco']}"
-                for i, ci in enumerate(contratos_lista)
-            ]) or ""
+            # Format used: "[ N ] - Status: STATUS  |  Plano: PLAN  |  ENDERECO"
+            # — single-line per contract so the picker stays scannable. We
+            # only include parts that are populated; an SGP tenant that
+            # returns no plano won't print a literal "Plano: undefined".
+            def _fmt_contract_row(i: int, ci: dict) -> str:
+                bits = [f"[ {i} ] - *Status:* {ci.get('status') or '—'}"]
+                plano = ci.get("plano")
+                if plano:
+                    bits.append(f"*Plano:* {plano}")
+                end = ci.get("endereco")
+                if end and "nao informado" not in end.lower():
+                    bits.append(f"*Endereco:* {end}")
+                return " | ".join(bits)
+
+            out["contratos_menu"] = "\n\n".join(
+                _fmt_contract_row(i, ci) for i, ci in enumerate(contratos_lista)
+            ) or ""
             # Cliente info: prefer wrapper, fall back to contrato fields
             out["nome_cliente"] = (
                 cli.get("nome") or cli.get("razaosocial") or cli.get("razao_social")
@@ -550,6 +578,56 @@ async def advance_flow(
         if _node_type(prev) == "menu":
             cfg = (prev.get("data") or {}).get("config") or {}
             opts = cfg.get("options") or []
+            # ── Universal "Voltar" handler ──────────────────────────────────
+            # We auto-append `[9] - Voltar ao menu anterior` to every menu
+            # (unless the node config explicitly disables it). When the user
+            # types "9" (or anything containing "voltar"), we rewind to the
+            # menu they came from. The history is kept inside
+            # `vars_["__menu_history"]` so it survives across hops.
+            no_back = cfg.get("no_back") or cfg.get("hide_back")
+            menu_has_explicit_9 = any(
+                str(o.get("key") or "") == "9" for o in opts
+            )
+            reply_norm = (incoming_text or "").strip().lower()
+            is_back_reply = (
+                not no_back and not menu_has_explicit_9
+                and reply_norm in {"9", "voltar", "menu anterior", "anterior"}
+            )
+            if is_back_reply:
+                history = list(vars_.get("__menu_history") or [])
+                target = None
+                while history:
+                    candidate = history.pop()
+                    if candidate != prev_id and _node_by_id(nodes, candidate):
+                        target = candidate
+                        break
+                vars_["__menu_history"] = history
+                if target:
+                    logger.info(f"[flow_engine] back-handler: rewinding from {prev_id} → {target}")
+                    # Re-render the previous menu by saving state to its id
+                    # and emitting its text again. We skip running it through
+                    # the linear loop because that would re-trigger any HTTPs
+                    # in between.
+                    target_node = _node_by_id(nodes, target)
+                    if target_node and _node_type(target_node) == "menu":
+                        msg = _node_text(target_node, vars_)
+                        if msg:
+                            await _emit_and_persist(msg)
+                        if not dry_run:
+                            await _save_state(db, ticket["id"], flow_id, target, vars_)
+                        return sent
+                # No history — fall back to "re-prompt"
+                logger.info(f"[flow_engine] back-handler: no history, re-prompting {prev_id}")
+                txt = _node_text(prev, vars_) or "Voce ja esta no menu inicial."
+                await _emit_and_persist(txt)
+                return sent
+            # Record the current menu in history BEFORE moving forward so a
+            # later "voltar" can find it.
+            history = list(vars_.get("__menu_history") or [])
+            if not history or history[-1] != prev_id:
+                history.append(prev_id)
+                # cap at 10 entries to bound memory
+                vars_["__menu_history"] = history[-10:]
             # If a dynamic_source is set, the user's reply will match the
             # dynamic items (button rowId / list rowId / typed number).
             dyn_src = cfg.get("dynamic_source") or ""
