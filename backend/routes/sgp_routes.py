@@ -400,6 +400,36 @@ def _build_sgp_chatflow_skeleton():
     return n, e
 
 
+# ---------- DEBUG: super-admin inspector for the consultacliente response.
+# Lets the operator run a CPF/CNPJ through the proxy and see the EXACT JSON
+# the SGP returned — useful when fields like `endereco` are missing from the
+# bot output and we need to know the real shape. Requires super-admin so
+# regular tenants can't enumerate other companies' SGP.
+@router.post("/super-admin/debug-consultacliente/{company_id}")
+async def sgp_debug_consultacliente(
+    company_id: str,
+    data: SgpProxyIn,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    cfg = await db.sgp_configs.find_one({"company_id": company_id}, {"_id": 0})
+    if not cfg or not cfg.get("enabled") or not cfg.get("base_url") or not cfg.get("token"):
+        raise HTTPException(400, "Integracao SGP nao configurada para esta empresa")
+    url = cfg["base_url"].rstrip("/") + "/api/ura/consultacliente/"
+    body = {**(data.params or {}), "token": cfg["token"], "app": cfg.get("app") or "8ip"}
+    async with httpx.AsyncClient(timeout=20.0) as cli:
+        r = await cli.post(url, json=body)
+    try:
+        payload = r.json()
+    except Exception:
+        payload = {"raw": r.text}
+    # Echo the FULL payload (super-admin only). Strip the token from any
+    # nested echo to be safe.
+    if isinstance(payload, dict) and "token" in payload:
+        payload["token"] = "<redacted>"
+    return {"status": r.status_code, "url": url, "data": payload}
+
+
 # ---------- Proxy ----------
 # Declared at the END of the module so the {action} catch-all does NOT match
 # concrete routes like /import-flow, /config, /config/test, /super-admin/...

@@ -364,14 +364,26 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
             # only include parts that are populated; an SGP tenant that
             # returns no plano won't print a literal "Plano: undefined".
             def _fmt_contract_row(i: int, ci: dict) -> str:
-                bits = [f"[ {i} ] - *Status:* {ci.get('status') or '—'}"]
+                # 1-indexed display (operators complained that customers
+                # naturally tap "1" for the first contract — not "0").
+                # The flow's `_resolve_menu_choice` accepts both schemas.
+                idx_label = i + 1
+                cid = ci.get("id") or ""
+                head = f"*[ {idx_label} ]* - *Contrato #{cid}*" if cid else f"*[ {idx_label} ]*"
+                bits = [head]
+                status = ci.get("status") or "—"
+                bits.append(f"*Status:* {status}")
                 plano = ci.get("plano")
                 if plano:
                     bits.append(f"*Plano:* {plano}")
                 end = ci.get("endereco")
                 if end and "nao informado" not in end.lower():
-                    bits.append(f"*Endereco:* {end}")
-                return " | ".join(bits)
+                    # WhatsApp italic = surround in underscores. Used here
+                    # for the address to give a "modern receipt" look.
+                    bits.append(f"_{end}_")
+                # Slash separator looks more "modern" than pipes for this
+                # multi-line bullet.
+                return " · ".join(bits)
 
             out["contratos_menu"] = "\n\n".join(
                 _fmt_contract_row(i, ci) for i, ci in enumerate(contratos_lista)
@@ -682,11 +694,20 @@ async def advance_flow(
                     if val and s == val:
                         choice_idx = i
                         break
-                # Numeric idx (when client typed "0", "1", … in text mode)
+                # Numeric idx (when client typed "1", "2", … in text mode).
+                # The picker NOW renders contracts starting at 1 (operators
+                # complained users naturally tap 1 for the first item, not 0).
+                # We accept BOTH schemas so old links and the new display
+                # keep working:
+                #   typed "0" → idx=0
+                #   typed "1" → idx=0 (1-based) OR idx=1 (0-based fallback)
                 if choice_idx is None and s.isdigit():
-                    idx = int(s)
-                    if 0 <= idx < len(dyn_items):
-                        choice_idx = idx
+                    idx_raw = int(s)
+                    # Prefer 1-based when it falls inside the list.
+                    if 1 <= idx_raw <= len(dyn_items):
+                        choice_idx = idx_raw - 1
+                    elif 0 <= idx_raw < len(dyn_items):
+                        choice_idx = idx_raw
                 if choice_idx is None:
                     logger.info(f"[flow_engine] menu {prev_id} (dynamic) got invalid reply {incoming_text!r}; re-prompting")
                     txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."

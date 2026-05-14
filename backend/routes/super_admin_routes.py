@@ -1687,7 +1687,7 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
                         "Encontrei seus contratos!\n"
                         "Selecione abaixo qual deseja para o atendimento:\n\n"
                         "{{contratos_menu}}\n\n"
-                        "Digite o numero da opcao (ex: 0)."
+                        "Digite o numero da opcao (ex: 1)."
                     ),
                     "options_format": "text",
                     "dynamic_source": "contratos_lista",
@@ -1857,13 +1857,14 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
         needs_question_refresh = (
             "{{contratos_menu}}" not in q
             or "{{nome_cliente}}" in q
+            or "ex: 0" in q  # legacy 0-indexed prompt
         )
         if needs_question_refresh:
             cfg["question"] = (
                 "Encontrei seus contratos!\n"
                 "Selecione abaixo qual deseja para o atendimento:\n\n"
                 "{{contratos_menu}}\n\n"
-                "Digite o numero da opcao (ex: 0)."
+                "Digite o numero da opcao (ex: 1)."
             )
             touched = True
         for k in ("header", "button_label", "list_button_text",
