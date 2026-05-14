@@ -1858,6 +1858,69 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
                 "url": cfg.get("url", ""),
             })
 
+    # ── 6) Replace the orphan Pix node (calls a non-existent endpoint and
+    # has no outgoing edge — so the customer's "Pix" selection silently
+    # dies). We re-point it at /api/sgp/fatura2via (which already returns
+    # `pix_copia_e_cola`) and append a "Pix only" message node downstream
+    # so the customer actually receives the Pix copia-e-cola string.
+    PIX_RICH_MSG = (
+        "Aqui esta seu Pix Copia-e-Cola para pagamento imediato:\n\n"
+        "⚡ {{pix_copia_e_cola}}\n\n"
+        "Vencimento: {{vencimento_fatura}}\n"
+        "Valor: R$ {{valor_fatura}}\n\n"
+        "_Apos o pagamento, a confirmacao pode levar ate 30 minutos._"
+    )
+    edges_by_src_pix: dict = {}
+    for e in new_edges:
+        edges_by_src_pix.setdefault(e.get("source"), []).append(e)
+    for n in list(nodes):
+        cfg = (n.get("data") or {}).get("config") or {}
+        nt = (n.get("data") or {}).get("nodeType") or n.get("type")
+        if nt not in ("http", "http_request", "request", "api"):
+            continue
+        url = (cfg.get("url") or "").lower()
+        if "/api/sgp/pix" not in url and "pix_copia_e_cola" not in url:
+            continue
+        # Rewrite URL + body
+        cfg["url"] = (cfg.get("url") or "").split("/api/sgp/")[0] + "/api/sgp/fatura2via"
+        cfg["body"] = {"params": {
+            "cpfcnpj": "{{cpf_cliente}}",
+            "contrato": "{{contrato_id}}",
+        }}
+        n["data"]["label"] = "SGP: Pix (via fatura2via)"
+        n["data"]["config"] = cfg
+
+        # If the Pix HTTP has NO outgoing edge, append a message node
+        # that sends the Pix copia-e-cola to the customer.
+        if not edges_by_src_pix.get(n["id"]):
+            msg_id = f"pix_msg_{uuid.uuid4().hex[:6]}"
+            n_pos = n.get("position") or {"x": 0, "y": 0}
+            nodes.append({
+                "id": msg_id,
+                "type": "flow",
+                "position": {"x": n_pos.get("x", 0), "y": (n_pos.get("y", 0) or 0) + 160},
+                "data": {
+                    "nodeType": "message",
+                    "label": "Enviar Pix copia-e-cola",
+                    "config": {"text": PIX_RICH_MSG},
+                },
+            })
+            new_edges.append({
+                "id": f"e_{n['id']}_{msg_id}",
+                "source": n["id"],
+                "target": msg_id,
+            })
+            changes.append({
+                "action": "rewire_pix_to_fatura2via_and_attach_msg",
+                "pix_node": n["id"],
+                "pix_message_node": msg_id,
+            })
+        else:
+            changes.append({
+                "action": "rewire_pix_to_fatura2via",
+                "pix_node": n["id"],
+            })
+
     return nodes, new_edges, changes
 
 

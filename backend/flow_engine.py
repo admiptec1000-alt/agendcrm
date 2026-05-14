@@ -689,7 +689,6 @@ async def advance_flow(
             if dynamic_source and isinstance(vars_.get(dynamic_source), list):
                 dynamic_items = vars_[dynamic_source]
             static_items = cfg_menu.get("options") or []
-            options_items = dynamic_items or static_items
 
             # Friendly fallback when the menu has a dynamic source but the
             # upstream (typically SGP /consultacliente) returned nothing.
@@ -706,54 +705,21 @@ async def advance_flow(
                     await _save_state(db, ticket["id"], flow_id, None, vars_)
                 return sent
 
-            sent_interactive = False
-            if options_items and options_format in ("buttons", "list") and not dry_run:
-                if options_format == "buttons" and len(options_items) <= 3:
-                    btns = [
-                        {"id": str(o.get("value") or o.get("id") or i),
-                         "title": str(o.get("title") or o.get("label") or o.get("status") or f"Opção {i}")[:20]}
-                        for i, o in enumerate(options_items)
-                    ]
-                    sent_interactive = await _send_whatsapp_interactive(ticket, {
-                        "mode": "buttons",
-                        "body": text,
-                        "footer": cfg_menu.get("footer") or "",
-                        "buttons": btns,
-                    })
-                else:
-                    # List: more options or operator explicitly asked for list
-                    rows = [
-                        {"id": str(o.get("value") or o.get("id") or i),
-                         "title": str(o.get("title") or o.get("label") or o.get("status") or f"Opção {i}")[:24],
-                         "description": (str(o.get("endereco") or o.get("description") or o.get("plano") or "")[:72] or None)}
-                        for i, o in enumerate(options_items)
-                    ]
-                    sent_interactive = await _send_whatsapp_interactive(ticket, {
-                        "mode": "list",
-                        "header": cfg_menu.get("header") or "",
-                        "body": text,
-                        "footer": cfg_menu.get("footer") or "",
-                        "button_label": cfg_menu.get("button_label") or "Ver opções",
-                        "sections": [{"title": cfg_menu.get("section_title") or "", "rows": rows}],
-                    })
-                # Persist the message so the agent UI shows it (without the
-                # actual interactive widget — just the printable text).
-                # Note: the interactive path doesn't currently surface the
-                # Baileys message_id back here, so the persisted record has
-                # wa_message_id=None and the from-me echo may insert a
-                # second copy. This is fine for `text` mode pickers (which
-                # is what the SGP repair uses) — they go through
-                # `_emit_and_persist` below which DOES dedup correctly.
-                if sent_interactive:
-                    await _persist_outgoing(db, ticket["id"], text, flow_id)
-                    sent.append(text)
-
-            if not sent_interactive:
-                # Plain text path (works on any WhatsApp client + agent UI).
-                await _emit_and_persist(text)
+            # IMPORTANT: WhatsApp/Baileys does NOT reliably deliver interactive
+            # messages (buttons/list) to non-Business-API senders. The API
+            # call returns success, the operator UI persists the body text,
+            # but the customer's screen renders an EMPTY bubble (no buttons,
+            # no list) because the WA infra strips the interactive payload.
+            #
+            # Forcing every menu to plain text guarantees the customer always
+            # sees the numbered options. Operators can still configure
+            # `options_format: list|buttons` in the UI — we just ignore that
+            # hint when sending and route through `_emit_and_persist`, which
+            # also dedups the from-me echo via Baileys message_id.
+            await _emit_and_persist(text)
             pending_node_id = current_id
             current_id = None
-            logger.info(f"[flow_engine] menu {pending_node_id} posted (format={options_format!r}, interactive={sent_interactive}); waiting for customer reply")
+            logger.info(f"[flow_engine] menu {pending_node_id} posted as plain text (format hint was {options_format!r}); waiting for customer reply")
             break
 
         if nt in ("http", "request", "api", "http_request"):

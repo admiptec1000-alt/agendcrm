@@ -24,6 +24,8 @@ const ACTION_LABELS = {
   force_picker_text_mode: 'Forcar picker em modo texto + {{contratos_menu}}',
   fix_corrupt_http_body: 'Reparar body HTTP corrompido ([object Object])',
   clear_picker_static_options: 'Remover opcoes estaticas do picker dinamico',
+  rewire_pix_to_fatura2via: 'Reaproveitar fatura2via para o caminho Pix',
+  rewire_pix_to_fatura2via_and_attach_msg: 'Reaproveitar fatura2via + criar mensagem do Pix (copia-e-cola)',
 };
 
 const SgpRepairTab = ({ companies }) => {
