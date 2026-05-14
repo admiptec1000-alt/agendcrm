@@ -1722,6 +1722,12 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
     by_id = {n.get("id"): n for n in nodes}
     fatura_nodes = [n for n in nodes if _sgp_action_of(n) == "fatura2via"]
     for fn in fatura_nodes:
+        # Skip Pix-flavoured HTTPs (their URL was rewritten from
+        # /api/sgp/pix* to /api/sgp/fatura2via by a prior repair run, but
+        # the downstream message must remain Pix-formatted, NOT boleto).
+        fn_label = ((fn.get("data") or {}).get("label") or "").lower()
+        if "pix" in fn_label:
+            continue
         outs = edges_by_src.get(fn["id"], [])
         downstream = [by_id.get(e["target"]) for e in outs]
         downstream = [d for d in downstream if d]
@@ -1898,7 +1904,18 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
         if nt not in ("http", "http_request", "request", "api"):
             continue
         url = (cfg.get("url") or "").lower()
-        if "/api/sgp/pix" not in url and "pix_copia_e_cola" not in url:
+        label = ((n.get("data") or {}).get("label") or "").lower()
+        # We need to detect THREE distinct states:
+        #   (a) brand-new Pix node still pointing at /api/sgp/pix_copia_e_cola
+        #   (b) already-rewritten Pix node pointing at fatura2via but with
+        #       label "SGP: Pix*" or "Pix*" (left there by a previous repair)
+        #   (c) a fatura2via HTTP whose label simply contains "pix"
+        # Without (b) and (c), idempotency fails: after the URL has been
+        # rewritten once, the check `/api/sgp/pix in url` is false and the
+        # downstream Pix-flavoured message never gets refreshed.
+        is_pix_url = "/api/sgp/pix" in url or "pix_copia_e_cola" in url
+        is_pix_label = ("pix" in label) and ("fatura" in url or "fatura2via" in url or "/api/sgp/pix" in url)
+        if not (is_pix_url or is_pix_label):
             continue
         # Rewrite URL + body
         cfg["url"] = (cfg.get("url") or "").split("/api/sgp/")[0] + "/api/sgp/fatura2via"
@@ -1910,6 +1927,63 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
         n["data"]["config"] = cfg
 
         downstream_edges = edges_by_src_pix.get(n["id"], [])
+        if downstream_edges:
+            # Old repair runs may have left a single-bubble `pix_msg_*` here.
+            # We want TWO bubbles (code-only + footer) so the customer can
+            # long-press → Copy without dragging the rest of the text. So:
+            # if the existing downstream message looks like a Pix bubble
+            # (contains pix_copia_e_cola) OR a legacy combined boleto+pix
+            # bubble, we DELETE that node + edge and replace with the
+            # 2-bubble chain below.
+            for e in downstream_edges:
+                target_id = e.get("target")
+                target_node = next((nn for nn in nodes if nn.get("id") == target_id), None)
+                if not target_node:
+                    continue
+                t_data = target_node.get("data") or {}
+                t_nt = t_data.get("nodeType") or target_node.get("type")
+                if t_nt not in ("message", "send_message", "text", "welcome"):
+                    continue
+                cfg_t = t_data.get("config") or {}
+                cur_text = cfg_t.get("text") or ""
+                # Only delete nodes that look like Pix-related (or the legacy
+                # combined boleto+pix) — leave anything else alone.
+                if ("pix_copia_e_cola" in cur_text or "Pix Copia-e-Cola" in cur_text
+                        or "Copia-e-Cola" in cur_text
+                        or "boleto_url" in cur_text
+                        or "2a via" in cur_text.lower() or "2ª via" in cur_text.lower()
+                        or target_id.startswith(("pix_msg", "pix_code", "pix_footer"))):
+                    # Remove the node + its outgoing edges that go to other
+                    # `pix_footer_*` siblings created by older runs.
+                    to_delete_ids = {target_id}
+                    for ee in new_edges:
+                        if ee.get("source") == target_id:
+                            ftid = ee.get("target")
+                            fn2 = next((nn for nn in nodes if nn.get("id") == ftid), None)
+                            if not fn2:
+                                continue
+                            fcfg = (fn2.get("data") or {}).get("config") or {}
+                            fctext = fcfg.get("text") or ""
+                            if "Pix" in fctext or "pix" in fctext:
+                                to_delete_ids.add(ftid)
+                    nodes[:] = [nn for nn in nodes if nn.get("id") not in to_delete_ids]
+                    new_edges[:] = [
+                        ee for ee in new_edges
+                        if ee.get("source") not in to_delete_ids
+                        and ee.get("target") not in to_delete_ids
+                    ]
+                    # And drop the edge from Pix HTTP → this old node.
+                    new_edges[:] = [ee for ee in new_edges
+                                     if not (ee.get("source") == n["id"]
+                                             and ee.get("target") == target_id)]
+                    changes.append({
+                        "action": "purge_legacy_pix_chain",
+                        "pix_node": n["id"],
+                        "purged_nodes": list(to_delete_ids),
+                    })
+            # Recompute whether there's still any downstream edge.
+            downstream_edges = [ee for ee in new_edges if ee.get("source") == n["id"]]
+
         if not downstream_edges:
             # Build the (code, footer) message pair.
             code_id = f"pix_code_{uuid.uuid4().hex[:6]}"
@@ -1938,19 +2012,6 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
                 "pix_footer_node": footer_id,
             })
         else:
-            # There IS a downstream message — assume it's the legacy "all in
-            # one" template and rewrite it into the code-only style. Then
-            # ensure a footer node follows it.
-            first_target_id = downstream_edges[0].get("target")
-            first_target = next((nn for nn in nodes if nn.get("id") == first_target_id), None)
-            if first_target and ((first_target.get("data") or {}).get("nodeType") or first_target.get("type")) in ("message", "send_message", "text", "welcome"):
-                cfg_t = (first_target.get("data") or {}).get("config") or {}
-                # Only rewrite if it still references Pix/boleto rich placeholders
-                cur_text = cfg_t.get("text") or ""
-                if "{{pix_copia_e_cola}}" in cur_text or "linha_digitavel" in cur_text:
-                    cfg_t["text"] = PIX_CODE_ONLY_TEMPLATE
-                    first_target["data"]["config"] = cfg_t
-                    first_target["data"]["label"] = "Enviar Pix (codigo copiavel)"
             changes.append({
                 "action": "rewire_pix_to_fatura2via",
                 "pix_node": n["id"],
