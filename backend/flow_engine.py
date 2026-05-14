@@ -689,6 +689,7 @@ async def advance_flow(
             if dynamic_source and isinstance(vars_.get(dynamic_source), list):
                 dynamic_items = vars_[dynamic_source]
             static_items = cfg_menu.get("options") or []
+            options_items = dynamic_items or static_items
 
             # Friendly fallback when the menu has a dynamic source but the
             # upstream (typically SGP /consultacliente) returned nothing.
@@ -705,21 +706,66 @@ async def advance_flow(
                     await _save_state(db, ticket["id"], flow_id, None, vars_)
                 return sent
 
-            # IMPORTANT: WhatsApp/Baileys does NOT reliably deliver interactive
-            # messages (buttons/list) to non-Business-API senders. The API
-            # call returns success, the operator UI persists the body text,
-            # but the customer's screen renders an EMPTY bubble (no buttons,
-            # no list) because the WA infra strips the interactive payload.
+            # ── INTERACTIVE PATH (best-effort) ────────────────────────────
+            # The dynamic contracts picker MUST stay in plain text — it
+            # depends on `{{contratos_menu}}` to render the numbered list
+            # inside the body, and Baileys' interactive list rows can't
+            # carry per-row descriptions reliably enough for that case.
             #
-            # Forcing every menu to plain text guarantees the customer always
-            # sees the numbered options. Operators can still configure
-            # `options_format: list|buttons` in the UI — we just ignore that
-            # hint when sending and route through `_emit_and_persist`, which
-            # also dedups the from-me echo via Baileys message_id.
+            # For STATIC menus (Tipo de Atendimento, Bem-vindo, …) we
+            # attempt the interactive widget so customers can tap buttons.
+            # We ALWAYS send the plain text variant alongside it — the
+            # interactive payload is silently filtered by WhatsApp for some
+            # senders, in which case the customer would otherwise see only
+            # an empty bubble. Sending both means "buttons if your client
+            # supports it, numbered list otherwise" — at the cost of one
+            # extra bubble in the chat.
+            interactive_eligible = (
+                not dry_run
+                and not dynamic_source
+                and options_items
+                and options_format in ("buttons", "list")
+            )
+            if interactive_eligible:
+                if options_format == "buttons" and len(options_items) <= 3:
+                    btns = [
+                        {"id": str(o.get("value") or o.get("id") or o.get("key") or i),
+                         "title": str(o.get("title") or o.get("label") or o.get("status") or f"Opção {i+1}")[:20]}
+                        for i, o in enumerate(options_items)
+                    ]
+                    await _send_whatsapp_interactive(ticket, {
+                        "mode": "buttons",
+                        "body": text,
+                        "footer": cfg_menu.get("footer") or "",
+                        "buttons": btns,
+                    })
+                else:
+                    rows = [
+                        {"id": str(o.get("value") or o.get("id") or o.get("key") or i),
+                         "title": str(o.get("title") or o.get("label") or o.get("status") or f"Opção {i+1}")[:24],
+                         "description": (str(o.get("description") or o.get("endereco") or o.get("plano") or "")[:72] or None)}
+                        for i, o in enumerate(options_items)
+                    ]
+                    await _send_whatsapp_interactive(ticket, {
+                        "mode": "list",
+                        "header": cfg_menu.get("header") or "",
+                        "body": text,
+                        "footer": cfg_menu.get("footer") or "",
+                        "button_label": cfg_menu.get("button_label") or "Ver opções",
+                        "sections": [{"title": cfg_menu.get("section_title") or "", "rows": rows}],
+                    })
+                # The interactive bubble is NOT persisted to the agent UI as
+                # its own message — it would just appear as a duplicate of
+                # the text variant below. We still record the from-me echo
+                # if Baileys delivers it; that path stamps wa_message_id and
+                # the dedup branch in channels_routes blocks the duplicate.
+
+            # Plain text path — always sent so the customer ALWAYS sees the
+            # options regardless of whether WhatsApp filtered the interactive.
             await _emit_and_persist(text)
             pending_node_id = current_id
             current_id = None
-            logger.info(f"[flow_engine] menu {pending_node_id} posted as plain text (format hint was {options_format!r}); waiting for customer reply")
+            logger.info(f"[flow_engine] menu {pending_node_id} posted (text + interactive_attempted={interactive_eligible}); waiting for customer reply")
             break
 
         if nt in ("http", "request", "api", "http_request"):

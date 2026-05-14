@@ -1444,13 +1444,28 @@ async def split_contract_menu(
 # idempotent — re-running on an already-repaired flow is a no-op.
 
 SECOND_VIA_RICH_TEMPLATE = (
-    "Aqui esta sua 2a via!\n\n"
+    "Aqui esta sua 2a via de boleto!\n\n"
     "📄 Boleto / link de cobranca:\n{{boleto_url}}\n\n"
     "💳 Linha digitavel:\n{{linha_digitavel}}\n\n"
-    "⚡ PIX Copia-e-Cola:\n{{pix_copia_e_cola}}\n\n"
     "Vencimento: {{vencimento_fatura}}\n"
     "Valor: R$ {{valor_fatura}}\n\n"
+    "_Caso prefira pagar via Pix, volte ao menu anterior e escolha *1 - Pix*._\n"
     "_Se ja pagou, desconsidere esta mensagem._"
+)
+
+
+# Pix message: SINGLE bubble with ONLY the copia-e-cola code in a code-block
+# so the customer can long-press → "copiar" it in one go. Vencimento + valor
+# go in a follow-up bubble so they don't break the auto-copy on iOS WhatsApp.
+PIX_CODE_ONLY_TEMPLATE = (
+    "```\n{{pix_copia_e_cola}}\n```"
+)
+PIX_FOOTER_TEMPLATE = (
+    "⚡ *Pix Copia-e-Cola enviado acima*\n\n"
+    "Vencimento: {{vencimento_fatura}}\n"
+    "Valor: R$ {{valor_fatura}}\n\n"
+    "_Toque e segure no codigo acima → *Copiar* → abra seu app do banco → "
+    "Pix → Pix copia e cola → cole e confirme._"
 )
 
 
@@ -1523,9 +1538,10 @@ def _audit_sgp_flow_report(flow: dict) -> dict:
                 continue
             txt = ((d.get("data") or {}).get("config") or {}).get("text") or \
                   ((d.get("data") or {}).get("config") or {}).get("question") or ""
-            keys = ("boleto_url", "linha_digitavel", "pix_copia_e_cola")
+            keys = ("boleto_url", "linha_digitavel")
             present = [k for k in keys if k in txt]
-            if len(present) >= 2:
+            has_pix_inline = "pix_copia_e_cola" in txt
+            if len(present) >= 2 and not has_pix_inline:
                 rich = True
                 info.append({
                     "code": "second_via_template_ok",
@@ -1538,10 +1554,11 @@ def _audit_sgp_flow_report(flow: dict) -> dict:
             issues.append({
                 "code": "second_via_template_poor",
                 "message": (
-                    "O nó de mensagem após o HTTP fatura2via não inclui os "
-                    "placeholders {{boleto_url}}, {{linha_digitavel}} e "
-                    "{{pix_copia_e_cola}} simultaneamente — então o cliente "
-                    "não recebe o pacote completo (PDF + Linha + Pix)."
+                    "A mensagem da 2ª via deve mostrar SOMENTE boleto + linha "
+                    "digitavel (sem o Pix copia-e-cola — esse vai numa bubble "
+                    "separada acionada pela opcao Pix). Verifique se o texto "
+                    "tem {{boleto_url}} e {{linha_digitavel}} e NAO tem "
+                    "{{pix_copia_e_cola}}."
                 ),
                 "fatura2via_node": fn["id"],
                 "downstream_messages": [d.get("id") for d in downstream
@@ -1714,9 +1731,14 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
                 continue
             cfg = (d.get("data") or {}).get("config") or {}
             cur = cfg.get("text") or cfg.get("question") or ""
-            keys = ("boleto_url", "linha_digitavel", "pix_copia_e_cola")
-            present = sum(1 for k in keys if k in cur)
-            if present >= 2:
+            # 2nd-via template intentionally omits pix_copia_e_cola — that
+            # goes in a SEPARATE Pix bubble (see Pix repair below). We
+            # rewrite the message if it still mentions pix_copia_e_cola
+            # OR if the new boleto+linha shape isn't present yet.
+            has_pix_inline = "pix_copia_e_cola" in cur
+            has_boleto = "boleto_url" in cur
+            has_linha = "linha_digitavel" in cur
+            if has_boleto and has_linha and not has_pix_inline:
                 continue
             cfg["text"] = SECOND_VIA_RICH_TEMPLATE
             d["data"]["config"] = cfg
@@ -1724,7 +1746,7 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
                 "action": "rewrite_second_via_message",
                 "fatura2via_node": fn["id"],
                 "message_node": d["id"],
-                "placeholders_present_before": present,
+                "had_pix_inline": has_pix_inline,
             })
 
         cfg_fn = (fn.get("data") or {}).get("config") or {}
@@ -1861,15 +1883,12 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
     # ── 6) Replace the orphan Pix node (calls a non-existent endpoint and
     # has no outgoing edge — so the customer's "Pix" selection silently
     # dies). We re-point it at /api/sgp/fatura2via (which already returns
-    # `pix_copia_e_cola`) and append a "Pix only" message node downstream
-    # so the customer actually receives the Pix copia-e-cola string.
-    PIX_RICH_MSG = (
-        "Aqui esta seu Pix Copia-e-Cola para pagamento imediato:\n\n"
-        "⚡ {{pix_copia_e_cola}}\n\n"
-        "Vencimento: {{vencimento_fatura}}\n"
-        "Valor: R$ {{valor_fatura}}\n\n"
-        "_Apos o pagamento, a confirmacao pode levar ate 30 minutos._"
-    )
+    # `pix_copia_e_cola`) and append TWO downstream message nodes:
+    #   (a) "code-only" bubble with the Pix wrapped in ``` so iPhone/Android
+    #       WhatsApp shows it as a code block → long-press = Copy.
+    #   (b) "footer" bubble with vencimento + valor + instructions.
+    # Two bubbles is intentional — combining them in one message breaks the
+    # one-tap copy behaviour on most WhatsApp clients.
     edges_by_src_pix: dict = {}
     for e in new_edges:
         edges_by_src_pix.setdefault(e.get("source"), []).append(e)
@@ -1890,32 +1909,48 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
         n["data"]["label"] = "SGP: Pix (via fatura2via)"
         n["data"]["config"] = cfg
 
-        # If the Pix HTTP has NO outgoing edge, append a message node
-        # that sends the Pix copia-e-cola to the customer.
-        if not edges_by_src_pix.get(n["id"]):
-            msg_id = f"pix_msg_{uuid.uuid4().hex[:6]}"
+        downstream_edges = edges_by_src_pix.get(n["id"], [])
+        if not downstream_edges:
+            # Build the (code, footer) message pair.
+            code_id = f"pix_code_{uuid.uuid4().hex[:6]}"
+            footer_id = f"pix_footer_{uuid.uuid4().hex[:6]}"
             n_pos = n.get("position") or {"x": 0, "y": 0}
             nodes.append({
-                "id": msg_id,
-                "type": "flow",
+                "id": code_id, "type": "flow",
                 "position": {"x": n_pos.get("x", 0), "y": (n_pos.get("y", 0) or 0) + 160},
-                "data": {
-                    "nodeType": "message",
-                    "label": "Enviar Pix copia-e-cola",
-                    "config": {"text": PIX_RICH_MSG},
-                },
+                "data": {"nodeType": "message", "label": "Enviar Pix (codigo copiavel)",
+                         "config": {"text": PIX_CODE_ONLY_TEMPLATE}},
             })
-            new_edges.append({
-                "id": f"e_{n['id']}_{msg_id}",
-                "source": n["id"],
-                "target": msg_id,
+            nodes.append({
+                "id": footer_id, "type": "flow",
+                "position": {"x": n_pos.get("x", 0), "y": (n_pos.get("y", 0) or 0) + 320},
+                "data": {"nodeType": "message", "label": "Pix - instrucoes",
+                         "config": {"text": PIX_FOOTER_TEMPLATE}},
             })
+            new_edges.append({"id": f"e_{n['id']}_{code_id}",
+                              "source": n["id"], "target": code_id})
+            new_edges.append({"id": f"e_{code_id}_{footer_id}",
+                              "source": code_id, "target": footer_id})
             changes.append({
                 "action": "rewire_pix_to_fatura2via_and_attach_msg",
                 "pix_node": n["id"],
-                "pix_message_node": msg_id,
+                "pix_message_node": code_id,
+                "pix_footer_node": footer_id,
             })
         else:
+            # There IS a downstream message — assume it's the legacy "all in
+            # one" template and rewrite it into the code-only style. Then
+            # ensure a footer node follows it.
+            first_target_id = downstream_edges[0].get("target")
+            first_target = next((nn for nn in nodes if nn.get("id") == first_target_id), None)
+            if first_target and ((first_target.get("data") or {}).get("nodeType") or first_target.get("type")) in ("message", "send_message", "text", "welcome"):
+                cfg_t = (first_target.get("data") or {}).get("config") or {}
+                # Only rewrite if it still references Pix/boleto rich placeholders
+                cur_text = cfg_t.get("text") or ""
+                if "{{pix_copia_e_cola}}" in cur_text or "linha_digitavel" in cur_text:
+                    cfg_t["text"] = PIX_CODE_ONLY_TEMPLATE
+                    first_target["data"]["config"] = cfg_t
+                    first_target["data"]["label"] = "Enviar Pix (codigo copiavel)"
             changes.append({
                 "action": "rewire_pix_to_fatura2via",
                 "pix_node": n["id"],
