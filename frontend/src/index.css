@@ -77,6 +77,11 @@ h1, h2, h3, h4, h5, h6 {
   .input-field {
     @apply w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--primary-color)] focus:border-transparent transition-all;
   }
+
+  /* Shorthand alias used inside SuperAdmin forms — same look, less verbose. */
+  .input {
+    @apply w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary-color)] focus:border-transparent transition-all;
+  }
   
   .glass {
     @apply bg-white/80 backdrop-blur-xl border border-slate-200;

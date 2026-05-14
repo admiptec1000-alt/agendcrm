@@ -552,6 +552,25 @@ async def conclude_appointment(
 
 # === FINANCIAL TRANSACTIONS ===
 # === FINANCIAL TRANSACTIONS ===
+
+class RecurrenceConfig(BaseModel):
+    """Configures a transaction that should auto-spawn future copies. When
+    present on TransactionCreate, the API inserts the original plus the
+    rolling future occurrences (capped at `until` or 24 months ahead)."""
+    interval: str  # 'mensal' | 'semanal' | 'anual'
+    until: Optional[str] = None  # YYYY-MM-DD inclusive; default = 12 occurrences
+    day_of_month: Optional[int] = None  # for 'mensal', override the day; otherwise derived from date
+
+
+class LateFeeConfig(BaseModel):
+    """Toggle + percentages for multa + juros computed against an overdue
+    transaction. The values are stored on the document so the UI can render
+    `valor_devido` on the fly without persisting it every poll."""
+    enabled: bool = False
+    multa_pct: float = 0.0       # one-shot, applied once after due_date
+    juros_dia_pct: float = 0.0   # compounded daily after due_date
+
+
 class TransactionCreate(BaseModel):
     direction: str  # 'entrada' | 'saida'
     description: str
@@ -562,6 +581,8 @@ class TransactionCreate(BaseModel):
     due_date: Optional[str] = None  # vencimento for accounts payable/receivable
     status: str = "pago"  # 'pago' | 'pendente'
     notes: Optional[str] = None
+    recurrence: Optional[RecurrenceConfig] = None
+    late_fee: Optional[LateFeeConfig] = None
 
 
 class TransactionUpdate(BaseModel):
@@ -574,6 +595,7 @@ class TransactionUpdate(BaseModel):
     due_date: Optional[str] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    late_fee: Optional[LateFeeConfig] = None
 
 
 @router.get("/financial/transactions")
@@ -598,6 +620,7 @@ async def list_transactions(
         query["status"] = status
     txns = await db.financial_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     fees = await _get_payment_fees(db, user["company_id"])
+    from finance_helpers import compute_late_fee_amount
     for t in txns:
         gross = float(t.get("amount", 0) or 0)
         # Backfill defaults for legacy records
@@ -607,6 +630,16 @@ async def list_transactions(
         t["gross_amount"] = round(gross, 2)
         t["fee_amount"] = round(fee_amount, 2)
         t["net_amount"] = round(gross - fee_amount, 2)
+        # Late-fee preview (multa + juros) when the bill is still pending
+        # and is past its due_date. Computed here so the UI never duplicates
+        # the math — same numbers reported in lists, dashboards and PDFs.
+        lf = t.get("late_fee") or {}
+        if lf.get("enabled") and t.get("status") == "pendente":
+            t["late_fee_computed"] = compute_late_fee_amount(
+                gross, t.get("due_date"),
+                float(lf.get("multa_pct") or 0),
+                float(lf.get("juros_dia_pct") or 0),
+            )
     return txns
 
 
@@ -621,27 +654,69 @@ async def create_transaction(
     if data.status not in ("pago", "pendente"):
         raise HTTPException(status_code=400, detail="status deve ser 'pago' ou 'pendente'")
 
-    txn = {
-        "id": str(uuid.uuid4()),
-        "company_id": user["company_id"],
-        "type": "receita" if data.direction == "entrada" else "despesa",
-        "direction": data.direction,
-        "status": data.status,
-        "amount": float(data.amount or 0),
-        "payment_method": data.payment_method or "outros",
-        "category": data.category or "outros",
-        "description": data.description,
-        "date": data.date,
-        "due_date": data.due_date or data.date,
-        "notes": data.notes,
-        "manual": True,
-        "created_by": user["id"],
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if data.status == "pago":
-        txn["paid_at"] = datetime.now(timezone.utc).isoformat()
-    await db.financial_transactions.insert_one(txn)
-    return {k: v for k, v in txn.items() if k != "_id"}
+    # ── Recurrence expansion ────────────────────────────────────────────
+    # When the operator ticks "Recorrente" we materialise N future
+    # occurrences upfront (capped to 24 months) so they show in reports
+    # immediately. Each sibling shares a `recurrence_group_id` for later
+    # bulk-edit/cancel. Status of the future ones is always 'pendente'.
+    from finance_helpers import generate_recurrence_dates
+    dates_seq: list[str] = []
+    recurrence_group: Optional[str] = None
+    if data.recurrence:
+        dates_seq = generate_recurrence_dates(
+            data.due_date or data.date,
+            data.recurrence.interval,
+            data.recurrence.until,
+        )
+        if dates_seq:
+            recurrence_group = str(uuid.uuid4())
+    if not dates_seq:
+        dates_seq = [data.due_date or data.date]
+
+    inserted: list = []
+    for idx, due_iso in enumerate(dates_seq):
+        is_seed = (idx == 0)
+        # Only the SEED occurrence may be created in `pago` state. Future
+        # siblings are always pending so the operator can settle them as
+        # the months go by.
+        status = data.status if is_seed else "pendente"
+        txn = {
+            "id": str(uuid.uuid4()),
+            "company_id": user["company_id"],
+            "type": "receita" if data.direction == "entrada" else "despesa",
+            "direction": data.direction,
+            "status": status,
+            "amount": float(data.amount or 0),
+            "payment_method": data.payment_method or "outros",
+            "category": data.category or "outros",
+            "description": data.description if is_seed else f"{data.description} ({idx+1}/{len(dates_seq)})",
+            "date": due_iso if not is_seed else data.date,
+            "due_date": due_iso,
+            "notes": data.notes,
+            "manual": True,
+            "created_by": user["id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if recurrence_group:
+            txn["recurrence_group_id"] = recurrence_group
+            txn["recurrence_interval"] = data.recurrence.interval
+            txn["recurrence_index"] = idx
+            txn["recurrence_total"] = len(dates_seq)
+        if data.late_fee and data.late_fee.enabled:
+            txn["late_fee"] = {
+                "enabled": True,
+                "multa_pct": float(data.late_fee.multa_pct or 0),
+                "juros_dia_pct": float(data.late_fee.juros_dia_pct or 0),
+            }
+        if status == "pago":
+            txn["paid_at"] = datetime.now(timezone.utc).isoformat()
+        await db.financial_transactions.insert_one(txn)
+        inserted.append({k: v for k, v in txn.items() if k != "_id"})
+    # Return the seed transaction (single-create UX), plus the count of
+    # siblings for the toast.
+    response = inserted[0]
+    response["_siblings_created"] = len(inserted) - 1
+    return response
 
 
 @router.put("/financial/transactions/{txn_id}")

@@ -12,6 +12,7 @@ import {
   Receipt, Package, Copy, HandCoins, ShieldCheck, Wrench
 } from 'lucide-react';
 import SgpRepairTab from './SgpRepairTab';
+import { AdmLancamentosPanel } from './AdmLancamentosPanel';
 
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
@@ -852,6 +853,7 @@ const FinancialTab = ({ companies }) => {
   const [subTab, setSubTab] = useState('summary');
   const tabs = [
     { key: 'summary', label: 'Resumo' },
+    { key: 'lancamentos', label: 'Lancamentos' },
     { key: 'invoices', label: 'Faturas' },
     { key: 'expenses', label: 'Despesas' },
     { key: 'commissions', label: 'Comissoes' },
@@ -873,6 +875,7 @@ const FinancialTab = ({ companies }) => {
         ))}
       </div>
       {subTab === 'summary' && <FinancialSummaryPanel />}
+      {subTab === 'lancamentos' && <AdmLancamentosPanel />}
       {subTab === 'invoices' && <InvoicesPanel companies={companies} />}
       {subTab === 'expenses' && <ExpensesPanel />}
       {subTab === 'commissions' && <CommissionsPanel />}

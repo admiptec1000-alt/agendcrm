@@ -4579,6 +4579,10 @@ const LancamentosView = ({ startDate, endDate, filterMethod, fees, onChanged }) 
       due_date: it.due_date || it.date || todayIso,
       status: it.status || 'pago',
       notes: it.notes || '',
+      // Preserve any saved late-fee config so editing doesn't drop it.
+      late_fee_enabled: !!(it.late_fee && it.late_fee.enabled),
+      multa_pct: it.late_fee?.multa_pct || 2.0,
+      juros_dia_pct: it.late_fee?.juros_dia_pct || 0.033,
     });
     setShowModal(true);
   };
@@ -4587,14 +4591,36 @@ const LancamentosView = ({ startDate, endDate, filterMethod, fees, onChanged }) 
     if (!form.description.trim()) { toast.error('Informe a descricao'); return; }
     const amount = parseFloat(String(form.amount).replace(',', '.')) || 0;
     if (amount <= 0) { toast.error('Valor deve ser maior que zero'); return; }
-    const payload = { ...form, amount };
+    // Map flat form keys to nested payload the backend expects
+    const {
+      recurrence_enabled, recurrence_interval, recurrence_until,
+      late_fee_enabled, multa_pct, juros_dia_pct, ...base
+    } = form;
+    const payload = { ...base, amount };
+    if (recurrence_enabled && !editing) {
+      payload.recurrence = {
+        interval: recurrence_interval || 'mensal',
+        until: recurrence_until || null,
+      };
+    }
+    if (late_fee_enabled) {
+      payload.late_fee = {
+        enabled: true,
+        multa_pct: parseFloat(multa_pct) || 0,
+        juros_dia_pct: parseFloat(juros_dia_pct) || 0,
+      };
+    }
     try {
       if (editing) {
         await schedulingAPI.updateFinancialTransaction(editing.id, payload);
         toast.success('Lancamento atualizado!');
       } else {
-        await schedulingAPI.createFinancialTransaction(payload);
-        toast.success('Lancamento criado!');
+        const { data } = await schedulingAPI.createFinancialTransaction(payload);
+        if (data && data._siblings_created > 0) {
+          toast.success(`Lancamento + ${data._siblings_created} parcelas recorrentes criados!`);
+        } else {
+          toast.success('Lancamento criado!');
+        }
       }
       setShowModal(false);
       reload();
@@ -4783,6 +4809,54 @@ const LancamentosView = ({ startDate, endDate, filterMethod, fees, onChanged }) 
               <div>
                 <label className="text-[10px] font-bold uppercase text-slate-400">Observacoes (opcional)</label>
                 <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} rows={2} className="input-field text-sm" />
+              </div>
+
+              {/* Recurrence block — only show when creating, not editing */}
+              {!editing && (
+                <div className={`rounded-lg border-2 p-3 transition-colors ${form.recurrence_enabled ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 bg-white'}`}>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={!!form.recurrence_enabled} onChange={e => setForm({...form, recurrence_enabled: e.target.checked})} data-testid="modal-tx-recurrence-enabled" />
+                    <span className="font-semibold text-xs text-slate-700">Lancamento recorrente</span>
+                  </label>
+                  {form.recurrence_enabled && (
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Periodicidade</label>
+                        <select value={form.recurrence_interval || 'mensal'} onChange={e => setForm({...form, recurrence_interval: e.target.value})} className="input-field text-sm" data-testid="modal-tx-recurrence-interval">
+                          <option value="mensal">Mensal</option>
+                          <option value="semanal">Semanal</option>
+                          <option value="anual">Anual</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Repetir ate (opcional)</label>
+                        <input type="date" value={form.recurrence_until || ''} onChange={e => setForm({...form, recurrence_until: e.target.value})} className="input-field text-sm" data-testid="modal-tx-recurrence-until" />
+                      </div>
+                      <p className="col-span-2 text-[11px] text-slate-600">Cria o lancamento atual + parcelas futuras (max 24). Cada parcela nasce como Pendente.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Late fee block */}
+              <div className={`rounded-lg border-2 p-3 transition-colors ${form.late_fee_enabled ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white'}`}>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={!!form.late_fee_enabled} onChange={e => setForm({...form, late_fee_enabled: e.target.checked})} data-testid="modal-tx-latefee-enabled" />
+                  <span className="font-semibold text-xs text-slate-700">Cobrar multa e juros apos vencimento</span>
+                </label>
+                {form.late_fee_enabled && (
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400">Multa unica (%)</label>
+                      <input type="number" step="0.01" min="0" value={form.multa_pct || 2.0} onChange={e => setForm({...form, multa_pct: e.target.value})} className="input-field text-sm" data-testid="modal-tx-multa-pct" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400">Juros por dia (%)</label>
+                      <input type="number" step="0.001" min="0" value={form.juros_dia_pct || 0.033} onChange={e => setForm({...form, juros_dia_pct: e.target.value})} className="input-field text-sm" data-testid="modal-tx-juros-pct" />
+                    </div>
+                    <p className="col-span-2 text-[11px] text-slate-600">Calcula automaticamente apos vencimento: valor + multa + (juros x dias atraso).</p>
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex justify-end gap-2 p-3 border-t border-slate-200">

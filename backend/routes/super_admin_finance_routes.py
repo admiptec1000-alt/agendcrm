@@ -341,3 +341,240 @@ async def impersonate_operational_company(
         "company_slug": company.get("subdomain") or company.get("slug"),
         "company_name": company.get("name"),
     }
+
+
+
+# ── Financeiro ADM: Contas a Pagar / Receber (super-admin scoped) ─────────
+#
+# Mirrors the company-level `/api/scheduling/financial/transactions` API but
+# scoped to the SaaS operator itself: their own platform-running expenses
+# (infra bills, contractors, taxes) and the receivables they emit to
+# customers (mensalidades, setup fees) outside of the automated `invoices`
+# stream. Stored in a SEPARATE collection so there's no cross-tenant leak.
+
+class _RecurrenceIn(BaseModel):
+    interval: str  # mensal | semanal | anual
+    until: Optional[str] = None
+
+
+class _LateFeeIn(BaseModel):
+    enabled: bool = False
+    multa_pct: float = 0.0
+    juros_dia_pct: float = 0.0
+
+
+class AdmTxnIn(BaseModel):
+    direction: str  # 'entrada' | 'saida'
+    description: str = Field(..., min_length=1)
+    amount: float
+    payment_method: Optional[str] = "outros"
+    category: Optional[str] = "outros"
+    date: str
+    due_date: Optional[str] = None
+    status: str = "pago"  # 'pago' | 'pendente'
+    notes: Optional[str] = None
+    recurrence: Optional[_RecurrenceIn] = None
+    late_fee: Optional[_LateFeeIn] = None
+
+
+class AdmTxnUpdate(BaseModel):
+    direction: Optional[str] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    payment_method: Optional[str] = None
+    category: Optional[str] = None
+    date: Optional[str] = None
+    due_date: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    late_fee: Optional[_LateFeeIn] = None
+
+
+@router.get("/finance/transactions")
+async def adm_list_transactions(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    payment_method: Optional[str] = None,
+    direction: Optional[str] = None,
+    status: Optional[str] = None,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    q: dict = {}
+    if start_date:
+        q["date"] = {"$gte": start_date}
+    if end_date:
+        q.setdefault("date", {})["$lte"] = end_date
+    if payment_method:
+        q["payment_method"] = payment_method
+    if direction:
+        q["direction"] = direction
+    if status:
+        q["status"] = status
+    rows = await db.super_admin_transactions.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    from finance_helpers import compute_late_fee_amount
+    for t in rows:
+        gross = float(t.get("amount") or 0)
+        t.setdefault("direction", "entrada")
+        t.setdefault("status", "pago")
+        t["gross_amount"] = round(gross, 2)
+        t["net_amount"] = round(gross, 2)
+        lf = t.get("late_fee") or {}
+        if lf.get("enabled") and t.get("status") == "pendente":
+            t["late_fee_computed"] = compute_late_fee_amount(
+                gross, t.get("due_date"),
+                float(lf.get("multa_pct") or 0),
+                float(lf.get("juros_dia_pct") or 0),
+            )
+    return rows
+
+
+@router.post("/finance/transactions")
+async def adm_create_transaction(
+    data: AdmTxnIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    sa: dict = Depends(require_super_admin),
+):
+    if data.direction not in ("entrada", "saida"):
+        raise HTTPException(400, "direction deve ser 'entrada' ou 'saida'")
+    if data.status not in ("pago", "pendente"):
+        raise HTTPException(400, "status deve ser 'pago' ou 'pendente'")
+
+    from finance_helpers import generate_recurrence_dates
+    dates_seq: list[str] = []
+    recurrence_group: Optional[str] = None
+    if data.recurrence:
+        dates_seq = generate_recurrence_dates(
+            data.due_date or data.date,
+            data.recurrence.interval,
+            data.recurrence.until,
+        )
+        if dates_seq:
+            recurrence_group = str(uuid.uuid4())
+    if not dates_seq:
+        dates_seq = [data.due_date or data.date]
+
+    inserted: list = []
+    for idx, due_iso in enumerate(dates_seq):
+        is_seed = (idx == 0)
+        status = data.status if is_seed else "pendente"
+        txn: dict = {
+            "id": str(uuid.uuid4()),
+            "direction": data.direction,
+            "status": status,
+            "amount": float(data.amount or 0),
+            "payment_method": data.payment_method or "outros",
+            "category": data.category or "outros",
+            "description": data.description if is_seed else f"{data.description} ({idx+1}/{len(dates_seq)})",
+            "date": due_iso if not is_seed else data.date,
+            "due_date": due_iso,
+            "notes": data.notes,
+            "created_by": sa.get("id") or sa.get("sub"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if recurrence_group:
+            txn["recurrence_group_id"] = recurrence_group
+            txn["recurrence_interval"] = data.recurrence.interval
+            txn["recurrence_index"] = idx
+            txn["recurrence_total"] = len(dates_seq)
+        if data.late_fee and data.late_fee.enabled:
+            txn["late_fee"] = {
+                "enabled": True,
+                "multa_pct": float(data.late_fee.multa_pct or 0),
+                "juros_dia_pct": float(data.late_fee.juros_dia_pct or 0),
+            }
+        if status == "pago":
+            txn["paid_at"] = datetime.now(timezone.utc).isoformat()
+        await db.super_admin_transactions.insert_one(txn)
+        inserted.append({k: v for k, v in txn.items() if k != "_id"})
+    out = inserted[0]
+    out["_siblings_created"] = len(inserted) - 1
+    return out
+
+
+@router.put("/finance/transactions/{txn_id}")
+async def adm_update_transaction(
+    txn_id: str,
+    data: AdmTxnUpdate,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "amount" in update:
+        update["amount"] = float(update["amount"] or 0)
+    if "status" in update and update["status"] == "pago":
+        update["paid_at"] = datetime.now(timezone.utc).isoformat()
+    if "late_fee" in update and isinstance(update["late_fee"], dict):
+        update["late_fee"] = {
+            "enabled": bool(update["late_fee"].get("enabled")),
+            "multa_pct": float(update["late_fee"].get("multa_pct") or 0),
+            "juros_dia_pct": float(update["late_fee"].get("juros_dia_pct") or 0),
+        }
+    r = await db.super_admin_transactions.update_one({"id": txn_id}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Lancamento nao encontrado")
+    return await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
+
+
+@router.post("/finance/transactions/{txn_id}/pay")
+async def adm_mark_paid(
+    txn_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    r = await db.super_admin_transactions.update_one(
+        {"id": txn_id},
+        {"$set": {"status": "pago", "paid_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(404, "Lancamento nao encontrado")
+    return await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
+
+
+@router.delete("/finance/transactions/{txn_id}")
+async def adm_delete_transaction(
+    txn_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    r = await db.super_admin_transactions.delete_one({"id": txn_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Lancamento nao encontrado")
+    return {"ok": True}
+
+
+@router.get("/finance/summary")
+async def adm_finance_summary(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    q: dict = {}
+    if start_date:
+        q["date"] = {"$gte": start_date}
+    if end_date:
+        q.setdefault("date", {})["$lte"] = end_date
+    rows = await db.super_admin_transactions.find(q, {"_id": 0}).to_list(5000)
+    entradas = [t for t in rows if t.get("direction") == "entrada"]
+    saidas = [t for t in rows if t.get("direction") == "saida"]
+    bruto_entradas = sum(float(t.get("amount") or 0) for t in entradas if t.get("status") == "pago")
+    bruto_saidas = sum(float(t.get("amount") or 0) for t in saidas if t.get("status") == "pago")
+    pendentes_entrada = sum(float(t.get("amount") or 0) for t in entradas if t.get("status") == "pendente")
+    pendentes_saida = sum(float(t.get("amount") or 0) for t in saidas if t.get("status") == "pendente")
+    by_method: dict = {}
+    for t in entradas:
+        if t.get("status") != "pago":
+            continue
+        pm = t.get("payment_method") or "outros"
+        by_method[pm] = round(by_method.get(pm, 0.0) + float(t.get("amount") or 0), 2)
+    return {
+        "bruto": round(bruto_entradas, 2),
+        "saidas": round(bruto_saidas, 2),
+        "liquido": round(bruto_entradas - bruto_saidas, 2),
+        "pendente_entrada": round(pendentes_entrada, 2),
+        "pendente_saida": round(pendentes_saida, 2),
+        "transaction_count": len(rows),
+        "ticket_medio": round(bruto_entradas / len(entradas), 2) if entradas else 0,
+        "by_payment_method": by_method,
+    }
