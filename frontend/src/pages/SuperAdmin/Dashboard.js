@@ -55,7 +55,7 @@ const SuperAdminDashboard = () => {
     }
   };
 
-  const sidebarItems = [
+  const allSidebarItems = [
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { key: 'companies', label: 'Empresas', icon: Building },
     { key: 'business-types', label: 'Tipos de Negocio', icon: Briefcase },
@@ -66,6 +66,21 @@ const SuperAdminDashboard = () => {
     { key: 'sgp-repair', label: 'Reparo SGP', icon: Wrench },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
   ];
+
+  // The Super-Admin niche (business_type with base_type=super_admin) governs
+  // which sidebar entries are visible. We always keep `business-types` and
+  // `settings` visible so an operator who accidentally disables everything
+  // can still recover by re-toggling features.
+  const saFeatures = (user?.business_type?.features || []);
+  const featureMap = Object.fromEntries(
+    saFeatures.map(f => [f.feature_key, !!f.enabled])
+  );
+  const ALWAYS_VISIBLE = new Set(['business-types', 'settings']);
+  const sidebarItems = saFeatures.length > 0
+    ? allSidebarItems.filter(i =>
+        ALWAYS_VISIBLE.has(i.key) || featureMap[i.key] !== false
+      )
+    : allSidebarItems;
 
   const openOperationalPanel = async () => {
     try {

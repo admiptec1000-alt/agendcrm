@@ -91,6 +91,11 @@ def _node_text(n: dict, vars_: dict, missing: Optional[set] = None) -> Optional[
 
 
 _VAR_RE = re.compile(r"\{\{\s*([\w\.\-]+)\s*\}\}")
+# Accept SGP-native single-curly placeholders too (their docs show things like
+# `{link_pix_html}`, `{linhadigitavel}`). We only match keys that look like
+# identifiers so we don't accidentally swallow `{0}` style format strings or
+# JSON blocks. Negative lookarounds avoid double-matching `{{var}}`.
+_VAR_RE_SINGLE = re.compile(r"(?<!\{)\{\s*([a-zA-Z_][\w\.\-]*)\s*\}(?!\})")
 
 # Placeholders the engine considers "critical": if the flow tries to send a
 # message containing one of these and the corresponding var is empty, the
@@ -137,7 +142,11 @@ def _interpolate(text: str, vars_: dict, missing: Optional[set] = None) -> str:
         if cur in (None, "", False) and missing is not None:
             missing.add(key)
         return str(cur or "")
-    return _VAR_RE.sub(_sub, text)
+    out = _VAR_RE.sub(_sub, text)
+    # Second pass: single-curly placeholders for compatibility with the
+    # native SGP template format the operator copy-pastes from their docs.
+    out = _VAR_RE_SINGLE.sub(_sub, out)
+    return out
 
 
 def _next_edge(edges: List[dict], from_node_id: str, source_handle: Optional[str] = None) -> Optional[dict]:
@@ -446,8 +455,23 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
                 f.get("vencimento") or f.get("vencimento_original")
                 or f.get("datavencimento") or ""
             )
-            out["pix_copia_e_cola"] = f.get("codigopix") or ""
-            out["pix_qr_url"] = f.get("link_pix_html") or ""
+            out["pix_copia_e_cola"] = f.get("codigopix") or f.get("pix_copia_e_cola") or ""
+            # Several SGP tenants expose the Pix payment URL under different
+            # field names — keep them ALL as aliases so the operator can use
+            # whichever they're used to in their templates:
+            #   {{link_pix}}        → SGP-native single-link
+            #   {{link_pix_html}}   → SGP-native interactive page
+            #   {{pix_qr_url}}      → our legacy alias
+            link_pix = (
+                f.get("link_pix") or f.get("linkPix") or data.get("link_pix") or ""
+            )
+            link_pix_html = (
+                f.get("link_pix_html") or f.get("linkPixHtml")
+                or data.get("link_pix_html") or ""
+            )
+            out["link_pix"] = link_pix
+            out["link_pix_html"] = link_pix_html
+            out["pix_qr_url"] = link_pix_html or link_pix or ""
             out["fatura_protocolo"] = data.get("protocolo") or ""
             out["fatura_encontrada"] = bool(out.get("boleto_url") or out.get("linha_digitavel") or out.get("pix_copia_e_cola"))
         elif action == "verificaacesso":

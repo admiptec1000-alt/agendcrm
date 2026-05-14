@@ -132,6 +132,15 @@ async def seed_business_types(db):
                    "assinaturas", "profissionais", "financeiro", "comissoes", "meu_site",
                    "conexoes", "chat_interno", "notificacoes", "configuracoes", "relatorios"]
     ]
+    # Super-admin niche: lets you turn each super-admin module on/off the
+    # same way a tenant type does. Keys MUST match the sidebar item keys in
+    # /app/frontend/src/pages/SuperAdmin/Dashboard.js so the UI can hide
+    # entries based on the active super-admin's business type.
+    sa_features = [
+        {"feature_key": k, "enabled": True}
+        for k in ["dashboard", "companies", "payments", "support",
+                   "my-panel", "sgp-repair", "financial", "settings"]
+    ]
     now = datetime.now(timezone.utc).isoformat()
     default_types = [
         {"id": str(uuid.uuid4()), "name": "Salao de Beleza", "description": "Para saloes, barbearias e studios de beleza",
@@ -142,6 +151,13 @@ async def seed_business_types(db):
          "icon": "Headphones", "base_type": "crm", "features": crm_features, "is_active": True, "created_at": now},
         {"id": str(uuid.uuid4()), "name": "Completo (CRM + Agendamento)", "description": "Todas as funcionalidades de CRM e Agendamento",
          "icon": "LayoutGrid", "base_type": "both", "features": crm_features + sched_features, "is_active": True, "created_at": now},
+        # The super-admin niche behaves like any other business type — it's
+        # toggled via the same UI — but is applied to the SaaS operator's
+        # own login, NOT to a tenant company. The "Tipos de Negócio" panel
+        # lets you tick/untick which super-admin modules appear in the
+        # sidebar (dashboard, companies, payments, …).
+        {"id": str(uuid.uuid4()), "name": "Super Admin", "description": "Painel operacional do SaaS — escolha quais modulos do super-admin ficam visiveis",
+         "icon": "Shield", "base_type": "super_admin", "features": sa_features, "is_active": True, "created_at": now},
     ]
     await db.business_types.insert_many(default_types)
     logger.info(f"Created {len(default_types)} default business types")
@@ -309,6 +325,33 @@ async def backfill_feature_keys(db):
             await coll.update_one({"_id": doc["_id"]}, {"$set": {"features": new_feats}})
     await _consolidate_api_feature(db.business_types)
     await _consolidate_api_feature(db.companies)
+
+    # Idempotently seed the Super-Admin niche on existing installs that
+    # were seeded before this BT existed. We only insert when no BT with
+    # base_type=super_admin is present — safe to run on every startup.
+    existing_sa = await db.business_types.count_documents({"base_type": "super_admin"})
+    if existing_sa == 0:
+        sa_feats = [
+            {"feature_key": k, "enabled": True}
+            for k in ["dashboard", "companies", "payments", "support",
+                       "my-panel", "sgp-repair", "financial", "settings"]
+        ]
+        await db.business_types.insert_one({
+            "id": str(uuid.uuid4()),
+            "name": "Super Admin",
+            "description": "Painel operacional do SaaS — escolha quais modulos do super-admin ficam visiveis",
+            "icon": "Shield",
+            "base_type": "super_admin",
+            "features": sa_feats,
+            "is_active": True,
+            "monthly_price": 0.0,
+            "billing_cycle": "monthly",
+            "installments": 1,
+            "grace_days": 5,
+            "show_on_landing": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Seeded Super Admin business type (backfill)")
 
 
 async def backfill_ticket_client_links(db):

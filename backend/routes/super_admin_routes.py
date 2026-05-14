@@ -1462,6 +1462,7 @@ PIX_CODE_ONLY_TEMPLATE = (
 )
 PIX_FOOTER_TEMPLATE = (
     "⚡ *Pix Copia-e-Cola enviado acima*\n\n"
+    "🔗 Pague pelo link: {{link_pix_html}}\n\n"
     "Vencimento: {{vencimento_fatura}}\n"
     "Valor: R$ {{valor_fatura}}\n\n"
     "_Toque e segure no codigo acima → *Copiar* → abra seu app do banco → "

@@ -220,6 +220,18 @@ async def get_current_user_info(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     if user.get("role") == "super_admin":
+        # Attach the Super-Admin niche so the frontend sidebar can hide
+        # modules the admin disabled in "Tipos de Negocio → Super Admin".
+        # We pick the SINGLE business_type whose base_type is super_admin
+        # — there's exactly one per install (seeded by `seed_business_types`
+        # and backfilled on startup). If the operator unticked everything,
+        # the frontend keeps Dashboard + Settings visible as a safety net.
+        bt = await db.business_types.find_one(
+            {"base_type": "super_admin", "is_active": True},
+            {"_id": 0}
+        )
+        if bt:
+            user["business_type"] = bt
         return user
 
     # Surface the impersonation marker so the frontend can show the
