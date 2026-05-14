@@ -1454,12 +1454,23 @@ SECOND_VIA_RICH_TEMPLATE = (
 )
 
 
-# Pix message: SINGLE bubble with ONLY the copia-e-cola code in a code-block
-# so the customer can long-press → "copiar" it in one go. Vencimento + valor
-# go in a follow-up bubble so they don't break the auto-copy on iOS WhatsApp.
-PIX_CODE_ONLY_TEMPLATE = (
-    "```\n{{pix_copia_e_cola}}\n```"
+# Pix bubble — single message with ONLY the SGP-issued public Pix link.
+# This is the same URL the SGP sends in its automated 2-days-before-due-date
+# reminder. The customer taps and lands on a page with QR code, copy-to-Pix
+# button and bar code — much cleaner than receiving the raw EMV string in a
+# WhatsApp code block.
+PIX_LINK_TEMPLATE = (
+    "💸 *Pague seu Pix agora!*\n\n"
+    "🔗 {{link_pix_html}}\n\n"
+    "Vencimento: {{vencimento_fatura}}\n"
+    "Valor: R$ {{valor_fatura}}\n\n"
+    "_Toque no link acima — sera aberta a pagina segura do SGP com QR code, "
+    "copia-e-cola e codigo de barras._"
 )
+
+# Kept for backward compat in case the old chain still exists; treated as
+# "legacy" by the repair (will be purged & replaced with PIX_LINK_TEMPLATE).
+PIX_CODE_ONLY_TEMPLATE = "```\n{{pix_copia_e_cola}}\n```"
 PIX_FOOTER_TEMPLATE = (
     "⚡ *Pix Copia-e-Cola enviado acima*\n\n"
     "🔗 Pague pelo link: {{link_pix_html}}\n\n"
