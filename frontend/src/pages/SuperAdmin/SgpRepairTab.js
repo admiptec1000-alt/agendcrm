@@ -174,15 +174,33 @@ const SgpRepairTab = ({ companies }) => {
                 </p>
               </div>
               <div className="shrink-0">
-                {rep.ok ? (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Sem problemas
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold">
-                    <AlertTriangle className="w-3.5 h-3.5" /> {(rep.issues || []).length} problema(s)
-                  </span>
-                )}
+                {(() => {
+                  // Audit returns `ok=true` when there are no DIAGNOSTIC
+                  // issues — but the repair may still have ACTIONS to apply
+                  // (force text mode, rewire Pix, etc) that are surfaced
+                  // only via dry-run. We refresh the badge once a dry-run
+                  // has been executed so the operator sees the real status.
+                  const dr = appliedByFlow[rep.flow_id];
+                  if (dr && dr.dry_run && dr.changes_count > 0) {
+                    return (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold">
+                        <AlertTriangle className="w-3.5 h-3.5" /> {dr.changes_count} reparo(s) pendente(s)
+                      </span>
+                    );
+                  }
+                  if (rep.ok) {
+                    return (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Sem problemas
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold">
+                      <AlertTriangle className="w-3.5 h-3.5" /> {(rep.issues || []).length} problema(s)
+                    </span>
+                  );
+                })()}
               </div>
             </div>
 
@@ -232,8 +250,7 @@ const SgpRepairTab = ({ companies }) => {
                     repair(rep.flow_id, false);
                   }
                 }}
-                disabled={rep.ok}
-                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5"
                 data-testid={`sgp-apply-${rep.flow_id}`}
               >
                 <Play className="w-3.5 h-3.5" /> Aplicar reparo
