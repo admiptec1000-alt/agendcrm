@@ -288,20 +288,60 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
                     c.get("contratoStatusDisplay") or c.get("statusexibicao")
                     or c.get("status") or "—"
                 )
-                # Build a human address with safe fallbacks. Some SGP tenants
-                # return the address in `endereco` (already joined); others
-                # break it into `logradouro`/`numero`/`bairro`. Avoid the
-                # ugly literal "undefined, undefined - undefined" by checking
-                # each piece independently.
-                endereco_raw = c.get("endereco")
-                if not endereco_raw or "undefined" in str(endereco_raw).lower():
-                    log = (c.get("logradouro") or "").strip()
-                    num = (c.get("numero") or c.get("numero_endereco") or "").strip()
-                    bai = (c.get("bairro") or "").strip()
-                    parts = [p for p in [log, num and f"nº {num}"] if p]
-                    head = ", ".join(parts) if parts else ""
-                    endereco_raw = (head + (f" - {bai}" if bai else "")).strip(" -,") or "Endereco nao informado"
-                plano = c.get("planoInternet") or c.get("planointernet") or c.get("plano") or ""
+                # Build a human address from a LOT of possible field names.
+                # Different SGP tenants serialise the address differently:
+                #   • `endereco` as a string (already joined)
+                #   • `endereco` as a dict ({logradouro, numero, bairro})
+                #   • flat keys at the contract level (`logradouro`, …)
+                #   • flat keys at the CLIENT level (when SGP returns the
+                #     address shared across all contratos of the same
+                #     person — only `cliente` carries it)
+                # We try every shape until we get something printable.
+                def _addr_from(d: Any) -> str:
+                    if not isinstance(d, dict):
+                        return ""
+                    log = (d.get("logradouro") or d.get("rua") or d.get("address") or "").strip()
+                    num = (d.get("numero") or d.get("numero_endereco") or d.get("number") or "").strip()
+                    bai = (d.get("bairro") or d.get("neighbourhood") or "").strip()
+                    cid = (d.get("cidade") or d.get("municipio") or "").strip()
+                    uf = (d.get("uf") or d.get("estado") or "").strip()
+                    head_parts = [p for p in [log, num and f"nº {num}"] if p]
+                    head = ", ".join(head_parts) if head_parts else ""
+                    tail_parts = [p for p in [bai, cid and uf and f"{cid}/{uf}" or cid or uf] if p]
+                    tail = " - " + " - ".join(tail_parts) if tail_parts else ""
+                    return (head + tail).strip(" -,")
+
+                endereco_raw = ""
+                # 1) Direct string at the contract
+                if isinstance(c.get("endereco"), str):
+                    cand = c["endereco"].strip()
+                    if cand and "undefined" not in cand.lower():
+                        endereco_raw = cand
+                # 2) Dict at the contract
+                if not endereco_raw and isinstance(c.get("endereco"), dict):
+                    endereco_raw = _addr_from(c["endereco"])
+                # 3) Flat keys at the contract
+                if not endereco_raw:
+                    endereco_raw = _addr_from(c)
+                # 4) `enderecoInstalacao` (alternate field on some SGPs)
+                if not endereco_raw and isinstance(c.get("enderecoInstalacao"), (str, dict)):
+                    val = c.get("enderecoInstalacao")
+                    endereco_raw = val.strip() if isinstance(val, str) else _addr_from(val)
+                # 5) Fall back to the CLIENTE-level address (top-level data
+                #    OR the matching item inside `clientes[]`).
+                if not endereco_raw:
+                    if isinstance(data.get("endereco"), str):
+                        endereco_raw = data["endereco"].strip()
+                    elif isinstance(data.get("endereco"), dict):
+                        endereco_raw = _addr_from(data["endereco"])
+                    elif isinstance(cli, dict):
+                        endereco_raw = _addr_from(cli)
+                if not endereco_raw:
+                    endereco_raw = "Endereco nao informado"
+                plano = (
+                    c.get("planoInternet") or c.get("planointernet") or c.get("plano")
+                    or c.get("planoNome") or c.get("plano_internet") or ""
+                )
                 label = f"Contrato {cid} ({status})" if cid else status
                 # Concise one-line for buttons (max 20 chars per button title)
                 title_btn = f"#{cid}" if cid else (status[:18] if status else "Contrato")

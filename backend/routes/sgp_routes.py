@@ -15,6 +15,9 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 from database import get_database
 from auth import get_current_user, require_super_admin
@@ -431,6 +434,23 @@ async def sgp_proxy(
             payload = r.json()
         except Exception:
             payload = {"raw": r.text}
+        # Debug aid: log the top-level keys + a sample contract so we can
+        # diagnose missing fields like the customer's "endereco" complaint
+        # without having to dump the entire JSON to logs. PII (token, cpf)
+        # never gets printed.
+        try:
+            if isinstance(payload, dict):
+                keys = list(payload.keys())
+                contratos = payload.get("contratos") if isinstance(payload.get("contratos"), list) else []
+                sample_contract_keys = (
+                    list(contratos[0].keys()) if contratos and isinstance(contratos[0], dict) else []
+                )
+                logger.info(
+                    f"[sgp/{action}] resp keys={keys} #contratos={len(contratos)} "
+                    f"sample_contract_keys={sample_contract_keys[:30]}"
+                )
+        except Exception:
+            pass
         return {"status": r.status_code, "ok": r.status_code < 400, "data": payload}
     except httpx.HTTPError as e:
         raise HTTPException(502, f"Erro ao chamar SGP: {e}")

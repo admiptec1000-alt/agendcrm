@@ -1529,6 +1529,12 @@ def _audit_sgp_flow_report(flow: dict) -> dict:
 
     fatura_nodes = [n for n in nodes if _sgp_action_of(n) == "fatura2via"]
     for fn in fatura_nodes:
+        # Skip Pix-flavoured HTTPs (their URL was rewritten from /api/sgp/pix*
+        # to /api/sgp/fatura2via by a prior repair, but their downstream
+        # message must remain Pix-formatted). Detect via label.
+        fn_label = ((fn.get("data") or {}).get("label") or "").lower()
+        if "pix" in fn_label:
+            continue
         downstream = [by_id.get(e["target"]) for e in edges_by_src.get(fn["id"], [])]
         downstream = [d for d in downstream if d]
         rich = False
