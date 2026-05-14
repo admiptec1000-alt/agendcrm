@@ -47,7 +47,18 @@ def _node_type(n: dict) -> str:
 def _node_text(n: dict, vars_: dict, missing: Optional[set] = None) -> Optional[str]:
     d = n.get("data") or {}
     cfg = d.get("config") or {}
-    text = cfg.get("text") or d.get("text") or d.get("message") or d.get("content")
+    # Menu nodes store the prompt under `question` in the operator UI; message
+    # nodes store it under `text`. We accept BOTH for both node types so a
+    # repair/migration that swapped the key still renders correctly. Without
+    # this fallback the engine emits "Escolha uma opcao:" stripped of any
+    # template (and {{contratos_menu}} never gets interpolated).
+    text = (
+        cfg.get("text")
+        or cfg.get("question")
+        or d.get("text")
+        or d.get("message")
+        or d.get("content")
+    )
     if not isinstance(text, str):
         return None
     out = _interpolate(text, vars_, missing=missing)
