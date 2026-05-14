@@ -9,8 +9,9 @@ import {
   Briefcase, BarChart3, Eye, Check, Scissors, Stethoscope,
   Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe,
   Monitor, ExternalLink, Tv, Link as LinkIcon, RefreshCw,
-  Receipt, Package, Copy, HandCoins, ShieldCheck
+  Receipt, Package, Copy, HandCoins, ShieldCheck, Wrench
 } from 'lucide-react';
+import SgpRepairTab from './SgpRepairTab';
 
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
@@ -61,6 +62,7 @@ const SuperAdminDashboard = () => {
     { key: 'financial', label: 'Financeiro Admin', icon: Receipt },
     { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'my-panel', label: 'Meu Painel', icon: ShieldCheck },
+    { key: 'sgp-repair', label: 'Reparo SGP', icon: Wrench },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
   ];
 
@@ -206,6 +208,7 @@ const SuperAdminDashboard = () => {
           {activeTab === 'financial' && <FinancialTab companies={companies} />}
           {activeTab === 'indoor' && <IndoorTab companies={companies} />}
           {activeTab === 'my-panel' && <MyOperationalPanelTab onOpen={openOperationalPanel} onGoToSettings={() => setActiveTab('settings')} />}
+          {activeTab === 'sgp-repair' && <SgpRepairTab companies={companies} />}
           {activeTab === 'settings' && <SettingsTab companies={companies} />}
         </div>
       </main>
