@@ -1661,8 +1661,8 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
                 "config": {
                     "title": "Seus contratos",
                     "question": (
-                        "Ola {{nome_cliente}}!\n"
-                        "Selecione o contrato para o atendimento:\n\n"
+                        "Encontrei seus contratos!\n"
+                        "Selecione abaixo qual deseja para o atendimento:\n\n"
                         "{{contratos_menu}}\n\n"
                         "Digite o numero da opcao (ex: 0)."
                     ),
@@ -1814,10 +1814,20 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
             cfg["options_format"] = "text"
             touched = True
         q = cfg.get("question") or ""
-        if "{{contratos_menu}}" not in q:
+        # Force update when the question still uses `{{nome_cliente}}` — that
+        # placeholder is in `_CRITICAL_PLACEHOLDERS`, so when the SGP response
+        # lacks a `razaoSocial` (which happens for legitimate customers whose
+        # SGP record only has contratos[] and no top-level name) the engine
+        # emits "Cliente nao encontrado" — even though contratos_lista has
+        # valid contracts. Removing it gracefully shows the list anyway.
+        needs_question_refresh = (
+            "{{contratos_menu}}" not in q
+            or "{{nome_cliente}}" in q
+        )
+        if needs_question_refresh:
             cfg["question"] = (
-                "Ola {{nome_cliente}}!\n"
-                "Selecione o contrato para o atendimento:\n\n"
+                "Encontrei seus contratos!\n"
+                "Selecione abaixo qual deseja para o atendimento:\n\n"
                 "{{contratos_menu}}\n\n"
                 "Digite o numero da opcao (ex: 0)."
             )

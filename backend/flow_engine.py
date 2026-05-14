@@ -179,31 +179,51 @@ async def _send_whatsapp_interactive(ticket: dict, payload: dict):
         return False
 
 
-async def _send_whatsapp(ticket: dict, text: str):
-    """Fire-and-forget WhatsApp send via local microservice."""
+async def _send_whatsapp(ticket: dict, text: str) -> Optional[str]:
+    """Send a WhatsApp message via the local microservice and return the
+    Baileys-issued `message_id` (or None on failure). The caller MUST stamp
+    that id on the persisted message so the inbound `messages.upsert` echo
+    (fromMe=true) gets deduplicated by `channels_routes` — otherwise every
+    bot message would appear twice in the operator UI."""
     try:
         wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
         target = ticket.get("lid_jid") if ticket.get("pending_lid_resolution") else ticket.get("customer_phone")
         if not (ticket.get("connection_id") and target):
-            return
+            return None
         async with httpx.AsyncClient(timeout=15.0) as cli:
-            await cli.post(
+            r = await cli.post(
                 f"{wa_url}/instances/{ticket['connection_id']}/send",
                 json={"phone": target, "message": text},
             )
+            if r.status_code != 200:
+                return None
+            payload = r.json() if r.content else {}
+            return payload.get("message_id")
     except Exception as e:
         logger.warning(f"[flow_engine] send failed: {e}")
+        return None
 
 
-async def _persist_outgoing(db, ticket_id: str, text: str, flow_id: str):
+async def _persist_outgoing(db, ticket_id: str, text: str, flow_id: str,
+                            wa_message_id: Optional[str] = None):
     msg = {
         "id": str(uuid.uuid4()),
         "ticket_id": ticket_id,
         "content": text,
         "sender_type": "agent",
         "sender_id": None,
+        # Human-friendly label so the operator can tell an automated message
+        # apart from one typed by a teammate. Without this, the UI defaults
+        # to "Admin", which confuses operators into thinking a human pushed
+        # the reply.
+        "sender_name": "Bot (Flow)",
         "channel": "whatsapp",
-        "wa_message_id": None,
+        # Stamp the Baileys-issued id so the from-me echo coming via the
+        # /webhook/message route hits the dedup branch (existing_ids check)
+        # and is NOT inserted a second time. When the engine runs in dry-run
+        # (no real WA call), this stays None — and the echo path won't fire
+        # anyway because nothing was sent over the network.
+        "wa_message_id": wa_message_id,
         "auto_flow_id": flow_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -493,12 +513,17 @@ async def advance_flow(
     logger.info(f"[flow_engine] advance start flow={flow_id} ticket={tid} is_initial={is_initial} incoming_text={(incoming_text or '')[:80]!r} prev_node={ticket.get('active_flow_node_id')!r}")
 
     async def _emit_and_persist(text: str):
-        """Send text outbound and persist as agent message. Honours dry_run."""
+        """Send text outbound and persist as agent message. Honours dry_run.
+        Crucially we SEND FIRST (capturing the Baileys message_id) and only
+        then persist locally with that id stamped. This makes the outgoing
+        echo from /webhook/message hit the dedup branch and prevents the
+        same bot reply from showing up twice in the operator UI."""
         sent.append(text)
         if dry_run:
             return
-        await _persist_outgoing(db, ticket["id"], text, flow_id)
-        await _send_whatsapp(ticket, text)
+        wa_msg_id = await _send_whatsapp(ticket, text)
+        await _persist_outgoing(db, ticket["id"], text, flow_id,
+                                wa_message_id=wa_msg_id)
 
     # Determine starting node + branch
     current_id: Optional[str] = None
@@ -666,6 +691,21 @@ async def advance_flow(
             static_items = cfg_menu.get("options") or []
             options_items = dynamic_items or static_items
 
+            # Friendly fallback when the menu has a dynamic source but the
+            # upstream (typically SGP /consultacliente) returned nothing.
+            # Without this we'd render an empty list with just the header
+            # "Encontrei seus contratos!" and the customer would be stuck.
+            if dynamic_source and not dynamic_items and not static_items:
+                friendly = (
+                    "Nao localizei contratos vinculados ao CPF/CNPJ informado. "
+                    "Verifique o numero digitado e tente novamente, ou escolha "
+                    "*Falar com atendente* enviando \"4\"."
+                )
+                await _emit_and_persist(friendly)
+                if not dry_run:
+                    await _save_state(db, ticket["id"], flow_id, None, vars_)
+                return sent
+
             sent_interactive = False
             if options_items and options_format in ("buttons", "list") and not dry_run:
                 if options_format == "buttons" and len(options_items) <= 3:
@@ -698,6 +738,12 @@ async def advance_flow(
                     })
                 # Persist the message so the agent UI shows it (without the
                 # actual interactive widget — just the printable text).
+                # Note: the interactive path doesn't currently surface the
+                # Baileys message_id back here, so the persisted record has
+                # wa_message_id=None and the from-me echo may insert a
+                # second copy. This is fine for `text` mode pickers (which
+                # is what the SGP repair uses) — they go through
+                # `_emit_and_persist` below which DOES dedup correctly.
                 if sent_interactive:
                     await _persist_outgoing(db, ticket["id"], text, flow_id)
                     sent.append(text)
