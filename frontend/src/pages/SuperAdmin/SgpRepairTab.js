@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import api from '../../services/api';
 import {
   Wrench, Search, AlertTriangle, CheckCircle2, Download,
-  RefreshCw, Building, ChevronRight, Play, ScrollText,
+  RefreshCw, Building, ChevronRight, Play, ScrollText, Bug,
 } from 'lucide-react';
 
 // Map issue codes returned by GET /audit-sgp-flow* to friendly Portuguese
@@ -25,7 +25,9 @@ const ACTION_LABELS = {
   fix_corrupt_http_body: 'Reparar body HTTP corrompido ([object Object])',
   clear_picker_static_options: 'Remover opcoes estaticas do picker dinamico',
   rewire_pix_to_fatura2via: 'Reaproveitar fatura2via para o caminho Pix',
-  rewire_pix_to_fatura2via_and_attach_msg: 'Reaproveitar fatura2via + criar mensagem do Pix (copia-e-cola)',
+  rewire_pix_to_fatura2via_and_attach_msg: 'Reaproveitar fatura2via + criar mensagem do Pix (legado 2 bolhas)',
+  attach_pix_link_message: 'Anexar mensagem do Pix com link publico {{link_pix_html}}',
+  purge_legacy_pix_chain: 'Remover bolhas legadas do Pix (codigo copia-e-cola)',
 };
 
 const SgpRepairTab = ({ companies }) => {
@@ -33,6 +35,35 @@ const SgpRepairTab = ({ companies }) => {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(false);
   const [appliedByFlow, setAppliedByFlow] = useState({}); // flow_id -> last apply result
+
+  // SGP fatura2via debug state — used to inspect the EXACT response the
+  // SGP returns for a given CPF + contrato so we can confirm whether
+  // `links[0].link_pix_html` is actually populated.
+  const [dbgCpf, setDbgCpf] = useState('');
+  const [dbgContrato, setDbgContrato] = useState('');
+  const [dbgLoading, setDbgLoading] = useState(false);
+  const [dbgResult, setDbgResult] = useState(null);
+
+  const runDebugFatura = async () => {
+    if (!companyId) { toast.error('Selecione uma empresa.'); return; }
+    if (!dbgCpf) { toast.error('Informe o CPF/CNPJ.'); return; }
+    setDbgLoading(true);
+    setDbgResult(null);
+    try {
+      const params = { cpfcnpj: dbgCpf };
+      if (dbgContrato) params.contrato = dbgContrato;
+      const { data } = await api.post(
+        `/sgp/super-admin/debug-fatura2via/${companyId}`,
+        { params },
+      );
+      setDbgResult(data);
+      toast.success('Resposta do SGP carregada.');
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao consultar SGP');
+    } finally {
+      setDbgLoading(false);
+    }
+  };
 
   const runAudit = async (cid) => {
     if (!cid) {
@@ -144,6 +175,82 @@ const SgpRepairTab = ({ companies }) => {
             Auditar Fluxos SGP
           </button>
         </div>
+      </div>
+
+      {/* SGP fatura2via debug panel */}
+      <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4" data-testid="sgp-debug-fatura-panel">
+        <div className="flex items-start gap-3 mb-3">
+          <div className="p-2 rounded-lg bg-amber-100 text-amber-700 shrink-0">
+            <Bug className="w-4 h-4" />
+          </div>
+          <div className="flex-1">
+            <h3 className="text-sm font-bold text-slate-900">Diagnostico SGP fatura2via</h3>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Consulta o SGP da empresa selecionada e mostra os campos brutos da fatura
+              + o preview das variaveis do Flowbuilder (<code className="font-mono">{'{{link_pix_html}}'}</code>,
+              {' '}<code className="font-mono">{'{{boleto_url}}'}</code>, etc).
+              Use quando o cliente reclamar que o Pix chegou vazio (<code>""</code>).
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr_auto] gap-2">
+          <input
+            type="text"
+            placeholder="CPF/CNPJ (ex: 016.570.219-20)"
+            value={dbgCpf}
+            onChange={(e) => setDbgCpf(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 bg-white"
+            data-testid="sgp-debug-fatura-cpf-input"
+          />
+          <input
+            type="text"
+            placeholder="Contrato (opcional)"
+            value={dbgContrato}
+            onChange={(e) => setDbgContrato(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 bg-white"
+            data-testid="sgp-debug-fatura-contrato-input"
+          />
+          <button
+            onClick={runDebugFatura}
+            disabled={dbgLoading || !companyId}
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-50"
+            data-testid="sgp-debug-fatura-run-btn"
+          >
+            {dbgLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Bug className="w-4 h-4" />}
+            Consultar SGP
+          </button>
+        </div>
+        {dbgResult && (
+          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3" data-testid="sgp-debug-fatura-result">
+            <div className="rounded-lg border border-slate-200 bg-white p-3">
+              <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">
+                Variaveis do Flowbuilder (preview)
+              </p>
+              <div className="space-y-1 max-h-64 overflow-auto">
+                {Object.entries(dbgResult.flow_vars_preview || {}).map(([k, v]) => {
+                  const isEmpty = v === '' || v === null || v === undefined;
+                  return (
+                    <div key={k} className="flex items-start gap-2 text-xs font-mono">
+                      <span className="text-slate-500 shrink-0">{`{{${k}}}`}</span>
+                      <span className="text-slate-400">=</span>
+                      <span className={isEmpty ? 'text-rose-600 italic' : 'text-slate-800 break-all'}>
+                        {isEmpty ? '(vazio)' : String(v)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-white p-3">
+              <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">
+                Resposta crua do SGP (status {dbgResult.status})
+              </p>
+              <pre className="text-[10px] font-mono text-slate-700 bg-slate-50 p-2 rounded max-h-64 overflow-auto">
+{JSON.stringify(dbgResult.data, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Reports */}

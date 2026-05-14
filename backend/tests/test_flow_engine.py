@@ -104,7 +104,7 @@ def test_initial_trigger_sends_welcome_and_menu_then_waits():
 
     assert len(sent) == 2, f"expected 2 outgoing messages, got {sent}"
     assert "Olá Joao!" in msgs[0]
-    assert "Escolha:" in msgs[1] and "1. Ver planos" in msgs[1]
+    assert "Escolha:" in msgs[1] and "[ 1 ] - Ver planos" in msgs[1]
     assert saved["active_flow_id"] == "flow-A"
     assert saved["active_flow_node_id"] == "menu"
     # The label "Inicio" must NEVER be sent
@@ -386,3 +386,46 @@ def test_flatten_fatura2via_real_sgp_shape():
     assert out["pix_qr_url"].startswith("https://web.sgp.net.br/pix/")
     assert out["pix_copia_e_cola"].startswith("00020101")
     assert out["fatura_encontrada"] is True
+
+
+
+def test_flatten_fatura2via_falls_back_when_link_pix_html_missing():
+    """Some SGP tenants don't expose `link_pix_html` per invoice — the
+    public cobranca URL (`link_cobranca`) is always present though. The
+    flatten must use that as the fallback so `{{link_pix_html}}` never
+    renders as empty in the Pix bubble."""
+    real_no_pix_html = {
+        "status": 1,
+        "razaoSocial": "TESTE CLIENTE",
+        "links": [{
+            "id": 99,
+            "fatura": 1,
+            "valor": 100.0,
+            "vencimento": "2026-06-01",
+            "linhadigitavel": "12345",
+            "link": "https://web.sgp.net.br/boleto/1-ABC/",
+            "link_cobranca": "https://web.sgp.net.br/public/cobranca/1-ABC/",
+            "codigopix": "",  # <-- empty pix copy-and-paste
+            # NOTE: no `link_pix_html` field at all
+        }],
+    }
+    out = flow_engine._flatten_sgp_response("fatura2via", real_no_pix_html)
+    # Falls back to link_cobranca for the Pix bubble.
+    assert out["link_pix_html"] == "https://web.sgp.net.br/public/cobranca/1-ABC/"
+    assert out["pix_qr_url"] == "https://web.sgp.net.br/public/cobranca/1-ABC/"
+    # Boleto URL stays distinct.
+    assert out["boleto_url"] == "https://web.sgp.net.br/boleto/1-ABC/"
+
+
+def test_interpolate_handles_single_and_double_curly_link_pix_html():
+    """Both `{link_pix_html}` (SGP-native single-brace) and `{{link_pix_html}}`
+    (flowbuilder-native double-brace) must be substituted by the same var."""
+    text_single = "Link: {link_pix_html}"
+    text_double = "Link: {{link_pix_html}}"
+    vars_ = {"link_pix_html": "https://example.com/pix"}
+    assert flow_engine._interpolate(text_single, vars_) == "Link: https://example.com/pix"
+    assert flow_engine._interpolate(text_double, vars_) == "Link: https://example.com/pix"
+    # When the var is empty, both formats render as just "Link: " (no quotes).
+    empty_vars = {"link_pix_html": ""}
+    assert flow_engine._interpolate(text_single, empty_vars) == "Link: "
+    assert flow_engine._interpolate(text_double, empty_vars) == "Link: "

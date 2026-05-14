@@ -9,6 +9,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
+
+### 2026-05-14 — Pix do fluxo SGP usando link público `{{link_pix_html}}` ✅
+
+**Problema:** No bot do WhatsApp (fluxo SGP), a bolha de Pix chegava ao cliente exibindo literalmente `""` (aspas vazias) no lugar do código copia-e-cola, porque alguns tenants do SGP não preenchem o campo `codigopix` para certos contratos. O cliente pediu para o Pix ser entregue como **link HTML público** (campo `link_pix_html` do SGP) — o mesmo link que o SGP envia automaticamente 2 dias antes do vencimento, com QR code, copia-e-cola e código de barras já renderizados.
+
+**Mudanças aplicadas:**
+
+1. **`/app/backend/flow_engine.py` (`_flatten_sgp_response` action `fatura2via`)**: quando `links[0].link_pix_html` vier vazio, faz **fallback automático** para `link_cobranca` (página pública do SGP com QR + copia-e-cola) e em último caso para `link` (boleto). Garante que `{{link_pix_html}}` NUNCA renderize em string vazia se o SGP devolver pelo menos um link público.
+
+2. **`/app/backend/routes/super_admin_routes.py` (`_repair_sgp_flow_data`)**: a cadeia legada de **2 bolhas** (`pix_code_*` com `{{pix_copia_e_cola}}` + `pix_footer_*`) foi substituída por **1 única bolha** `pix_link_*` que usa o template `PIX_LINK_TEMPLATE`:
+   ```
+   💸 *Pague seu Pix agora!*
+   🔗 {{link_pix_html}}
+   Vencimento: {{vencimento_fatura}}
+   Valor: R$ {{valor_fatura}}
+   ```
+   O repair detecta e **purga** automaticamente cadeias antigas (`pix_code_*`/`pix_footer_*` ou nodes cujo texto contenha `pix_copia_e_cola`) e cria a bolha nova. Idempotente.
+
+3. **Novo endpoint debug `POST /api/sgp/super-admin/debug-fatura2via/{company_id}`** (`/app/backend/routes/sgp_routes.py`): aceita `{params:{cpfcnpj, contrato}}` e devolve resposta crua do SGP **+** preview das variáveis do Flowbuilder (`flow_vars_preview`) para o operador confirmar visualmente se `link_pix_html` está presente para aquele cliente. Token redacted no echo.
+
+4. **`/app/frontend/src/pages/SuperAdmin/SgpRepairTab.js`**: novo painel "Diagnóstico SGP fatura2via" — campos CPF/CNPJ + Contrato + botão "Consultar SGP". Mostra duas colunas: variáveis do Flowbuilder (com `(vazio)` em vermelho quando o campo não vier) e JSON cru do SGP. Action labels atualizados para `attach_pix_link_message` e `purge_legacy_pix_chain`.
+
+**Testes (`/app/backend/tests/`):**
+- `test_flow_engine.py::test_flatten_fatura2via_falls_back_when_link_pix_html_missing` ✓
+- `test_flow_engine.py::test_interpolate_handles_single_and_double_curly_link_pix_html` ✓
+- `test_sgp_pix_repair.py::test_pix_repair_creates_single_link_bubble_from_scratch` ✓
+- `test_sgp_pix_repair.py::test_pix_repair_migrates_legacy_two_bubble_chain` ✓
+- `test_sgp_pix_repair.py::test_pix_repair_is_idempotent` ✓
+
+**Como aplicar em produção:** Super Admin → SGP Repair → selecionar empresa → **Auditar Fluxos SGP** → em cada flow card, clicar **Pré-visualizar reparo** (deve listar `purge_legacy_pix_chain` + `attach_pix_link_message`) e depois **Aplicar reparo**.
+
 ### 2026-05-13 (B) — Botão "Abrir atendimento" em Contatos + Bloqueio de tickets duplicados ✅
 
 **Bug 1: Botão "Abrir atendimento" (ícone de chat verde) nos cards de Contatos não fazia nada**

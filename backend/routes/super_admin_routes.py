@@ -1908,12 +1908,21 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
     # ── 6) Replace the orphan Pix node (calls a non-existent endpoint and
     # has no outgoing edge — so the customer's "Pix" selection silently
     # dies). We re-point it at /api/sgp/fatura2via (which already returns
-    # `pix_copia_e_cola`) and append TWO downstream message nodes:
-    #   (a) "code-only" bubble with the Pix wrapped in ``` so iPhone/Android
-    #       WhatsApp shows it as a code block → long-press = Copy.
-    #   (b) "footer" bubble with vencimento + valor + instructions.
-    # Two bubbles is intentional — combining them in one message breaks the
-    # one-tap copy behaviour on most WhatsApp clients.
+    # `link_pix_html`) and attach a SINGLE downstream message using
+    # PIX_LINK_TEMPLATE.
+    #
+    # IMPORTANT: this used to attach TWO bubbles (code-only + footer) which
+    # rendered the raw `pix_copia_e_cola` EMV string. Some SGP tenants leave
+    # `codigopix` empty for certain customers (the customer reported seeing
+    # ` "" ` in WhatsApp — that was the empty EMV string echoed inside the
+    # code-block bubble). The new single-bubble template uses the public
+    # `link_pix_html` URL which the SGP page renders with QR + copy-paste +
+    # bar code, so it works even when `codigopix` is absent.
+    #
+    # The repair is IDEMPOTENT: re-running it on flows that already have the
+    # legacy 2-bubble chain DETECTS those nodes by id prefix (`pix_code_*` /
+    # `pix_footer_*`) or by content (`pix_copia_e_cola` placeholder) and
+    # MIGRATES them to the single-bubble layout.
     edges_by_src_pix: dict = {}
     for e in new_edges:
         edges_by_src_pix.setdefault(e.get("source"), []).append(e)
@@ -1946,16 +1955,19 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
         n["data"]["config"] = cfg
 
         downstream_edges = edges_by_src_pix.get(n["id"], [])
+        # Detect any LEGACY Pix message bubble(s) — single, two-bubble, or
+        # any combination — and PURGE them. They'll be replaced below with
+        # a single canonical bubble using PIX_LINK_TEMPLATE.
+        purged_now: list = []
         if downstream_edges:
-            # Old repair runs may have left a single-bubble `pix_msg_*` here.
-            # We want TWO bubbles (code-only + footer) so the customer can
-            # long-press → Copy without dragging the rest of the text. So:
-            # if the existing downstream message looks like a Pix bubble
-            # (contains pix_copia_e_cola) OR a legacy combined boleto+pix
-            # bubble, we DELETE that node + edge and replace with the
-            # 2-bubble chain below.
-            for e in downstream_edges:
-                target_id = e.get("target")
+            visit_queue = [e.get("target") for e in downstream_edges]
+            visited: set = set()
+            to_delete_ids: set = set()
+            while visit_queue:
+                target_id = visit_queue.pop(0)
+                if not target_id or target_id in visited:
+                    continue
+                visited.add(target_id)
                 target_node = next((nn for nn in nodes if nn.get("id") == target_id), None)
                 if not target_node:
                     continue
@@ -1965,70 +1977,58 @@ def _repair_sgp_flow_data(flow: dict) -> tuple:
                     continue
                 cfg_t = t_data.get("config") or {}
                 cur_text = cfg_t.get("text") or ""
-                # Only delete nodes that look like Pix-related (or the legacy
-                # combined boleto+pix) — leave anything else alone.
-                if ("pix_copia_e_cola" in cur_text or "Pix Copia-e-Cola" in cur_text
-                        or "Copia-e-Cola" in cur_text
-                        or "boleto_url" in cur_text
-                        or "2a via" in cur_text.lower() or "2ª via" in cur_text.lower()
-                        or target_id.startswith(("pix_msg", "pix_code", "pix_footer"))):
-                    # Remove the node + its outgoing edges that go to other
-                    # `pix_footer_*` siblings created by older runs.
-                    to_delete_ids = {target_id}
-                    for ee in new_edges:
-                        if ee.get("source") == target_id:
-                            ftid = ee.get("target")
-                            fn2 = next((nn for nn in nodes if nn.get("id") == ftid), None)
-                            if not fn2:
-                                continue
-                            fcfg = (fn2.get("data") or {}).get("config") or {}
-                            fctext = fcfg.get("text") or ""
-                            if "Pix" in fctext or "pix" in fctext:
-                                to_delete_ids.add(ftid)
-                    nodes[:] = [nn for nn in nodes if nn.get("id") not in to_delete_ids]
-                    new_edges[:] = [
-                        ee for ee in new_edges
-                        if ee.get("source") not in to_delete_ids
-                        and ee.get("target") not in to_delete_ids
-                    ]
-                    # And drop the edge from Pix HTTP → this old node.
-                    new_edges[:] = [ee for ee in new_edges
-                                     if not (ee.get("source") == n["id"]
-                                             and ee.get("target") == target_id)]
-                    changes.append({
-                        "action": "purge_legacy_pix_chain",
-                        "pix_node": n["id"],
-                        "purged_nodes": list(to_delete_ids),
-                    })
-            # Recompute whether there's still any downstream edge.
+                looks_pix = (
+                    "pix_copia_e_cola" in cur_text
+                    or "link_pix_html" in cur_text
+                    or "link_pix" in cur_text
+                    or "pix_qr_url" in cur_text
+                    or "Copia-e-Cola" in cur_text
+                    or "Pix" in cur_text
+                    or "💸" in cur_text
+                    or "💳 Pix" in cur_text
+                    or target_id.startswith(("pix_msg", "pix_code", "pix_footer", "pix_link"))
+                )
+                if not looks_pix:
+                    continue
+                to_delete_ids.add(target_id)
+                # Follow this node's outgoing edges in case there's a chain
+                # (code → footer) so we delete the whole legacy Pix sequence.
+                for ee in new_edges:
+                    if ee.get("source") == target_id:
+                        visit_queue.append(ee.get("target"))
+            if to_delete_ids:
+                nodes[:] = [nn for nn in nodes if nn.get("id") not in to_delete_ids]
+                new_edges[:] = [
+                    ee for ee in new_edges
+                    if ee.get("source") not in to_delete_ids
+                    and ee.get("target") not in to_delete_ids
+                ]
+                purged_now = list(to_delete_ids)
+                changes.append({
+                    "action": "purge_legacy_pix_chain",
+                    "pix_node": n["id"],
+                    "purged_nodes": purged_now,
+                })
+            # Recompute remaining downstream edges from THIS Pix HTTP node.
             downstream_edges = [ee for ee in new_edges if ee.get("source") == n["id"]]
 
         if not downstream_edges:
-            # Build the (code, footer) message pair.
-            code_id = f"pix_code_{uuid.uuid4().hex[:6]}"
-            footer_id = f"pix_footer_{uuid.uuid4().hex[:6]}"
+            # Build the SINGLE canonical Pix bubble (link-only).
+            link_id = f"pix_link_{uuid.uuid4().hex[:6]}"
             n_pos = n.get("position") or {"x": 0, "y": 0}
             nodes.append({
-                "id": code_id, "type": "flow",
+                "id": link_id, "type": "flow",
                 "position": {"x": n_pos.get("x", 0), "y": (n_pos.get("y", 0) or 0) + 160},
-                "data": {"nodeType": "message", "label": "Enviar Pix (codigo copiavel)",
-                         "config": {"text": PIX_CODE_ONLY_TEMPLATE}},
+                "data": {"nodeType": "message", "label": "Enviar Pix (link publico)",
+                         "config": {"text": PIX_LINK_TEMPLATE}},
             })
-            nodes.append({
-                "id": footer_id, "type": "flow",
-                "position": {"x": n_pos.get("x", 0), "y": (n_pos.get("y", 0) or 0) + 320},
-                "data": {"nodeType": "message", "label": "Pix - instrucoes",
-                         "config": {"text": PIX_FOOTER_TEMPLATE}},
-            })
-            new_edges.append({"id": f"e_{n['id']}_{code_id}",
-                              "source": n["id"], "target": code_id})
-            new_edges.append({"id": f"e_{code_id}_{footer_id}",
-                              "source": code_id, "target": footer_id})
+            new_edges.append({"id": f"e_{n['id']}_{link_id}",
+                              "source": n["id"], "target": link_id})
             changes.append({
-                "action": "rewire_pix_to_fatura2via_and_attach_msg",
+                "action": "attach_pix_link_message",
                 "pix_node": n["id"],
-                "pix_message_node": code_id,
-                "pix_footer_node": footer_id,
+                "pix_message_node": link_id,
+                "purged_legacy_nodes": purged_now,
             })
         else:
             changes.append({

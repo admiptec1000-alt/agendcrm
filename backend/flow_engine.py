@@ -469,6 +469,19 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
                 f.get("link_pix_html") or f.get("linkPixHtml")
                 or data.get("link_pix_html") or ""
             )
+            # When the SGP tenant doesn't expose `link_pix_html` (some
+            # operators only return `codigopix` and the boleto URL), fall
+            # back to the public payment page (`link_cobranca`) or the
+            # boleto link so the customer ALWAYS receives something tappable
+            # in the Pix message. This is what the customer originally
+            # asked for: a public Pix link instead of the raw copia-e-cola
+            # string — when SGP can't supply a Pix-specific URL, the
+            # cobranca page still serves the QR code + copia-e-cola.
+            if not link_pix_html:
+                link_pix_html = (
+                    f.get("link_cobranca") or data.get("link_cobranca")
+                    or f.get("link") or data.get("link") or ""
+                )
             out["link_pix"] = link_pix
             out["link_pix_html"] = link_pix_html
             out["pix_qr_url"] = link_pix_html or link_pix or ""

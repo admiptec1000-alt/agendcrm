@@ -430,6 +430,57 @@ async def sgp_debug_consultacliente(
     return {"status": r.status_code, "url": url, "data": payload}
 
 
+# Same idea, but for `fatura2via`. Use this when the customer reports that
+# the Pix bubble shows up empty (`""`) in WhatsApp — it tells us whether
+# the SGP actually populates `links[0].link_pix_html` for that contract,
+# or whether the operator needs to use the fallback (`link_cobranca`).
+@router.post("/super-admin/debug-fatura2via/{company_id}")
+async def sgp_debug_fatura2via(
+    company_id: str,
+    data: SgpProxyIn,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    cfg = await db.sgp_configs.find_one({"company_id": company_id}, {"_id": 0})
+    if not cfg or not cfg.get("enabled") or not cfg.get("base_url") or not cfg.get("token"):
+        raise HTTPException(400, "Integracao SGP nao configurada para esta empresa")
+    url = cfg["base_url"].rstrip("/") + "/api/ura/fatura2via/"
+    params = data.params or {}
+    # Sanitize CPF/CNPJ-like params: SGP expects digits only.
+    import re as _re
+    clean = {}
+    for k, v in params.items():
+        if k in ("cpfcnpj", "cpf", "cnpj") and isinstance(v, str):
+            clean[k] = _re.sub(r"\D", "", v)
+        else:
+            clean[k] = v
+    body = {**clean, "token": cfg["token"], "app": cfg.get("app") or "8ip"}
+    async with httpx.AsyncClient(timeout=20.0) as cli:
+        r = await cli.post(url, json=body)
+    try:
+        payload = r.json()
+    except Exception:
+        payload = {"raw": r.text}
+    if isinstance(payload, dict) and "token" in payload:
+        payload["token"] = "<redacted>"
+    # Also run the flow_engine flatten so the super-admin can see EXACTLY
+    # which variables the Flowbuilder will inject for this contract — this
+    # is what tells you whether `{{link_pix_html}}` will render or be empty.
+    flat = {}
+    try:
+        from flow_engine import _flatten_sgp_response
+        if isinstance(payload, dict):
+            flat = _flatten_sgp_response("fatura2via", payload)
+    except Exception as e:
+        flat = {"_flatten_error": str(e)}
+    return {
+        "status": r.status_code,
+        "url": url,
+        "data": payload,
+        "flow_vars_preview": flat,
+    }
+
+
 # ---------- Proxy ----------
 # Declared at the END of the module so the {action} catch-all does NOT match
 # concrete routes like /import-flow, /config, /config/test, /super-admin/...
