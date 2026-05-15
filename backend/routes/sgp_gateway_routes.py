@@ -71,6 +71,14 @@ WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
 _RECENT_CALLS: dict = {}
 _RECENT_CALLS_MAX = 20
 
+# Dedup cache for SGP retries: maps sha1(gateway_id|phone|message) -> last
+# timestamp this combo was processed. SGP frequently retries the same
+# payload (their outbound queue is impatient on timeouts) — without this,
+# the customer receives the same Pix link 2-3 times in rapid succession.
+# Single-process state; if we ever shard the backend we'll need Redis.
+_DEDUP_CACHE: dict = {}
+_DEDUP_WINDOW_SECONDS = 30
+
 
 def _record_gateway_call(token: str, entry: dict) -> None:
     arr = _RECENT_CALLS.setdefault(token, [])
@@ -289,6 +297,48 @@ async def _handle_send(
         raise HTTPException(400, "Numero de celular invalido")
 
     company_id = gw["company_id"]
+
+    # --- Dedup: SGP frequently retries the same payload (its outbound queue
+    # has internal retry on timeout) — in production we saw the SAME Pix
+    # message arrive twice within seconds and BOTH be delivered to the end
+    # customer. Reject the 2nd identical (phone+message hash) call inside a
+    # 30s window. We store the hash on the gateway document itself with a
+    # TTL field, but here we just compare timestamps from the in-memory
+    # cache `_DEDUP_CACHE`. Keeps the implementation simple and per-process
+    # (single-instance backend deployment).
+    import hashlib as _h
+    dedup_key = _h.sha1(f"{gw['id']}|{phone}|{message}".encode("utf-8")).hexdigest()
+    now_ts = datetime.now(timezone.utc).timestamp()
+    last_ts = _DEDUP_CACHE.get(dedup_key)
+    if last_ts and (now_ts - last_ts) < _DEDUP_WINDOW_SECONDS:
+        logger.info(
+            f"[sgp_gateway] DEDUP hit token={gw.get('token','')[:6]}… "
+            f"phone={phone[:6]}… msg_len={len(message)} age={now_ts - last_ts:.1f}s"
+        )
+        return {
+            "success": True,
+            "ticket_id": None,
+            "deduplicated": True,
+            "note": "Mensagem identica enviada recentemente; ignorada (dedup 30s).",
+        }
+    _DEDUP_CACHE[dedup_key] = now_ts
+    # Best-effort GC: prune any entries older than the window to keep memory
+    # bounded without a separate cron. O(n) but n stays small (few hundred).
+    if len(_DEDUP_CACHE) > 500:
+        cutoff = now_ts - _DEDUP_WINDOW_SECONDS
+        for k in list(_DEDUP_CACHE.keys()):
+            if _DEDUP_CACHE[k] < cutoff:
+                _DEDUP_CACHE.pop(k, None)
+
+    # Read company-level toggle for auto-close. Default OFF so existing
+    # tenants don't get a surprise behavior change; new tenants opt-in via
+    # the toggle on /configuracoes.
+    comp = await db.companies.find_one(
+        {"id": company_id},
+        {"_id": 0, "sgp_gateway_auto_close": 1},
+    ) or {}
+    auto_close = bool(comp.get("sgp_gateway_auto_close"))
+
     # Find an OPEN ticket for this number (same connection). Reuse to keep
     # a single conversation thread per contact.
     ticket = await db.tickets.find_one(
@@ -371,11 +421,22 @@ async def _handle_send(
         new_msg["status"] = "failed"
         new_msg["error"] = result.get("error", "Unknown error")
 
+    # Build ticket update. When auto_close is ON and we sent successfully,
+    # close the ticket right now — keeps the inbox clean from one-shot SGP
+    # notifications. If the customer replies later, a NEW ticket will be
+    # opened by the inbound webhook (the open-ticket lookup above filters
+    # `status NOT IN ['fechado','cancelado']`).
+    update_set: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if auto_close and result.get("success"):
+        update_set["status"] = "fechado"
+        update_set["closed_at"] = update_set["updated_at"]
+        update_set["closed_reason"] = "sgp_gateway_auto_close"
+
     await db.tickets.update_one(
         {"id": ticket["id"]},
         {
             "$push": {"messages": new_msg},
-            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+            "$set": update_set,
         },
     )
 

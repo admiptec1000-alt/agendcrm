@@ -31,6 +31,7 @@ from routes.sgp_gateway_routes import router as sgp_gateway_router
 from routes.asaas_routes import router as asaas_router
 from routes.partners_routes import router as partners_router
 from routes.super_admin_finance_routes import router as super_admin_finance_router
+from routes.internal_routes import router as internal_router, ensure_wa_cache_indexes
 
 # Import auth functions
 from auth import get_password_hash
@@ -67,6 +68,7 @@ api_router.include_router(sgp_router)
 api_router.include_router(asaas_router)
 api_router.include_router(partners_router)
 api_router.include_router(super_admin_finance_router)
+api_router.include_router(internal_router)
 
 # Include the API router in the main app
 app.include_router(api_router)
@@ -390,6 +392,7 @@ async def startup_event():
     await backfill_feature_keys(db)
     await backfill_ticket_client_links(db)
     init_object_storage()
+    await ensure_wa_cache_indexes(db)
     # Start WhatsApp keep-alive background loop (Render free tier wake-up)
     try:
         from wa_keepalive import start_keepalive_loop

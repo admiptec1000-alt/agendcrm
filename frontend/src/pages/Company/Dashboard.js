@@ -27,6 +27,7 @@ import QueuesPage from '../CRM/QueuesPage';
 import OrcamentosPage from '../CRM/OrcamentosPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 import BotPauseSettingsCard from '../../components/BotPauseSettingsCard';
+import TicketLifecycleSettingsCard from '../../components/TicketLifecycleSettingsCard';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
@@ -6296,6 +6297,11 @@ const ConfigPage = () => {
 
       {/* Bot pause on human intervention */}
       <BotPauseSettingsCard
+        canEdit={['company_admin', 'owner', 'super_admin', 'admin'].includes((user?.role || '').toLowerCase())}
+      />
+
+      {/* Ticket lifecycle (SGP auto-close + inactivity timeout) */}
+      <TicketLifecycleSettingsCard
         canEdit={['company_admin', 'owner', 'super_admin', 'admin'].includes((user?.role || '').toLowerCase())}
       />
 

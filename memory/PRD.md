@@ -10,6 +10,58 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-15 (B) — SGP Gateway: dedup, auto-close, timeout + cache Mongo ✅
+
+**3 problemas reportados:** mensagem Pix duplicada (SGP retry), "Aguardando mensagem" persistiu apos deploy do fix Baileys (cache disco efêmero no Render), e necessidade de fechar tickets SGP automaticamente.
+
+**Mudancas:**
+
+1. **Cache Baileys agora no MongoDB** (`/app/whatsapp-service/index.js` + `/app/backend/routes/internal_routes.py`):
+   - Removida persistencia em disco (`sent-cache.json`). Disco no Render eh efemero — toda deploy zerava o cache, e o "Aguardando mensagem" voltava a aparecer.
+   - Cada `sendMessage` agora POST async para `/api/internal/wa-cache/sent` (autenticado via header `X-Internal-Token`, default `agentcrm-internal`).
+   - Collection `wa_sent_cache` com TTL index de 24h — auto-expire sem cron.
+   - No callback `getMessage`, se nao achar na memoria → fallback HTTP para Mongo antes de retornar `{conversation:''}` (que produz "Aguardando").
+
+2. **SGP Gateway dedup 30s** (`/app/backend/routes/sgp_gateway_routes.py`):
+   - Hash `sha1(gw_id|phone|message)` armazenado em memoria com timestamp.
+   - Se mesmo payload chegar dentro de 30s → retorna `{"success": true, "deduplicated": true}` SEM tocar Baileys ou DB.
+   - GC automatico quando cache passa de 500 entries (deleta apenas as fora da janela).
+   - Resolve a duplicacao do Pix vista no screenshot (Nystron 2527 recebeu mesma msg 2x em 17:15).
+
+3. **Auto-close ticket apos SGP send** (toggle `companies.sgp_gateway_auto_close`, default OFF):
+   - Quando ON, todo envio bem-sucedido via SGP Gateway fecha o ticket imediatamente (`status=fechado`, `closed_reason=sgp_gateway_auto_close`).
+   - Se cliente responde depois, NOVO ticket eh aberto pelo webhook inbound (filtro `status NOT IN ['fechado','cancelado']` ja existia).
+
+4. **Auto-close por inatividade** (toggle `companies.ticket_auto_close_hours`, default 0 = OFF):
+   - Scheduler em `/app/backend/scheduler.py::_process_ticket_auto_close` roda a cada 60s.
+   - Itera empresas com `ticket_auto_close_hours > 0`, fecha tickets em `aberto`/`em_andamento` cujo `updated_at` esteja mais antigo que N horas.
+   - Tambem limpa flags `bot_paused*` no fechamento (consistencia com close manual).
+
+5. **Endpoints novos:**
+   - `GET /api/crm/company/ticket-settings` → `{sgp_gateway_auto_close: bool, ticket_auto_close_hours: int}`
+   - `PUT /api/crm/company/ticket-settings` admin-only, cap 720h (30 dias).
+   - `GET|POST /api/internal/wa-cache/sent` para o node service (header `X-Internal-Token`).
+
+6. **Frontend:**
+   - Novo card `TicketLifecycleSettingsCard` em `/configuracoes`, abaixo do BotPauseSettings. Toggle do auto-close SGP + input numerico das horas. Mostra badge "Ativo · 2d" quando hours >= 24.
+
+**Testes (`/app/backend/tests/`):**
+- `test_sgp_gateway_dedup.py` (3 tests): cache mantem so entries recentes, hash estavel, janela de 30s.
+- `test_ticket_auto_close.py` (3 tests): threshold por empresa, hours=0 nao toca tickets, bot_paused limpa no auto-close.
+- **Total: 32 testes passando** (+ os 26 anteriores).
+
+**Validacao manual (curl):**
+- GET ticket-settings default = `{auto_close: false, hours: 0}` ✓
+- PUT seta valores e GET reflete ✓
+- POST wa-cache/sent + GET retorna mesmo payload ✓
+- GET wa-cache/sent sem header → 403 ✓
+- Chamada SGP duplicada em < 30s → segunda retorna `deduplicated: true` ✓
+
+**Deploy requirement (PRODUCAO):** Para o fix do "Aguardando mensagem" valer, precisa redeploy. O cache Mongo so eh consultado se ambos backend E whatsapp-service estiverem com o novo codigo.
+
+**Variavel de ambiente nova:** `INTERNAL_TOKEN` (opcional, default `agentcrm-internal`). Em producao, recomendado setar uma string randomica para impedir que alguem da rede interna acerte os endpoints `/api/internal/*`.
+
+
 ### 2026-05-15 — Fix "Aguardando mensagem" no SGP Gateway + diagnostico de calls ✅
 
 **Problema:** Cliente reporta que mensagens enviadas pelo SGP via novo Gateway (`/api/sgp/gateway/send/{token}`) chegam ao destinatario como o placeholder do WhatsApp "Aguardando mensagem. Essa acao pode levar alguns instantes" — em vez do texto real da mensagem.

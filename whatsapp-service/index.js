@@ -76,48 +76,57 @@ const connections = {};
 // when getMessage returns {conversation:''}).
 // We store by msgId alone AND by jid:msgId so retries succeed regardless of
 // which JID format Baileys passes back (@s.whatsapp.net vs @lid).
-// We ALSO persist the store to disk under AUTH_DIR/sent-cache.json so it
-// survives process restarts/redeploys — without that, the first deploy
-// after a customer receives an unreadable message guarantees a permanent
-// "Aguardando mensagem" because the retry can't be answered.
+//
+// PERSISTENCE: previously we kept this on the local disk (`sent-cache.json`)
+// but in production the WhatsApp service runs on a host with ephemeral
+// storage (Render/Heroku-style) — every deploy wiped the cache and any
+// retry that arrived right after lost the original payload, producing the
+// "Aguardando mensagem" placeholder on the recipient's phone. We now
+// asynchronously POST every send to the FASTAPI backend, which persists
+// it to MongoDB with a 24h TTL. On `getMessage` miss we GET back from the
+// backend before returning the empty fallback.
 const sentMessageStore = {};
 const SENT_STORE_MAX = 2000;
-const SENT_CACHE_FILE = `${AUTH_DIR}/sent-cache.json`;
-let sentCacheDirty = false;
 
-// Load any persisted cache on startup. Safe to no-op if the file doesn't
-// exist yet (fresh install / first deploy after this change ships).
-try {
-  if (fs.existsSync(SENT_CACHE_FILE)) {
-    const raw = fs.readFileSync(SENT_CACHE_FILE, 'utf8');
-    const parsed = JSON.parse(raw || '{}');
-    Object.assign(sentMessageStore, parsed);
-    console.log(`[sent-cache] loaded ${Object.keys(parsed).length} entries from disk`);
+async function persistSentToBackend(jid, msgId, message) {
+  try {
+    await axios.post(
+      `${FASTAPI_URL}/api/internal/wa-cache/sent`,
+      { jid, msg_id: msgId, message },
+      { timeout: 5000, headers: { 'X-Internal-Token': process.env.INTERNAL_TOKEN || 'agentcrm-internal' } },
+    );
+  } catch (e) {
+    // Backend down or net glitch — we still have the in-memory copy, so
+    // this is best-effort. Only the post-deploy retry window is at risk.
+    if (e.response?.status !== 404) {
+      console.warn('[sent-cache] backend persist failed:', e.message);
+    }
   }
-} catch (e) {
-  console.warn('[sent-cache] failed to load disk cache:', e.message);
 }
 
-// Flush dirty cache to disk every 10s. Frequent enough to survive a deploy
-// triggered within seconds of the last send, infrequent enough to not
-// thrash the FS on busy tenants.
-setInterval(() => {
-  if (!sentCacheDirty) return;
-  sentCacheDirty = false;
+async function fetchSentFromBackend(jid, msgId) {
   try {
-    fs.mkdirSync(AUTH_DIR, { recursive: true });
-    fs.writeFileSync(SENT_CACHE_FILE, JSON.stringify(sentMessageStore), 'utf8');
-  } catch (e) {
-    console.warn('[sent-cache] disk flush failed:', e.message);
+    const r = await axios.get(
+      `${FASTAPI_URL}/api/internal/wa-cache/sent`,
+      {
+        params: { jid, msg_id: msgId },
+        timeout: 5000,
+        headers: { 'X-Internal-Token': process.env.INTERNAL_TOKEN || 'agentcrm-internal' },
+      },
+    );
+    return r.data?.message || null;
+  } catch (_) {
+    return null;
   }
-}, 10_000).unref?.();
+}
 
 function rememberSent(jid, msgId, message) {
   if (!msgId || !message) return;
   const keys = [msgId];
   if (jid) keys.push(`${jid}:${msgId}`);
   for (const k of keys) sentMessageStore[k] = message;
-  sentCacheDirty = true;
+  // Fire-and-forget MongoDB persistence (does not block the send path).
+  persistSentToBackend(jid, msgId, message);
   const all = Object.keys(sentMessageStore);
   if (all.length > SENT_STORE_MAX) {
     // Evict oldest 200 entries to keep memory bounded
@@ -367,10 +376,25 @@ async function createConnection(instanceId) {
     syncFullHistory: false,
     // Return the original message body when the WA server requests a retry
     // (otherwise recipients receive an EMPTY message). We look up the
-    // outbound payload we cached at send-time.
+    // outbound payload we cached at send-time. If not in memory (e.g.
+    // service was redeployed since the original send), we fall through to
+    // the backend cache (MongoDB) before giving up. Returning
+    // `{conversation:''}` is what produces the "Aguardando mensagem"
+    // placeholder on the recipient's phone — so we treat it as a hard
+    // last-resort.
     getMessage: async (key) => {
       const cached = recallSent(key?.remoteJid, key?.id);
       if (cached) return cached;
+      // Backend fallback (Mongo-backed, survives deploys)
+      const fromBackend = await fetchSentFromBackend(key?.remoteJid, key?.id);
+      if (fromBackend) {
+        // Repopulate the local cache so subsequent retries don't pay the
+        // network round-trip.
+        sentMessageStore[key?.id] = fromBackend;
+        if (key?.remoteJid) sentMessageStore[`${key.remoteJid}:${key.id}`] = fromBackend;
+        return fromBackend;
+      }
+      console.warn(`[getMessage] cache miss jid=${key?.remoteJid} id=${key?.id} — returning empty conversation (recipient may see Aguardando)`);
       return { conversation: '' };
     },
   });

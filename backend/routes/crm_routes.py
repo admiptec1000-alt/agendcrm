@@ -1306,6 +1306,64 @@ async def update_company_bot_settings(
     return {"pause_bot_on_human_intervention": bool(data.pause_bot_on_human_intervention)}
 
 
+# === TICKET LIFECYCLE SETTINGS (per company) ===
+# Controls SGP-gateway auto-close (every successful outbound via the public
+# `/api/sgp/gateway/send/{token}` endpoint will fechar the ticket right
+# away) and an inactivity timeout (after N hours without any new message,
+# the scheduler closes the ticket automatically). Both default to safe
+# values: auto_close=False, timeout=0 (disabled). New customers can flip
+# them ON from /configuracoes.
+class TicketLifecycleSettingsUpdate(BaseModel):
+    sgp_gateway_auto_close: Optional[bool] = None
+    ticket_auto_close_hours: Optional[int] = None
+
+
+@router.get("/company/ticket-settings")
+async def get_company_ticket_settings(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    comp = await db.companies.find_one(
+        {"id": user["company_id"]},
+        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1},
+    ) or {}
+    return {
+        "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
+        "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
+    }
+
+
+@router.put("/company/ticket-settings")
+async def update_company_ticket_settings(
+    data: TicketLifecycleSettingsUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    role = (user.get("role") or "").lower()
+    if role not in ("company_admin", "owner", "super_admin", "admin"):
+        raise HTTPException(403, "Apenas administradores podem alterar esta configuracao")
+    update: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if data.sgp_gateway_auto_close is not None:
+        update["sgp_gateway_auto_close"] = bool(data.sgp_gateway_auto_close)
+    if data.ticket_auto_close_hours is not None:
+        hours = int(data.ticket_auto_close_hours)
+        if hours < 0 or hours > 24 * 30:  # cap at 30 days
+            raise HTTPException(400, "ticket_auto_close_hours fora do intervalo permitido (0-720)")
+        update["ticket_auto_close_hours"] = hours
+    await db.companies.update_one(
+        {"id": user["company_id"]},
+        {"$set": update},
+    )
+    comp = await db.companies.find_one(
+        {"id": user["company_id"]},
+        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1},
+    ) or {}
+    return {
+        "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
+        "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
+    }
+
+
 # === BOT-PAUSE per-ticket overrides ===
 # Operator can manually resume the bot on a paused ticket (e.g. they were
 # investigating an issue and want the flow to take over again) or pause it

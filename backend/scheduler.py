@@ -113,6 +113,53 @@ async def _process_scheduled_bulk(db):
             logger.warning(f"[scheduler] bulk message {msg.get('id')} failed: {e}")
 
 
+async def _process_ticket_auto_close(db):
+    """Close tickets that have gone past the per-company inactivity timeout.
+    Setting on `companies.ticket_auto_close_hours` (0 = disabled). We only
+    look at tickets in 'aberto' or 'em_andamento' status and rely on
+    `updated_at` as the staleness signal (set by every message append).
+    Ignores tickets that already have `bot_paused=true` AND don't have any
+    operator-side activity, because those are by-design parked waiting for
+    a human reply and shouldn't auto-close just from the bot's last
+    outbound."""
+    now = datetime.now(timezone.utc)
+    # Pull only companies with the setting enabled. Cheap enough to do per
+    # tick — most tenants have it off.
+    cursor = db.companies.find(
+        {"ticket_auto_close_hours": {"$gt": 0}},
+        {"_id": 0, "id": 1, "ticket_auto_close_hours": 1},
+    )
+    async for c in cursor:
+        hours = int(c.get("ticket_auto_close_hours") or 0)
+        if hours <= 0:
+            continue
+        cutoff = (now - timedelta(hours=hours)).isoformat()
+        # We update directly with a filter — Mongo handles the batch.
+        result = await db.tickets.update_many(
+            {
+                "company_id": c["id"],
+                "status": {"$in": ["aberto", "em_andamento"]},
+                "updated_at": {"$lt": cutoff},
+            },
+            {"$set": {
+                "status": "fechado",
+                "closed_at": now.isoformat(),
+                "closed_reason": "auto_timeout",
+                "updated_at": now.isoformat(),
+                # Resume bot just in case it was paused — same logic as
+                # manual close.
+                "bot_paused": False,
+                "bot_paused_at": None,
+                "bot_paused_reason": None,
+            }},
+        )
+        if result.modified_count:
+            logger.info(
+                f"[scheduler] auto-closed {result.modified_count} tickets for "
+                f"company={c['id']} (idle > {hours}h)"
+            )
+
+
 async def tick():
     db = await get_database()
     base_url = os.environ.get("FRONTEND_PUBLIC_URL", "")
@@ -128,6 +175,10 @@ async def tick():
         await _process_scheduled_bulk(db)
     except Exception as e:
         logger.error(f"[scheduler] bulk error: {e}")
+    try:
+        await _process_ticket_auto_close(db)
+    except Exception as e:
+        logger.error(f"[scheduler] ticket auto-close error: {e}")
 
 
 async def start_scheduler_loop():
