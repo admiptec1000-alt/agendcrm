@@ -64,6 +64,21 @@ router = APIRouter(prefix="/sgp", tags=["sgp-gateway"])
 WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
 
 
+# In-memory ring of recent gateway calls. Keyed by token (the public path
+# segment) — operator looks this up from the gateway list UI. We only keep
+# the LAST 20 calls per token so memory stays bounded (~10KB per token max).
+# Reset on process restart. Used by /api/sgp/gateways/{id}/recent-calls.
+_RECENT_CALLS: dict = {}
+_RECENT_CALLS_MAX = 20
+
+
+def _record_gateway_call(token: str, entry: dict) -> None:
+    arr = _RECENT_CALLS.setdefault(token, [])
+    arr.append(entry)
+    if len(arr) > _RECENT_CALLS_MAX:
+        del arr[: len(arr) - _RECENT_CALLS_MAX]
+
+
 # ─── helpers ────────────────────────────────────────────────────────────────
 
 def _gen_token() -> str:
@@ -215,6 +230,34 @@ async def delete_gateway(
     return {"deleted": True}
 
 
+@router.get("/gateways/{gid}/recent-calls")
+async def get_recent_calls(
+    gid: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Returns the last 20 calls that hit this gateway's public endpoint
+    (in-memory ring, resets on deploy). Each entry contains the parsed
+    keys, message length, and a 200-char preview of the body — enough to
+    diagnose "the message arrived but customer sees Aguardando" issues.
+    Token never appears in the response; lookup is by gateway id."""
+    gw = await db.sgp_gateways.find_one(
+        {"id": gid, "company_id": user["company_id"]},
+        {"_id": 0, "token": 1, "label": 1, "calls_count": 1, "last_called_at": 1},
+    )
+    if not gw:
+        raise HTTPException(404, "Gateway nao encontrado")
+    calls = _RECENT_CALLS.get(gw["token"], [])
+    return {
+        "gateway_id": gid,
+        "label": gw.get("label"),
+        "calls_count_total": gw.get("calls_count", 0),
+        "last_called_at": gw.get("last_called_at"),
+        "recent_calls": list(reversed(calls)),  # newest first
+        "note": "Ring em memoria — reinicia a cada deploy. Mantem so as ultimas 20.",
+    }
+
+
 # ─── PUBLIC endpoint (called by SGP) ────────────────────────────────────────
 
 async def _handle_send(
@@ -310,6 +353,12 @@ async def _handle_send(
                 json={"phone": phone, "message": message},
             )
             result = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {"success": False, "error": resp.text[:200]}
+        logger.info(
+            f"[sgp_gateway] WA send result token={gw.get('token','')[:6]}… "
+            f"phone={phone[:6]}… msg_len={len(message)} success={result.get('success')} "
+            f"jid={result.get('jid')} msg_id={result.get('message_id')} "
+            f"error={result.get('error', '')[:120]!r}"
+        )
     except Exception as e:
         logger.exception("[sgp_gateway] WA send failed")
         result = {"success": False, "error": str(e)}
@@ -367,6 +416,26 @@ async def public_send_get(
     celular = qp.get("celular") or qp.get("to") or qp.get("phone") or ""
     message = qp.get("message") or qp.get("msg") or qp.get("text") or ""
     cc_code = qp.get("cc_code") or "55"
+    short_token = (token or "")[:6] + "…"
+    logger.info(
+        f"[sgp_gateway/GET] token={short_token} qp_keys={list(qp.keys())} "
+        f"celular={'<empty>' if not celular else celular[:6]+'…'} "
+        f"message_len={len(message)} message_preview={message[:80]!r}"
+    )
+    try:
+        _record_gateway_call(token, {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "method": "GET",
+            "ctype": "",
+            "body_len": 0,
+            "parsed_keys": [],
+            "qp_keys": list(qp.keys()),
+            "celular_preview": (celular[:6] + "…") if celular else "",
+            "message_len": len(message),
+            "message_preview": message[:200],
+        })
+    except Exception:
+        pass
     return await _handle_send(token, celular, message, cc_code, db)
 
 
@@ -382,17 +451,55 @@ async def public_send_post(
     celular = message = ""
     cc_code = "55"
     data: dict = {}
+    raw_body = b""
     try:
+        # Read the raw body once so we can log it AND parse it. FastAPI
+        # caches the body inside Request after first read, so subsequent
+        # `request.json()` / `request.form()` would 400 — we parse manually.
+        raw_body = await request.body()
         if "application/json" in ctype:
-            data = await request.json()
+            import json as _json
+            data = _json.loads(raw_body.decode("utf-8") or "{}")
         elif "application/x-www-form-urlencoded" in ctype or "multipart/form-data" in ctype:
-            form = await request.form()
-            data = dict(form)
-    except Exception:
+            from urllib.parse import parse_qs
+            parsed = parse_qs(raw_body.decode("utf-8", errors="replace"))
+            data = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed.items()}
+    except Exception as e:
+        logger.warning(f"[sgp_gateway] body parse failed ctype={ctype!r}: {e}")
         data = {}
     # query string overrides body only when body didn't have it
     qp = request.query_params
     celular = data.get("celular") or data.get("to") or data.get("phone") or qp.get("celular") or qp.get("to") or qp.get("phone") or ""
     message = data.get("message") or data.get("msg") or data.get("text") or qp.get("message") or qp.get("msg") or qp.get("text") or ""
     cc_code = data.get("cc_code") or qp.get("cc_code") or "55"
+    # CRITICAL diagnostic: log the EXACT shape received from SGP. This is
+    # invaluable when the customer reports "Aguardando mensagem" because
+    # it lets us confirm whether the message body actually has content
+    # before we hand it to Baileys. Token is redacted in the log.
+    short_token = (token or "")[:6] + "…"
+    logger.info(
+        f"[sgp_gateway/POST] token={short_token} ctype={ctype!r} "
+        f"body_len={len(raw_body)} qp_keys={list(qp.keys())} "
+        f"parsed_keys={list(data.keys())} celular={'<empty>' if not celular else celular[:6]+'…'} "
+        f"message_len={len(str(message))} message_preview={str(message)[:80]!r}"
+    )
+    # Record the LAST 20 calls per gateway in an in-memory ring so the
+    # super-admin / operator can inspect them via a debug endpoint —
+    # essential for diagnosing production issues (logs may not be easily
+    # accessible). The ring stays in-process; it's a debug aid, not a
+    # source of truth.
+    try:
+        _record_gateway_call(token, {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "method": "POST",
+            "ctype": ctype,
+            "body_len": len(raw_body),
+            "parsed_keys": list(data.keys()),
+            "qp_keys": list(qp.keys()),
+            "celular_preview": (celular[:6] + "…") if celular else "",
+            "message_len": len(str(message)),
+            "message_preview": str(message)[:200],
+        })
+    except Exception:
+        pass
     return await _handle_send(token, str(celular), str(message), str(cc_code), db)

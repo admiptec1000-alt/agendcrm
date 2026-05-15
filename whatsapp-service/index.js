@@ -76,17 +76,52 @@ const connections = {};
 // when getMessage returns {conversation:''}).
 // We store by msgId alone AND by jid:msgId so retries succeed regardless of
 // which JID format Baileys passes back (@s.whatsapp.net vs @lid).
+// We ALSO persist the store to disk under AUTH_DIR/sent-cache.json so it
+// survives process restarts/redeploys — without that, the first deploy
+// after a customer receives an unreadable message guarantees a permanent
+// "Aguardando mensagem" because the retry can't be answered.
 const sentMessageStore = {};
-const SENT_STORE_MAX = 1000;
+const SENT_STORE_MAX = 2000;
+const SENT_CACHE_FILE = `${AUTH_DIR}/sent-cache.json`;
+let sentCacheDirty = false;
+
+// Load any persisted cache on startup. Safe to no-op if the file doesn't
+// exist yet (fresh install / first deploy after this change ships).
+try {
+  if (fs.existsSync(SENT_CACHE_FILE)) {
+    const raw = fs.readFileSync(SENT_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    Object.assign(sentMessageStore, parsed);
+    console.log(`[sent-cache] loaded ${Object.keys(parsed).length} entries from disk`);
+  }
+} catch (e) {
+  console.warn('[sent-cache] failed to load disk cache:', e.message);
+}
+
+// Flush dirty cache to disk every 10s. Frequent enough to survive a deploy
+// triggered within seconds of the last send, infrequent enough to not
+// thrash the FS on busy tenants.
+setInterval(() => {
+  if (!sentCacheDirty) return;
+  sentCacheDirty = false;
+  try {
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+    fs.writeFileSync(SENT_CACHE_FILE, JSON.stringify(sentMessageStore), 'utf8');
+  } catch (e) {
+    console.warn('[sent-cache] disk flush failed:', e.message);
+  }
+}, 10_000).unref?.();
+
 function rememberSent(jid, msgId, message) {
   if (!msgId || !message) return;
   const keys = [msgId];
   if (jid) keys.push(`${jid}:${msgId}`);
   for (const k of keys) sentMessageStore[k] = message;
+  sentCacheDirty = true;
   const all = Object.keys(sentMessageStore);
   if (all.length > SENT_STORE_MAX) {
-    // Evict oldest 100 entries to keep memory bounded
-    for (let i = 0; i < 100 && i < all.length; i++) delete sentMessageStore[all[i]];
+    // Evict oldest 200 entries to keep memory bounded
+    for (let i = 0; i < 200 && i < all.length; i++) delete sentMessageStore[all[i]];
   }
 }
 function recallSent(jid, msgId) {
@@ -775,12 +810,32 @@ app.post('/instances/:id/send', async (req, res) => {
     try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
     try { await instance.sock.sendPresenceUpdate('composing', targetJid); } catch (_) {}
 
+    // CRITICAL: force a pre-key bundle exchange BEFORE the first sendMessage
+    // to a brand-new contact. Without this, the recipient's WhatsApp shows
+    // "Aguardando mensagem. Essa ação pode levar alguns instantes." (the
+    // pre-key ciphertext arrived but the keys weren't yet established).
+    // This is the standard fix for that placeholder and is recommended by
+    // the Baileys maintainers for all outbound flows that don't go through
+    // the natural inbound→reply cycle (which lazily establishes sessions).
+    // `force=false` keeps existing sessions intact; only NEW contacts pay
+    // the one-time round-trip cost.
+    try {
+      await instance.sock.assertSessions([targetJid], false);
+    } catch (e) {
+      console.warn(`[${req.params.id}] assertSessions failed for ${targetJid}:`, e.message);
+    }
+
     // disabling link preview avoids some WA edge cases where the server
     // rejects text-only messages for certain contacts ("aguardando...")
     const payload = { text: message, linkPreview: false };
     const sent = await instance.sock.sendMessage(targetJid, payload);
     if (sent?.key?.id) {
-      rememberSent(targetJid, sent.key.id, sent.message || { conversation: message });
+      // ALWAYS cache the original conversation text — the {conversation:
+      // message} fallback is what saves us when the WA server later asks
+      // Baileys (via `getMessage`) to resend after a decryption failure on
+      // the recipient. If the cache is empty there, the recipient ends up
+      // stuck on the "Aguardando mensagem" placeholder forever.
+      rememberSent(targetJid, sent.key.id, { conversation: message });
     }
 
     // Persist LID <-> phone mapping for the @lid fallback in incoming.

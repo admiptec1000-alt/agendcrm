@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Copy, RefreshCw, Trash2, Power, X, Link as LinkIcon, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Plus, Copy, RefreshCw, Trash2, Power, X, Link as LinkIcon, AlertCircle, CheckCircle2, Bug } from 'lucide-react';
 import { toast } from 'sonner';
 import api, { channelsAPI } from '../../services/api';
 
@@ -9,6 +9,7 @@ const sgpGatewayAPI = {
   update: (id, data) => api.put(`/sgp/gateways/${id}`, data),
   regenerate: (id) => api.post(`/sgp/gateways/${id}/regenerate-token`),
   remove: (id) => api.delete(`/sgp/gateways/${id}`),
+  recentCalls: (id) => api.get(`/sgp/gateways/${id}/recent-calls`),
 };
 
 const SGPGatewayPage = () => {
@@ -181,6 +182,7 @@ const GatewayCard = ({ gateway, connections, onEdit, onRegenerate, onDelete, onT
   const conn = connections.find(c => c.id === gateway.connection_id);
   const base = window.location.origin;
   const url = `${base}/api/sgp/gateway/send/${gateway.token}`;
+  const [showDebug, setShowDebug] = useState(false);
 
   const copyUrl = () => {
     navigator.clipboard.writeText(url);
@@ -232,6 +234,7 @@ const GatewayCard = ({ gateway, connections, onEdit, onRegenerate, onDelete, onT
             <Power className="w-4 h-4" />
           </button>
           <button onClick={onEdit} className="px-3 py-1.5 text-xs rounded-md text-slate-600 hover:bg-slate-100" data-testid={`edit-gateway-${gateway.id}`}>Editar</button>
+          <button onClick={() => setShowDebug(true)} className="p-2 rounded-lg text-blue-600 hover:bg-blue-50" title="Diagnostico (ultimas chamadas)" data-testid={`debug-${gateway.id}`}><Bug className="w-4 h-4" /></button>
           <button onClick={onRegenerate} className="p-2 rounded-lg text-amber-600 hover:bg-amber-50" title="Regenerar token" data-testid={`regen-${gateway.id}`}><RefreshCw className="w-4 h-4" /></button>
           <button onClick={onDelete} className="p-2 rounded-lg text-red-500 hover:bg-red-50" title="Excluir" data-testid={`delete-${gateway.id}`}><Trash2 className="w-4 h-4" /></button>
         </div>
@@ -250,6 +253,85 @@ const GatewayCard = ({ gateway, connections, onEdit, onRegenerate, onDelete, onT
             Copiar Config JSON (para colar no SGP)
           </button>
         </div>
+      </div>
+      {showDebug && (
+        <GatewayDebugModal gateway={gateway} onClose={() => setShowDebug(false)} />
+      )}
+    </div>
+  );
+};
+
+const GatewayDebugModal = ({ gateway, onClose }) => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await sgpGatewayAPI.recentCalls(gateway.id);
+      setData(r.data);
+    } catch (e) {
+      toast.error('Erro ao carregar diagnostico');
+    } finally {
+      setLoading(false);
+    }
+  }, [gateway.id]);
+  useEffect(() => { load(); }, [load]);
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl p-6 max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()} data-testid="gateway-debug-modal">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-lg font-bold font-heading">Diagnostico do Gateway</h3>
+            <p className="text-xs text-slate-500">Ultimas chamadas que o SGP fez neste gateway</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={load} className="p-2 rounded hover:bg-slate-100 text-slate-500" title="Atualizar"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
+            <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+          </div>
+        </div>
+        {loading && <p className="text-sm text-slate-500">Carregando…</p>}
+        {!loading && data && (
+          <>
+            <div className="grid grid-cols-2 gap-2 mb-4 text-xs">
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
+                <p className="text-slate-500">Total de chamadas</p>
+                <p className="font-bold text-slate-800 text-lg">{data.calls_count_total}</p>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
+                <p className="text-slate-500">Ultima chamada</p>
+                <p className="font-bold text-slate-800 text-sm">{data.last_called_at ? new Date(data.last_called_at).toLocaleString('pt-BR') : '—'}</p>
+              </div>
+            </div>
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-3">
+              {data.note}
+            </p>
+            {(!data.recent_calls || data.recent_calls.length === 0) ? (
+              <p className="text-sm text-slate-500 text-center py-6">Nenhuma chamada registrada ainda (ou o servico foi reiniciado).</p>
+            ) : (
+              <div className="space-y-2">
+                {data.recent_calls.map((c, i) => {
+                  const empty = c.message_len === 0;
+                  return (
+                    <div key={i} className={`border rounded-lg p-3 text-xs ${empty ? 'border-rose-300 bg-rose-50' : 'border-slate-200 bg-slate-50'}`} data-testid={`debug-call-${i}`}>
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <span className="font-mono text-slate-700">{new Date(c.at).toLocaleString('pt-BR')}</span>
+                        <span className="px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-mono text-[10px]">{c.method} · {c.ctype || 'sem ctype'}</span>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                        <div><strong>Celular:</strong> {c.celular_preview || <em className="text-rose-600">vazio</em>}</div>
+                        <div><strong>Tamanho msg:</strong> <span className={empty ? 'text-rose-600 font-bold' : 'text-emerald-600'}>{c.message_len} chars</span></div>
+                        <div className="col-span-2"><strong>Keys no body:</strong> {(c.parsed_keys || []).join(', ') || <em className="text-slate-400">vazio</em>}</div>
+                        <div className="col-span-2"><strong>Keys na query:</strong> {(c.qp_keys || []).join(', ') || <em className="text-slate-400">vazio</em>}</div>
+                        <div className="col-span-2"><strong>Body recebido ({c.body_len} bytes):</strong></div>
+                        <pre className="col-span-2 bg-white border border-slate-200 rounded p-2 font-mono text-[10px] whitespace-pre-wrap break-all max-h-24 overflow-auto">{c.message_preview || '(vazio)'}</pre>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

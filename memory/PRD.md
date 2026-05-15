@@ -10,6 +10,51 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-15 — Fix "Aguardando mensagem" no SGP Gateway + diagnostico de calls ✅
+
+**Problema:** Cliente reporta que mensagens enviadas pelo SGP via novo Gateway (`/api/sgp/gateway/send/{token}`) chegam ao destinatario como o placeholder do WhatsApp "Aguardando mensagem. Essa acao pode levar alguns instantes" — em vez do texto real da mensagem.
+
+**Root cause analise (3 camadas de falha):**
+
+1. **Pre-key bundle nao estabelecido** antes do primeiro `sendMessage` — Baileys cria a sessao E2E de forma lazy ao receber a primeira mensagem do contato. Em fluxos de saida-pura (SGP cobranca/aviso), o contato pode nunca ter falado com aquele numero antes; o ciphertext chega mas as chaves nao, e o WhatsApp do cliente mostra "Aguardando" indefinidamente. **Fix oficial:** chamar `assertSessions([targetJid], false)` antes de `sendMessage`.
+
+2. **Cache de mensagens enviadas em memoria, perdido em deploys** — quando o WA server pede retry via `getMessage()` (callback do Baileys), retornavamos `{conversation: ''}` se nao acharmos a msg no cache. Mensagem vazia = "Aguardando" eterno. Em produção, cada deploy zerava o cache, agravando o problema.
+
+3. **`getMessage` fallback retornava string vazia** — mesmo com cache hit no antigo `sent.message || { conversation: message }`, alguns formatos de `sent.message` deserialized do Baileys nao tem `conversation` no top-level, gerando o mesmo placeholder.
+
+**Mudancas aplicadas em `/app/whatsapp-service/index.js`:**
+
+- **L70+:** `sentMessageStore` agora persiste em `AUTH_DIR/sent-cache.json` (flush a cada 10s quando dirty), sobrevive a deploys.
+- **L775+:** Adicionado `await instance.sock.assertSessions([targetJid], false)` ANTES de `sendMessage` para garantir pre-key exchange.
+- **L795+:** `rememberSent` agora sempre stamp `{conversation: message}` em vez de `sent.message || {conversation: message}` — garante shape consistente.
+- **Capacidade do store dobrada:** 1000 → 2000 entries, eviction 100 → 200.
+
+**Mudancas em `/app/backend/routes/sgp_gateway_routes.py`:**
+
+- **Logging detalhado nos endpoints `GET|POST /gateway/send/{token}`:** Loga content-type, body_len, qp_keys, parsed_keys, message_len, message_preview. Token redacted (so primeiros 6 chars).
+- **Ring buffer em memoria `_RECENT_CALLS`** (max 20 calls por token) — captura cada chamada do SGP com payload completo (parseado). Reset a cada deploy.
+- **Body parse fix:** lemos `request.body()` UMA VEZ e fazemos parse manual para JSON ou form-encoded (antes, `request.form()` lancava se o body ja tivesse sido lido para logging).
+- **Novo endpoint autenticado `GET /api/sgp/gateways/{gid}/recent-calls`:** retorna o ring com newest first + metadados (calls_count_total, last_called_at). Operador inspeciona via UI.
+- **Log do resultado do Baileys send:** success, jid, message_id, error — facilita identificar se Baileys teve erro vs WA recebeu mas decifrou vazio.
+
+**Frontend (`/app/frontend/src/pages/CRM/SGPGatewayPage.js`):**
+
+- Botao **Diagnostico** (icone Bug) em cada gateway card.
+- Modal `GatewayDebugModal` mostra as ultimas 20 chamadas com: timestamp, metodo, content-type, celular preview, **message_len destacado em vermelho se = 0**, parsed keys, body preview.
+- Refresh manual disponivel no modal.
+
+**Como o usuario debuga em producao agora:**
+
+1. Vai em **CRM → SGP Gateway**
+2. Clica no botao **Bug** (azul) do gateway problematico
+3. Aciona uma cobranca/aviso no SGP
+4. Volta no modal e clica em **Refresh** — ve exatamente o que o SGP mandou
+5. Se `message_len = 0` em vermelho → SGP esta enviando vazio (config do lado SGP)
+6. Se `message_len > 0` mas cliente continua vendo "Aguardando" → problema de pre-key, e o fix do Baileys (assertSessions + cache em disco) deve resolver no proximo deploy
+
+**Testes:** 26 unit tests passando. Validacao via curl confirmou: form-encoded `celular=...&message=...` corretamente parseado, recent-calls retorna o registro com message_preview pronto.
+
+
 ### 2026-05-14 (B) — Pausar bot ao intervir manualmente (per-company toggle) ✅
 
 **Problema:** Em fluxos de atendimento com bot ativo (Flowbuilder), quando o operador respondia uma mensagem pelo painel ou pelo celular conectado (Baileys), o bot continuava enviando respostas automaticas, brigando com o humano. Cliente pediu um parametro nas configuracoes da empresa para que QUALQUER mensagem do operador (plataforma ou celular) pause o bot naquele ticket.
