@@ -619,6 +619,19 @@ async def advance_flow(
     if not nodes:
         logger.warning(f"[flow_engine] flow {flow.get('id')} has no nodes")
         return sent
+    # If the operator has manually intervened on this ticket (sent a message
+    # via the platform or the linked phone) AND the company has the "pause
+    # bot on human intervention" setting enabled, the ticket carries the
+    # flag `bot_paused=True`. In that state the engine must NOT keep
+    # answering customer messages — the human is in control. The flag is
+    # cleared only when the ticket is closed/reopened (or the operator
+    # manually toggles it off; see crm_routes).
+    if ticket.get("bot_paused"):
+        logger.info(
+            f"[flow_engine] ticket {ticket.get('id')} has bot_paused=true — "
+            f"skipping flow advance (operator took over)"
+        )
+        return sent
     flow_id = flow["id"]
     company_id = ticket["company_id"]
     vars_: dict = ticket.get("flow_vars") or {}
@@ -990,7 +1003,12 @@ async def _save_state(db, ticket_id: str, flow_id: str, pending_node_id: Optiona
 async def is_flow_active(ticket: dict) -> bool:
     """Check if the ticket is currently inside a running flow waiting for
     customer input. Stale flows (older than FLOW_TIMEOUT_HOURS) are ignored
-    so the customer doesn't get stuck if the flow gets edited or removed."""
+    so the customer doesn't get stuck if the flow gets edited or removed.
+    A ticket flagged `bot_paused=True` (operator intervened, see
+    `pause_bot_on_human_intervention` company setting) is reported as NOT
+    active so the webhook stops invoking advance_flow for it."""
+    if ticket.get("bot_paused"):
+        return False
     if not (ticket.get("active_flow_id") and ticket.get("active_flow_node_id")):
         return False
     started = ticket.get("flow_started_at")

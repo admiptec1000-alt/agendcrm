@@ -13,6 +13,7 @@ import {
 import { quotesAPI } from '../../services/api';
 import QuoteAttachModal from './QuoteAttachModal';
 import { QuoteEditor } from './OrcamentosPage';
+import { BotPausedBadge, BotPausedDot } from '../../components/BotPausedBadge';
 
 const STATUS_COLORS = {
   aberto: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Aberto' },
@@ -667,6 +668,7 @@ const AtendimentosPage = () => {
                         >#{ticket.ticket_number}</span>
                       )}
                       <p className="font-medium text-sm text-slate-900 truncate">{ticket.client_registered_name || ticket.customer_name}</p>
+                      {ticket.bot_paused && <BotPausedDot />}
                     </div>
                     <span className="text-[10px] text-slate-400 flex-shrink-0 ml-2">{formatTime(ticket.updated_at)}</span>
                   </div>
@@ -791,8 +793,16 @@ const AtendimentosPage = () => {
                 {(selectedTicket.client_registered_name || selectedTicket.customer_name)?.substring(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0">
-                <p className="font-semibold text-sm text-slate-900 truncate">
-                  {selectedTicket.client_registered_name || selectedTicket.customer_name} <span className="text-slate-400 font-normal">#{selectedTicket.ticket_number || selectedTicket.id.substring(0, 4)}</span>
+                <p className="font-semibold text-sm text-slate-900 truncate flex items-center gap-1.5">
+                  <span>{selectedTicket.client_registered_name || selectedTicket.customer_name}</span>
+                  <span className="text-slate-400 font-normal">#{selectedTicket.ticket_number || selectedTicket.id.substring(0, 4)}</span>
+                  {selectedTicket.bot_paused && (
+                    <BotPausedBadge
+                      ticketId={selectedTicket.id}
+                      reason={selectedTicket.bot_paused_reason}
+                      onResumed={() => loadData()}
+                    />
+                  )}
                 </p>
                 {(() => {
                   const pres = presenceMap[selectedTicket.customer_phone]?.presence;

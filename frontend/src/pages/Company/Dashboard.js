@@ -26,6 +26,7 @@ import CampaignsPage from '../CRM/CampaignsPage';
 import QueuesPage from '../CRM/QueuesPage';
 import OrcamentosPage from '../CRM/OrcamentosPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
+import BotPauseSettingsCard from '../../components/BotPauseSettingsCard';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
@@ -6292,6 +6293,11 @@ const ConfigPage = () => {
     <div className="animate-fade-in" data-testid="config-page">
       {/* Mobile Preferences */}
       <MobilePreferencesCard />
+
+      {/* Bot pause on human intervention */}
+      <BotPauseSettingsCard
+        canEdit={['company_admin', 'owner', 'super_admin', 'admin'].includes((user?.role || '').toLowerCase())}
+      />
 
       {/* Logo Global */}
       <div className="card max-w-2xl mb-6" data-testid="config-logo-section">

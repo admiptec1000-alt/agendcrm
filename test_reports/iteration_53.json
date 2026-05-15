@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 53 — End-to-end backend tests for the 'Pause bot on human intervention' feature. All 10 HTTP-level tests PASSED against the live preview backend, plus pre-existing 23 unit tests still pass (test_bot_pause.py + test_flow_engine.py). Coverage: (a) GET /api/crm/company/bot-settings returns true when company doc has no field — verified by $unset of pause_bot_on_human_intervention then GET; (b) PUT bot-settings persists False and subsequent GET reflects the value, then PUT True round-trips; (c) POST /tickets/{id}/bot-pause {paused:true} sets bot_paused=true, bot_paused_reason=manual_toggle, clears active_flow_node_id, and GET ticket reflects it; (d) POST {paused:false} clears the flags; (e) 404 for unknown ticket id; (f) POST /tickets/{id}/messages with sender_type=agent on a ticket with active_flow_id + company toggle ON auto-sets bot_paused=true (reason=agent_message_platform) and clears active_flow_node_id — also verified the negative path: with toggle OFF, no pause is applied; (g) PUT /tickets/{id} status=fechado clears bot_paused; (h) Non-admin user (role='user' created via /api/scheduling/company-users) gets 403 on PUT but 200 on GET.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_bot_pause_api.py",
+    "/app/test_reports/pytest/iteration_53.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "bot_pause.is_pause_setting_enabled correctly distinguishes `comp is None` (no company => False) from `{}` (field missing => True default). Good comment + regression unit test (test_pause_setting_default_when_projection_returns_empty_dict) protects this subtle motor projection edge case.",
+    "bot_pause.pause_bot_on_ticket_if_enabled is idempotent — early-returns when already paused or when ticket has no active_flow_id/active_flow_node_id. Correctly mutates the in-memory ticket so downstream code sees the new state.",
+    "crm_routes PUT /tickets/{id} (line ~451) only clears bot_paused when status transitions to fechado/cancelado AND the ticket was paused — verified via test_close_ticket_clears_bot_paused.",
+    "crm_routes PUT /company/bot-settings allows roles: company_admin, owner, super_admin, admin. Non-admin role='user' correctly receives 403. Note: 'super_admin' as a company-user role is unusual (super admins normally use a separate /super-admin/login flow + different JWT type) — confirming this branch is intentional fallback / belt-and-suspenders.",
+    "crm_routes POST /tickets/{id}/messages and /tickets/{id}/media both wrap the pause helper in try/except logger.warning — defensive but masks real bugs in dev. Acceptable trade-off given the helper is best-effort.",
+    "Minor: TicketCreate model (models.py:149) does NOT expose active_flow_id; the test had to seed it via direct mongo. This is by design (flows are bound via webhook auto-trigger), but the team should keep this in mind for future test scaffolding."
+  ],
+  "updated_files": ["/app/backend/tests/test_bot_pause_api.py", "/app/test_reports/iteration_53.json"],
+  "success_rate": {"backend": "100% (10/10 new API tests + 23/23 pre-existing unit tests)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Used /app/memory/test_credentials.md — admin@boss.com.br / boss123. A throw-away non-admin company_user is created+deleted per test for the 403 case.",
+  "seed_data_creation": "Tests create TEST_-prefixed tickets and one TEST_-prefixed non-admin company_user. Tickets are deleted at the end of each test. The non-admin user is deleted via direct mongo (the API forbids deleting users created in-test by another tenant flow). Company toggle is set back to True at the end of the negative-path test so the tenant remains in the default-ON state.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bot-pause feature fully tested end-to-end. Key gotcha: each test runs in its own event loop, so motor clients must be re-instantiated per call (see `_run_db` helper). Avoid module-scoped motor fixtures binding to a loop that pytest later closes. The Boss company toggle is left as True after the run.",
+  "rca of the issue": "N/A — no bugs reproduced. All 11 review request scenarios verified passing."
+}

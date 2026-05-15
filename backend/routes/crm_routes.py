@@ -447,7 +447,17 @@ async def update_ticket(
         if v is not None or k in CLEARABLE_FIELDS
     }
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    
+
+    # When the ticket is being closed/cancelled, also clear the bot_paused
+    # flag so that if the customer comes back later and a fresh ticket is
+    # opened, the bot can run normally. We do NOT auto-resume on the same
+    # ticket — only on a new ticket lifecycle.
+    new_status = update_data.get("status")
+    if new_status in ("fechado", "cancelado") and ticket.get("bot_paused"):
+        update_data["bot_paused"] = False
+        update_data["bot_paused_at"] = None
+        update_data["bot_paused_reason"] = None
+
     if update_data:
         await db.tickets.update_one(
             {"id": ticket_id},
@@ -884,6 +894,19 @@ async def add_message_to_ticket(
         {"$push": {"messages": message}, "$set": update_set}
     )
 
+    # Pause the bot for this ticket if the company opted-in. Only relevant
+    # when the operator sent the message (sender_type=agent) AND there's an
+    # active flow waiting. See bot_pause.pause_bot_on_ticket_if_enabled.
+    if data.sender_type == "agent":
+        try:
+            from bot_pause import pause_bot_on_ticket_if_enabled
+            await pause_bot_on_ticket_if_enabled(
+                db, ticket, reason="agent_message_platform"
+            )
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(f"[bot_pause] platform-send failed: {e}")
+
     return message
 
 
@@ -964,6 +987,16 @@ async def send_media_to_ticket(
         {"id": ticket_id},
         {"$push": {"messages": message}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
     )
+    # Sending any media counts as the operator taking over — pause the bot
+    # if the company opted in. Same behavior as the text-message endpoint.
+    try:
+        from bot_pause import pause_bot_on_ticket_if_enabled
+        await pause_bot_on_ticket_if_enabled(
+            db, ticket, reason="agent_media_platform"
+        )
+    except Exception as e:
+        import logging as _lg
+        _lg.getLogger(__name__).warning(f"[bot_pause] media-send failed: {e}")
     # Try forwarding to WA microservice
     conn_id = ticket.get("connection_id")
     if not conn_id:
@@ -1230,6 +1263,86 @@ async def update_campaign_settings(
     )
     doc = await db.campaign_settings.find_one({"company_id": user["company_id"]}, {"_id": 0})
     return doc
+
+
+# === BOT-PAUSE SETTINGS (per company) ===
+# Controls whether the WhatsApp bot (Flowbuilder runtime) automatically
+# steps aside when an operator sends a message — either via the CRM UI or
+# via their linked phone. See /app/backend/bot_pause.py for the runtime
+# integration. The toggle defaults to ON for new tenants; existing tenants
+# inherit the same default until they explicitly change it via this endpoint.
+class BotSettingsUpdate(BaseModel):
+    pause_bot_on_human_intervention: bool
+
+
+@router.get("/company/bot-settings")
+async def get_company_bot_settings(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    from bot_pause import is_pause_setting_enabled
+    enabled = await is_pause_setting_enabled(db, user["company_id"])
+    return {"pause_bot_on_human_intervention": enabled}
+
+
+@router.put("/company/bot-settings")
+async def update_company_bot_settings(
+    data: BotSettingsUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    # Only company admins (owner/admin) can toggle this. Regular operators
+    # would see the toggle disabled in the UI, but enforce server-side too.
+    role = (user.get("role") or "").lower()
+    if role not in ("company_admin", "owner", "super_admin", "admin"):
+        raise HTTPException(403, "Apenas administradores podem alterar esta configuracao")
+    await db.companies.update_one(
+        {"id": user["company_id"]},
+        {"$set": {
+            "pause_bot_on_human_intervention": bool(data.pause_bot_on_human_intervention),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"pause_bot_on_human_intervention": bool(data.pause_bot_on_human_intervention)}
+
+
+# === BOT-PAUSE per-ticket overrides ===
+# Operator can manually resume the bot on a paused ticket (e.g. they were
+# investigating an issue and want the flow to take over again) or pause it
+# without sending a message (rare, but useful for VIP customers).
+@router.post("/tickets/{ticket_id}/bot-pause")
+async def toggle_ticket_bot_pause(
+    ticket_id: str,
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Body: {"paused": true|false}. When `paused=false`, clears the pause
+    flags. When `paused=true`, sets bot_paused on the ticket (and clears
+    active_flow_node_id like the automatic pauser does)."""
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]}, {"_id": 0})
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    target = bool(payload.get("paused"))
+    now = datetime.now(timezone.utc).isoformat()
+    if target:
+        await db.tickets.update_one(
+            {"id": ticket_id},
+            {"$set": {
+                "bot_paused": True,
+                "bot_paused_at": now,
+                "bot_paused_reason": "manual_toggle",
+                "active_flow_node_id": None,
+                "updated_at": now,
+            }},
+        )
+    else:
+        from bot_pause import resume_bot_on_ticket
+        await resume_bot_on_ticket(db, ticket_id)
+    updated = await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
+    return {"bot_paused": bool(updated.get("bot_paused")),
+            "bot_paused_at": updated.get("bot_paused_at"),
+            "bot_paused_reason": updated.get("bot_paused_reason")}
 
 
 # Campaigns

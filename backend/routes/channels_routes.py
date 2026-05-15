@@ -881,6 +881,17 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             {"id": ticket["id"]},
             {"$push": {"messages": new_message}, "$set": update_set}
         )
+        # Operator-typed messages (from_me=True) on the linked phone also
+        # count as "human intervention" and should pause the bot when the
+        # company opted in.
+        if from_me:
+            try:
+                from bot_pause import pause_bot_on_ticket_if_enabled
+                await pause_bot_on_ticket_if_enabled(
+                    db, ticket, reason="agent_message_phone"
+                )
+            except Exception as e:
+                logger.warning(f"[bot_pause] phone-send failed: {e}")
         # Reload ticket to pick up flow state and advance the runtime if it's
         # waiting on this customer reply. Outgoing-from-phone messages do
         # NOT advance flows — they're our own output and would create
