@@ -10,6 +10,52 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-14 (B) — Pausar bot ao intervir manualmente (per-company toggle) ✅
+
+**Problema:** Em fluxos de atendimento com bot ativo (Flowbuilder), quando o operador respondia uma mensagem pelo painel ou pelo celular conectado (Baileys), o bot continuava enviando respostas automaticas, brigando com o humano. Cliente pediu um parametro nas configuracoes da empresa para que QUALQUER mensagem do operador (plataforma ou celular) pause o bot naquele ticket.
+
+**Decisao de design (1a + 2a + 3a + 4b):**
+- Pausa permanece **ate o ticket ser fechado/cancelado** (resume automatico na transicao para `fechado`)
+- Setting **per-company** (uma unica chave `pause_bot_on_human_intervention` no `companies`)
+- Indicador visual: **badge "Bot pausado"** no header do chat + **dot amarelo** no card do ticket
+- Default **ON** para empresas existentes e novas
+
+**Implementacao:**
+
+1. **`/app/backend/bot_pause.py`** (novo arquivo):
+   - `is_pause_setting_enabled(db, company_id)` — le o toggle. Distingue `comp is None` (empresa nao existe → False) de `{}` (campo ausente → True default). Esse detalhe foi um bug pego nos testes: motor retorna `{}` em projection quando o campo nao existe, e `if not comp` evaluaria como falso wrongly.
+   - `pause_bot_on_ticket_if_enabled(db, ticket, reason)` — idempotente, so atua se a empresa opted-in E o ticket tem flow ativo. Seta `bot_paused=True`, `bot_paused_at`, `bot_paused_reason`, limpa `active_flow_node_id`.
+   - `resume_bot_on_ticket(db, ticket_id)` — chamado quando o ticket eh fechado.
+
+2. **`/app/backend/flow_engine.py`:**
+   - `advance_flow` faz early-return quando `ticket.bot_paused=True` — kill-switch absoluto, nem com webhook chamando errado vaza mensagem do bot.
+   - `is_flow_active(ticket)` retorna `False` para tickets pausados, evitando que o webhook chame advance.
+
+3. **`/app/backend/routes/crm_routes.py`:**
+   - `POST /tickets/{id}/messages` com `sender_type=agent` → invoca `pause_bot_on_ticket_if_enabled(reason="agent_message_platform")`.
+   - `POST /tickets/{id}/media` (uploads de imagem/audio/video) → mesmo helper com `reason="agent_media_platform"`.
+   - `PUT /tickets/{id}` quando `status` muda para `fechado`/`cancelado` → limpa `bot_paused*`.
+   - **Novos endpoints:**
+     - `GET /api/crm/company/bot-settings` → `{pause_bot_on_human_intervention: bool}`
+     - `PUT /api/crm/company/bot-settings` → admin-only (`company_admin|owner|super_admin|admin`), 403 para outros roles
+     - `POST /api/crm/tickets/{id}/bot-pause` body `{paused: bool}` → toggle manual por ticket
+
+4. **`/app/backend/routes/channels_routes.py`:**
+   - Webhook `/webhook/message`: quando `from_me=True` (operador enviou pelo celular conectado), chama `pause_bot_on_ticket_if_enabled(reason="agent_message_phone")` apos persistir a mensagem.
+
+5. **Frontend:**
+   - `/app/frontend/src/components/BotPauseSettingsCard.js` — toggle na pagina `/configuracoes` (so admin pode editar; outros veem o estado mas o toggle fica disabled).
+   - `/app/frontend/src/components/BotPausedBadge.js` — exporta `BotPausedBadge` (header do chat, clicavel para retomar bot manualmente) e `BotPausedDot` (icone compacto nos cards da lista de tickets).
+   - `AtendimentosPage.js` mostra `<BotPausedDot/>` ao lado do nome do cliente quando `ticket.bot_paused=true`, e `<BotPausedBadge/>` no header da conversa.
+
+**Testes:**
+- `/app/backend/tests/test_bot_pause.py` (8 unit tests): default ON, no-op quando company off, no-op em ticket sem flow, short-circuit do advance_flow, is_flow_active=False, resume limpa flags, regressão do `{}` em projection.
+- `/app/backend/tests/test_bot_pause_api.py` (10 e2e tests criados pelo testing agent): GET/PUT settings, POST bot-pause, 404, auto-pause apos agent message, resume no close, 403 para non-admin.
+- Total: **36 testes passando** (15 flow_engine + 3 sgp_repair + 8 bot_pause unit + 10 bot_pause api).
+
+**Default em rollout:** Cada GET de empresa sem o campo retorna `true`. PUT pela primeira vez cria o campo no doc. Nenhuma migracao necessaria.
+
+
 ### 2026-05-14 — Pix do fluxo SGP usando link público `{{link_pix_html}}` ✅
 
 **Problema:** No bot do WhatsApp (fluxo SGP), a bolha de Pix chegava ao cliente exibindo literalmente `""` (aspas vazias) no lugar do código copia-e-cola, porque alguns tenants do SGP não preenchem o campo `codigopix` para certos contratos. O cliente pediu para o Pix ser entregue como **link HTML público** (campo `link_pix_html` do SGP) — o mesmo link que o SGP envia automaticamente 2 dias antes do vencimento, com QR code, copia-e-cola e código de barras já renderizados.
