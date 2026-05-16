@@ -2563,51 +2563,11 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
 
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Funcionalidades Habilitadas</h3>
-            {form.base_type === 'super_admin' ? (
-              // Super Admin niche has a completely different feature catalog
-              // (sidebar items for the SaaS operator's own panel). We swap
-              // out the CRM/Agendamento/Compartilhado groups for a single
-              // "Super Admin" group with the actual menu items.
-              <div data-testid="bt-super-admin-features">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-slate-700">Itens do menu Super Admin</span>
-                  <button
-                    onClick={() => {
-                      // Bulk-enable all SA features at once.
-                      const updated = [...features];
-                      superAdminFeatures.forEach(saf => {
-                        const idx = updated.findIndex(f => f.feature_key === saf.feature_key);
-                        if (idx >= 0) updated[idx] = { ...updated[idx], enabled: true };
-                        else updated.push({ feature_key: saf.feature_key, enabled: true });
-                      });
-                      setFeatures(updated);
-                    }}
-                    className="text-xs text-primary hover:underline"
-                    data-testid="bt-enable-all-super-admin"
-                  >Ativar todos</button>
-                </div>
-                <p className="text-[11px] text-slate-500 mb-3">
-                  Selecione quais menus do painel Super Admin ficam visiveis no sidebar.
-                  As alteracoes aplicam imediatamente para todos os usuarios com role <strong>super_admin</strong> no proximo login.
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-1 p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  {superAdminFeatures.length === 0 ? (
-                    <p className="text-xs text-amber-700 col-span-full">
-                      Carregando catalogo de features do Super Admin… Se essa mensagem persistir,
-                      faca logout/login para revalidar suas permissoes.
-                    </p>
-                  ) : superAdminFeatures.map(f => (
-                    <FeatureToggle
-                      key={f.feature_key}
-                      feature={f}
-                      enabled={isFeatureEnabled(f.feature_key)}
-                      onToggle={() => toggleFeature(f.feature_key)}
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <>
+            {/* Tenant feature groups (CRM, Agendamento, Compartilhado).
+                Visible for ALL business types — including the Super Admin
+                niche by request: the SA operator should be able to enable
+                ANY system feature on the SA login (atendimentos, agenda,
+                etc) for cross-tenant viewing or admin tooling. */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -2634,7 +2594,46 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
                 <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
               ))}
             </div>
-              </>
+            {/* Super Admin sidebar items — exclusive to the SA niche. We
+                only render this group when editing the Super Admin BT so
+                tenant editors don't see super-admin-only keys. */}
+            {form.base_type === 'super_admin' && (
+              <div className="mt-6 pt-5 border-t-2 border-amber-200" data-testid="bt-super-admin-features">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-bold text-amber-700 uppercase tracking-widest">Itens do menu Super Admin</span>
+                  <button
+                    onClick={() => {
+                      const updated = [...features];
+                      superAdminFeatures.forEach(saf => {
+                        const idx = updated.findIndex(f => f.feature_key === saf.feature_key);
+                        if (idx >= 0) updated[idx] = { ...updated[idx], enabled: true };
+                        else updated.push({ feature_key: saf.feature_key, enabled: true });
+                      });
+                      setFeatures(updated);
+                    }}
+                    className="text-xs text-primary hover:underline"
+                    data-testid="bt-enable-all-super-admin"
+                  >Ativar todos</button>
+                </div>
+                <p className="text-[11px] text-slate-500 mb-3">
+                  Estes toggles controlam quais itens aparecem no <strong>sidebar do painel Super Admin</strong>.
+                  Alteracoes aplicam apos logout/login dos usuarios com role <code>super_admin</code>.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1 p-3 rounded-lg bg-amber-50/50 border border-amber-200">
+                  {superAdminFeatures.length === 0 ? (
+                    <p className="text-xs text-amber-700 col-span-full">
+                      Carregando catalogo de features do Super Admin… Se persistir, faca logout/login.
+                    </p>
+                  ) : superAdminFeatures.map(f => (
+                    <FeatureToggle
+                      key={f.feature_key}
+                      feature={f}
+                      enabled={isFeatureEnabled(f.feature_key)}
+                      onToggle={() => toggleFeature(f.feature_key)}
+                    />
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 

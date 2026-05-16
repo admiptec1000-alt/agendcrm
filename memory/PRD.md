@@ -10,6 +10,26 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-16 (F) — Editor do BT Super Admin agora expoe TODAS as features ✅
+
+**Pedido:** "Agora ja aparece as funcoes mas so as do super Admin atual preciso selecionar [...] qualquer funcao disponivel no sistema inclusive as disponibilizadas para o agendamento ou atendimento."
+
+**Mudanca:**
+
+`/app/frontend/src/pages/SuperAdmin/Dashboard.js` — `BusinessTypeModal` agora mostra **simultaneamente** todos os 4 grupos quando editando o BT Super Admin:
+
+1. **CRM** (atendimentos, kanban, flowbuilder, etc.) — sempre visivel
+2. **Agendamento** (agenda, calendario, profissionais, etc.) — sempre visivel
+3. **Compartilhado** (financeiro, comissoes, configuracoes, etc.) — sempre visivel
+4. **Itens do menu Super Admin** (9 chaves do sidebar SA) — visivel SO quando `form.base_type === 'super_admin'`, com fundo amarelo claro para diferenciar
+
+A logica anterior alternava entre os 3 primeiros grupos OU o quarto. Agora os 3 primeiros sao SEMPRE renderizados, e o 4o vira um anexo opt-in quando o BT eh Super Admin.
+
+**Por que isso importa:** O operador SA pode atribuir features de CRM/Agendamento ao proprio BT — por exemplo para registrar quais permissoes ele teria se entrasse via "Painel Operacional" (impersonate). O sidebar do SA continua filtrando apenas as 9 chaves de SA (`allSidebarItems` em Dashboard.js linha 60-68) — features de tenant adicionadas ao BT do SA nao poluem o sidebar dele, mas ficam registradas como permissoes na BT.
+
+**Validacao:** lint passou clean, screenshot do login confirma a logo 8ip presente. Save end-to-end ja foi validado nos commits anteriores.
+
+
 ### 2026-05-16 (E) — Branding 8ip no Super Admin (login + sidebar + PWA shortcut) ✅
 
 **Pedido:** "Insira essa logomarca no ambiente do super Admin tanto na parte de login na interna do sistema e tambem ao criar o atalho."
