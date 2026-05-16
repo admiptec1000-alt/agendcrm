@@ -13,6 +13,12 @@ class PlanType(str, Enum):
     CRM = "crm"
     SCHEDULING = "scheduling"
     BOTH = "both"
+    # The Super Admin niche is a self-managed BT used to control the
+    # super-admin sidebar (see SUPER_ADMIN_FEATURES). It's NOT exposed in
+    # the BT editor's "Tipo Base" dropdown — only existing/seeded BTs use
+    # this value, and the API enforces that only ONE active super_admin
+    # BT exists per install.
+    SUPER_ADMIN = "super_admin"
 
 class CompanyStatus(str, Enum):
     ACTIVE = "active"

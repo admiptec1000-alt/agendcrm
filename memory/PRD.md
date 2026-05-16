@@ -10,6 +10,31 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-16 (C) — Fix save do Super Admin BT (422 silencioso) + enforce singleton ✅
+
+**Pedido:** "Quando salvo nao salvo as funcoes selecionada para o super Admin e a tela fica em branco. Vamos deixar so um tipo de negocio super admin que vai ministrar a gestao de permissao de menus que aparecera no super Admin."
+
+**Root cause:** `PlanType` enum (em `/app/backend/models.py`) so tinha `crm`, `scheduling`, `both` — **nao tinha `super_admin`**. Toda vez que o operador salvava o BT do Super Admin via PUT, o Pydantic rejeitava `base_type="super_admin"` com **HTTP 422 Validation Error**. O frontend recebia o erro, disparava `toast.error` rapido (passava despercebido) e o modal/estado ficava em condicao inconsistente — daí a "tela em branco" reportada e features que nao persistiam.
+
+**Mudancas:**
+
+1. **`/app/backend/models.py`:** adicionado `SUPER_ADMIN = "super_admin"` ao enum `PlanType`. Resolve o 422 imediato.
+
+2. **`/app/backend/routes/super_admin_routes.py`:**
+   - **POST `/business-types`:** se `base_type=="super_admin"` e ja existe um, retorna `400` com mensagem clara ("So pode haver UM por instalacao — edite o existente em vez de criar outro").
+   - **PUT `/business-types/{id}`:** se o BT atual tem `base_type=="super_admin"`, forca `update_data["base_type"] = "super_admin"` (operador nao pode demotar o singleton); se um BT tenant tenta promover-se a `super_admin`, retorna 400.
+   - **DELETE `/business-types/{id}`:** rejeita com 400 se for o SA BT.
+
+3. **`/app/frontend/src/pages/SuperAdmin/Dashboard.js`:** quando `form.base_type === 'super_admin'`, o select "Tipo Base" eh substituido por um campo de leitura com badge "SINGLETON" + texto "Super Admin (gerenciado pelo sistema)". Operador nao consegue mudar o tipo nem por engano.
+
+**Validacao via curl (preview real):**
+- PUT no SA BT com 9 features (uma delas `enabled:false`) → 200 OK, features persistiram ✓
+- POST tentando criar outro SA BT → 400 "Ja existe um Tipo de Negocio Super Admin" ✓
+- DELETE no SA BT → 400 "nao pode ser excluido" ✓
+
+**Testes:** 37 testes passando (5 sobre SA features incluindo regressao que `PlanType` contem `super_admin`).
+
+
 ### 2026-05-16 (B) — Fix toggles do Super Admin no editor de Tipo de Negocio ✅
 
 **Pedido:** "nao consigo liberar mais menus para o super Admin". Usuario tentava habilitar mais itens no sidebar do Super Admin via "Tipos de Negocio → Super Admin" e os toggles nao funcionavam.

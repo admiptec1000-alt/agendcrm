@@ -71,3 +71,18 @@ def test_super_admin_features_have_super_admin_category():
         assert f["category"] == "Super Admin", (
             f"Feature {f['feature_key']!r} has wrong category: {f.get('category')!r}"
         )
+
+
+def test_plan_type_includes_super_admin():
+    """The PlanType enum MUST include `super_admin`, otherwise the Pydantic
+    validation on the Business Type editor rejects ANY save with
+    base_type=super_admin with HTTP 422. That's what caused the user-reported
+    "save doesn't persist and screen goes blank" bug — the toast error fired
+    so fast it was invisible and the modal stayed open with stale data."""
+    from models import PlanType
+    assert PlanType.SUPER_ADMIN == "super_admin"
+    # Defensive: ensure all 4 values are present (regression guard for any
+    # future enum reorganization).
+    values = {p.value for p in PlanType}
+    assert "super_admin" in values
+    assert {"crm", "scheduling", "both"}.issubset(values)

@@ -114,6 +114,18 @@ async def create_business_type(
     user: dict = Depends(require_super_admin),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    # Enforce singleton for the Super Admin niche. We seed exactly one on
+    # startup (`seed_business_types` / `backfill_feature_keys`) and that's
+    # the one that governs the SA sidebar — duplicates would just confuse
+    # the editor (which BT's toggles actually win?). Block any create with
+    # base_type="super_admin" once the singleton already exists.
+    if data.base_type == PlanType.SUPER_ADMIN:
+        existing = await db.business_types.count_documents({"base_type": "super_admin"})
+        if existing > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Ja existe um Tipo de Negocio Super Admin. So pode haver UM por instalacao — edite o existente em vez de criar outro.",
+            )
     bt = {
         "id": str(uuid.uuid4()),
         "name": data.name,
@@ -174,6 +186,17 @@ async def update_business_type(
         raise HTTPException(status_code=404, detail="Tipo de negocio nao encontrado")
 
     update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    # Prevent the SA singleton from being demoted to a tenant type (would
+    # break the super-admin sidebar permission system). Also prevent any
+    # tenant BT from being promoted to super_admin (would create a duplicate
+    # singleton).
+    if bt.get("base_type") == "super_admin":
+        update_data["base_type"] = "super_admin"
+    elif update_data.get("base_type") == "super_admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Nao e possivel mudar o tipo base para Super Admin — esse tipo eh singleton e gerenciado pelo sistema.",
+        )
     # Cap bottom nav at 4 slots (Menu button takes the 5th position)
     if "mobile_bottom_nav" in update_data:
         update_data["mobile_bottom_nav"] = (update_data["mobile_bottom_nav"] or [])[:4]
@@ -211,6 +234,15 @@ async def delete_business_type(
     user: dict = Depends(require_super_admin),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    # Refuse to delete the singleton Super Admin BT — without it, the
+    # super-admin sidebar permission system has nothing to read and the
+    # operator could lock themselves out of menus.
+    bt = await db.business_types.find_one({"id": type_id}, {"_id": 0, "base_type": 1})
+    if bt and bt.get("base_type") == "super_admin":
+        raise HTTPException(
+            status_code=400,
+            detail="O Tipo de Negocio Super Admin nao pode ser excluido — ele governa o sidebar do painel admin.",
+        )
     result = await db.business_types.delete_one({"id": type_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Tipo de negocio nao encontrado")

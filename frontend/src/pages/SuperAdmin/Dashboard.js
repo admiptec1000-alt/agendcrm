@@ -2432,11 +2432,26 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Tipo Base</label>
-              <select data-testid="bt-base-type" value={form.base_type} onChange={e => setForm({...form, base_type: e.target.value})} className="input-field">
-                <option value="crm">CRM</option>
-                <option value="scheduling">Agendamento</option>
-                <option value="both">Ambos</option>
-              </select>
+              {form.base_type === 'super_admin' ? (
+                // SA niche is a system-managed singleton — operator can't
+                // demote it to a tenant type or the sidebar permission
+                // system breaks. Surface a locked, descriptive control.
+                <div
+                  data-testid="bt-base-type-locked"
+                  className="input-field flex items-center gap-2 bg-slate-50 text-slate-500 cursor-not-allowed"
+                >
+                  <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold uppercase tracking-wide">
+                    Singleton
+                  </span>
+                  <span>Super Admin (gerenciado pelo sistema)</span>
+                </div>
+              ) : (
+                <select data-testid="bt-base-type" value={form.base_type} onChange={e => setForm({...form, base_type: e.target.value})} className="input-field">
+                  <option value="crm">CRM</option>
+                  <option value="scheduling">Agendamento</option>
+                  <option value="both">Ambos</option>
+                </select>
+              )}
             </div>
           </div>
           <div>
