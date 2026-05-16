@@ -10,6 +10,28 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-16 (D) — Fallback endpoint para o catalogo de features SA ✅
+
+**Pedido:** Apos deploy, em producao o modal de "Editar Super Admin BT" mostrava a mensagem "Catalogo de features do Super Admin nao disponivel. Verifique se o backend esta atualizado." mesmo logando/saindo. Em preview funcionava.
+
+**Hipotese mais provavel:** O `role` do usuario em producao nao era exatamente `"super_admin"` (talvez `"admin"` com `is_super_admin=true`, ou alguma variante legada). Meu check anterior em `/all-features` era estritamente `user.get("role") == "super_admin"` — qualquer outro valor caia no branch tenant que filtra por `company_id` (que SA nao tem) e retornava lista vazia → frontend nao via a categoria "Super Admin".
+
+**Mudancas:**
+
+1. **`/all-features` agora usa o mesmo check lenient do `require_super_admin`:** aceita `super_admin`, `superadmin`, `root` (com normalizacao de hifens/underscores), alem dos flags booleanos `is_super_admin`/`is_superadmin`. Garante que todas as variantes de SA legacy vejam o catalogo completo.
+
+2. **Novo endpoint `/api/scheduling/super-admin-features`:** read-only, autenticacao basica (qualquer user logado). Retorna SEMPRE o catalogo `SUPER_ADMIN_FEATURES`. Anti-fragil contra role detection issues. Curl validou: 9 features retornadas tanto para super_admin quanto para tenant user.
+
+3. **Frontend BusinessTypeModal:** novo useEffect que detecta `allFeatures` sem a categoria "Super Admin" e ai chama `/super-admin-features` como fallback. Estado `fallbackSAFeatures` populado, e a variavel `superAdminFeatures` agora eh derivada com prioridade pro `allFeatures` mas cai pro fallback se vazio.
+
+4. **Empty-state melhorado:** texto antigo "Catalogo nao disponivel. Verifique se o backend esta atualizado." trocado por "Carregando catalogo… Se persistir, faca logout/login". Comunica melhor a tentativa de fallback.
+
+**Validacao:**
+- `/api/scheduling/super-admin-features` como super_admin → 9 features ✓
+- `/api/scheduling/super-admin-features` como tenant admin → tambem 9 features (intencional, eh um catalogo publico) ✓
+- 37 testes passando.
+
+
 ### 2026-05-16 (C) — Fix save do Super Admin BT (422 silencioso) + enforce singleton ✅
 
 **Pedido:** "Quando salvo nao salvo as funcoes selecionada para o super Admin e a tela fica em branco. Vamos deixar so um tipo de negocio super admin que vai ministrar a gestao de permissao de menus que aparecera no super Admin."

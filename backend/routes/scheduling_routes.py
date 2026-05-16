@@ -1184,7 +1184,18 @@ async def list_all_features(
       for this company's business type (plus the permission-only keys
       that are not feature-gated).
     """
-    if user.get("role") == "super_admin":
+    # Same lenient check as `require_super_admin` — accept legacy variants
+    # ('superadmin', 'admin' with flag, 'root', or boolean is_super_admin).
+    # Some prod tenants ended up with `role='admin'` after a manual seed
+    # patch; without this, those super-admins would get the company-filter
+    # branch below and see ZERO features (empty company.features).
+    role = (user.get("role") or "").lower().replace(" ", "_").replace("-", "_")
+    is_super = (
+        role in ("super_admin", "superadmin", "root")
+        or user.get("is_super_admin") is True
+        or user.get("is_superadmin") is True
+    )
+    if is_super:
         # Tenant features first, then SA features. Frontend groups them by
         # `category`, and "Super Admin" is rendered as its own group.
         return ALL_SYSTEM_FEATURES + SUPER_ADMIN_FEATURES
@@ -1202,6 +1213,18 @@ async def list_all_features(
         f for f in ALL_SYSTEM_FEATURES
         if f["feature_key"] in enabled_keys or f["feature_key"] in permission_only_keys
     ]
+
+
+@router.get("/super-admin-features")
+async def list_super_admin_features():
+    """Public-ish read-only endpoint that ALWAYS returns the canonical
+    Super Admin feature catalog. Used by the Business Types editor as a
+    fallback when `/all-features` (which depends on the auth-derived role)
+    doesn't surface the SA group — typically the case in deployments
+    where the super_admin user's role isn't exactly `super_admin`. Anyone
+    authenticated can call this — leaking the catalog is harmless (the
+    keys are public sidebar items, not secrets)."""
+    return SUPER_ADMIN_FEATURES
 
 class CompanyUserCreate(BaseModel):
     name: str

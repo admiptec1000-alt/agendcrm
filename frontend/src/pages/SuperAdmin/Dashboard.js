@@ -2345,6 +2345,19 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
   const [features, setFeatures] = useState(businessType?.features || []);
   const [mobileBottomNav, setMobileBottomNav] = useState(businessType?.mobile_bottom_nav || []);
   const [saving, setSaving] = useState(false);
+  // Fallback SA catalog: when the parent's `allFeatures` doesn't include
+  // the "Super Admin" category (legacy backend / role detection issue),
+  // we hit the dedicated public endpoint to populate the toggles. Without
+  // this, the modal showed a blank "Catalogo de features do Super Admin
+  // nao disponivel" message even though the data was 1 click away.
+  const [fallbackSAFeatures, setFallbackSAFeatures] = useState([]);
+  React.useEffect(() => {
+    const hasSAInAll = (allFeatures || []).some(f => f.category === 'Super Admin');
+    if (hasSAInAll) return;
+    api.get('/scheduling/super-admin-features')
+      .then(r => setFallbackSAFeatures(r.data || []))
+      .catch(() => {});
+  }, [allFeatures]);
 
   const toggleBottomNav = (featureKey) => {
     setMobileBottomNav((curr) => {
@@ -2412,7 +2425,13 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
   const crmFeatures = allFeatures.filter(f => f.category === 'CRM');
   const schedFeatures = allFeatures.filter(f => f.category === 'Operacional');
   const sharedFeatures = allFeatures.filter(f => ['Catalogo', 'Analise', 'Config Empresa', 'Administracao', 'Principal'].includes(f.category));
-  const superAdminFeatures = allFeatures.filter(f => f.category === 'Super Admin');
+  const superAdminFeaturesFromAll = allFeatures.filter(f => f.category === 'Super Admin');
+  // Fallback to the dedicated catalog endpoint if /all-features didn't
+  // include them (legacy backend builds where the super-admin role check
+  // doesn't expose the SA group).
+  const superAdminFeatures = superAdminFeaturesFromAll.length > 0
+    ? superAdminFeaturesFromAll
+    : fallbackSAFeatures;
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -2566,7 +2585,8 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-1 p-3 rounded-lg bg-slate-50 border border-slate-200">
                   {superAdminFeatures.length === 0 ? (
                     <p className="text-xs text-amber-700 col-span-full">
-                      Catalogo de features do Super Admin nao disponivel. Verifique se o backend esta atualizado.
+                      Carregando catalogo de features do Super Admin… Se essa mensagem persistir,
+                      faca logout/login para revalidar suas permissoes.
                     </p>
                   ) : superAdminFeatures.map(f => (
                     <FeatureToggle
