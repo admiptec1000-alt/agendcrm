@@ -2158,9 +2158,17 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     }
   };
 
-  const crmFeatures = allFeatures.filter(f => f.category === 'crm');
-  const schedFeatures = allFeatures.filter(f => f.category === 'scheduling');
-  const sharedFeatures = allFeatures.filter(f => f.category === 'shared');
+  // Backend uses Portuguese, capitalized category labels ('CRM',
+  // 'Operacional', 'Catalogo', 'Analise', 'Config Empresa', 'Administracao',
+  // 'Principal', 'Super Admin'). The legacy lowercase aliases this code
+  // used ('crm'/'scheduling'/'shared') never matched anything → all the
+  // toggles in the BT editor rendered EMPTY. We now group by actual
+  // backend categories and keep the legacy names pointing to the right
+  // buckets for the "Ativar todas" shortcut buttons.
+  const crmFeatures = allFeatures.filter(f => f.category === 'CRM');
+  const schedFeatures = allFeatures.filter(f => f.category === 'Operacional');
+  const sharedFeatures = allFeatures.filter(f => ['Catalogo', 'Analise', 'Config Empresa', 'Administracao', 'Principal'].includes(f.category));
+  const superAdminFeatures = allFeatures.filter(f => f.category === 'Super Admin');
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -2394,9 +2402,17 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
     }
   };
 
-  const crmFeatures = allFeatures.filter(f => f.category === 'crm');
-  const schedFeatures = allFeatures.filter(f => f.category === 'scheduling');
-  const sharedFeatures = allFeatures.filter(f => f.category === 'shared');
+  // Backend uses Portuguese, capitalized category labels ('CRM',
+  // 'Operacional', 'Catalogo', 'Analise', 'Config Empresa', 'Administracao',
+  // 'Principal', 'Super Admin'). The legacy lowercase aliases this code
+  // used ('crm'/'scheduling'/'shared') never matched anything → all the
+  // toggles in the BT editor rendered EMPTY. We now group by actual
+  // backend categories and keep the legacy names pointing to the right
+  // buckets for the "Ativar todas" shortcut buttons.
+  const crmFeatures = allFeatures.filter(f => f.category === 'CRM');
+  const schedFeatures = allFeatures.filter(f => f.category === 'Operacional');
+  const sharedFeatures = allFeatures.filter(f => ['Catalogo', 'Analise', 'Config Empresa', 'Administracao', 'Principal'].includes(f.category));
+  const superAdminFeatures = allFeatures.filter(f => f.category === 'Super Admin');
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -2505,11 +2521,55 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
 
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Funcionalidades Habilitadas</h3>
+            {form.base_type === 'super_admin' ? (
+              // Super Admin niche has a completely different feature catalog
+              // (sidebar items for the SaaS operator's own panel). We swap
+              // out the CRM/Agendamento/Compartilhado groups for a single
+              // "Super Admin" group with the actual menu items.
+              <div data-testid="bt-super-admin-features">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-slate-700">Itens do menu Super Admin</span>
+                  <button
+                    onClick={() => {
+                      // Bulk-enable all SA features at once.
+                      const updated = [...features];
+                      superAdminFeatures.forEach(saf => {
+                        const idx = updated.findIndex(f => f.feature_key === saf.feature_key);
+                        if (idx >= 0) updated[idx] = { ...updated[idx], enabled: true };
+                        else updated.push({ feature_key: saf.feature_key, enabled: true });
+                      });
+                      setFeatures(updated);
+                    }}
+                    className="text-xs text-primary hover:underline"
+                    data-testid="bt-enable-all-super-admin"
+                  >Ativar todos</button>
+                </div>
+                <p className="text-[11px] text-slate-500 mb-3">
+                  Selecione quais menus do painel Super Admin ficam visiveis no sidebar.
+                  As alteracoes aplicam imediatamente para todos os usuarios com role <strong>super_admin</strong> no proximo login.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  {superAdminFeatures.length === 0 ? (
+                    <p className="text-xs text-amber-700 col-span-full">
+                      Catalogo de features do Super Admin nao disponivel. Verifique se o backend esta atualizado.
+                    </p>
+                  ) : superAdminFeatures.map(f => (
+                    <FeatureToggle
+                      key={f.feature_key}
+                      feature={f}
+                      enabled={isFeatureEnabled(f.feature_key)}
+                      onToggle={() => toggleFeature(f.feature_key)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-slate-700">CRM</span>
-                  <button onClick={() => enableAll('crm')} className="text-xs text-primary hover:underline">Ativar todas</button>
+                  <button onClick={() => enableAll('CRM')} className="text-xs text-primary hover:underline">Ativar todas</button>
                 </div>
                 {crmFeatures.map(f => (
                   <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
@@ -2518,7 +2578,7 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-slate-700">Agendamento</span>
-                  <button onClick={() => enableAll('scheduling')} className="text-xs text-primary hover:underline">Ativar todas</button>
+                  <button onClick={() => enableAll('Operacional')} className="text-xs text-primary hover:underline">Ativar todas</button>
                 </div>
                 {schedFeatures.map(f => (
                   <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
@@ -2531,6 +2591,8 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
                 <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
               ))}
             </div>
+              </>
+            )}
           </div>
 
           <div className="border-t border-slate-200 pt-4">

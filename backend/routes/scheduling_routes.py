@@ -1126,6 +1126,8 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "filas_chatbot", "label": "Filas & Chatbot", "category": "CRM"},
     {"feature_key": "agente_ia", "label": "Agente de IA", "category": "CRM"},
     {"feature_key": "conexoes", "label": "Conexoes", "category": "CRM"},
+    {"feature_key": "sgp_gateway", "label": "SGP Gateway", "category": "CRM"},
+    {"feature_key": "integrações", "label": "API e Integracoes", "category": "CRM"},
     {"feature_key": "calendario", "label": "Calendario", "category": "Operacional"},
     {"feature_key": "agenda", "label": "Agenda", "category": "Operacional"},
     {"feature_key": "agendamentos", "label": "Agendamento Msg", "category": "Operacional"},
@@ -1149,15 +1151,44 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "own_appointments_only", "label": "Ver/concluir somente os proprios agendamentos", "category": "Permissoes"},
 ]
 
+# Super-Admin-only feature catalog. Each key MUST match a sidebar entry in
+# `/app/frontend/src/pages/SuperAdmin/Dashboard.js::allSidebarItems` so the
+# toggle in "Tipos de Negocio → Super Admin" actually hides/shows that menu.
+# The Super Admin BT editor surfaces these as a dedicated group (separate
+# from the tenant-facing features above).
+SUPER_ADMIN_FEATURES = [
+    {"feature_key": "dashboard", "label": "Dashboard", "category": "Super Admin"},
+    {"feature_key": "companies", "label": "Empresas", "category": "Super Admin"},
+    {"feature_key": "business-types", "label": "Tipos de Negocio", "category": "Super Admin"},
+    {"feature_key": "partners", "label": "Parceiros", "category": "Super Admin"},
+    {"feature_key": "financial", "label": "Financeiro Admin", "category": "Super Admin"},
+    {"feature_key": "indoor", "label": "Indoor / TV", "category": "Super Admin"},
+    {"feature_key": "my-panel", "label": "Meu Painel", "category": "Super Admin"},
+    {"feature_key": "sgp-repair", "label": "Reparo SGP", "category": "Super Admin"},
+    {"feature_key": "settings", "label": "Configuracoes", "category": "Super Admin"},
+]
+
 @router.get("/all-features")
 async def list_all_features(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     """List features for permission profile editor.
-    Returns only features ENABLED by the Super Admin for this company's business type.
-    Permission-only features (edit_appointment*) are always included regardless of features toggle.
+
+    Behavior depends on the caller's role:
+    - **super_admin**: returns the ENTIRE catalog (tenant features +
+      super-admin features). Used by the Business Types editor modal so
+      the operator can toggle ANY feature on ANY niche, including the
+      Super Admin niche.
+    - **company users**: returns only features ENABLED by the Super Admin
+      for this company's business type (plus the permission-only keys
+      that are not feature-gated).
     """
+    if user.get("role") == "super_admin":
+        # Tenant features first, then SA features. Frontend groups them by
+        # `category`, and "Super Admin" is rendered as its own group.
+        return ALL_SYSTEM_FEATURES + SUPER_ADMIN_FEATURES
+
     permission_only_keys = {"edit_appointment", "edit_appointment_price", "own_appointments_only"}
 
     # Load company features (set by Super Admin toggles)

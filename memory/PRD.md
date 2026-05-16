@@ -10,6 +10,52 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-16 (B) — Fix toggles do Super Admin no editor de Tipo de Negocio ✅
+
+**Pedido:** "nao consigo liberar mais menus para o super Admin". Usuario tentava habilitar mais itens no sidebar do Super Admin via "Tipos de Negocio → Super Admin" e os toggles nao funcionavam.
+
+**Root cause — 4 bugs interconectados:**
+
+1. **`/api/scheduling/all-features` retornava VAZIO para super_admin** — endpoint filtrava por `company_id`, mas super_admin nao tem company. Resultado: `allFeatures = []` no front, editor sem nenhum toggle visivel.
+
+2. **Filtro de categoria no `BusinessTypeModal` comparava `'crm'/'scheduling'/'shared'` (lowercase)** mas o catalogo `ALL_SYSTEM_FEATURES` usa `'CRM'/'Operacional'/...` (capitalizado em portugues). Todos os grupos renderizavam VAZIOS mesmo quando havia features.
+
+3. **Seeded `sa_features` em server.py tinha chaves erradas:** `payments`, `support` (nao existem no sidebar do Super Admin) e faltavam `business-types`, `partners`, `indoor` (existem no sidebar mas nao tinham toggle).
+
+4. **`backfill_feature_keys` poluia o BT do Super Admin** com features de tenant (`relatorio_atendimentos`, `orcamentos`, `integrações`, `agenda_pro`) que nao correspondem a nada no sidebar dele.
+
+**Mudancas:**
+
+1. **`/app/backend/routes/scheduling_routes.py`:**
+   - Novo catalogo `SUPER_ADMIN_FEATURES` com as 9 chaves canonicas do sidebar do Super Admin: `dashboard`, `companies`, `business-types`, `partners`, `financial`, `indoor`, `my-panel`, `sgp-repair`, `settings` (categoria "Super Admin").
+   - `/all-features` agora detecta `role == "super_admin"` e retorna `ALL_SYSTEM_FEATURES + SUPER_ADMIN_FEATURES` (46 features), bypass o filtro por company.
+   - Tambem adicionei `sgp_gateway` e `integrações` ao catalogo tenant (estavam faltando).
+
+2. **`/app/backend/server.py`:**
+   - Seeded `sa_features` agora importa do catalogo canonico (single source of truth).
+   - `backfill_feature_keys` recebeu exclusao `{"base_type": {"$ne": "super_admin"}}` em todas as queries que tocam `business_types` — assim o BT do Super Admin nao recebe mais features de tenant.
+   - **Nova etapa de reparo:** itera todos os BTs com `base_type=super_admin` e (1) remove chaves nao-canonicas leaked por backfills antigos, (2) adiciona qualquer chave canonica faltando. Preserva escolhas do operador para chaves que ainda sao validas.
+
+3. **`/app/frontend/src/pages/SuperAdmin/Dashboard.js`:**
+   - `crmFeatures/schedFeatures/sharedFeatures` agora filtram pelas categorias REAIS do backend (`CRM`, `Operacional`, e o agrupado `Catalogo+Analise+Config Empresa+Administracao+Principal`).
+   - Novo `superAdminFeatures` para a categoria "Super Admin".
+   - `BusinessTypeModal` agora detecta `form.base_type === 'super_admin'` e troca os grupos CRM/Agendamento/Compartilhado por um unico grupo "Itens do menu Super Admin" com botao "Ativar todos".
+   - `enableAll('crm')` virou `enableAll('CRM')` (etc.) pra bater com as labels do catalogo.
+
+**Validacao no startup:** logs do backend mostraram `Repaired Super Admin BT features: removed 1 non-canonical, added 0 missing` — confirma que a migracao automatica funcionou.
+
+**Validacao manual via curl:**
+- GET `/api/scheduling/all-features` como super_admin → 46 features (37 tenant + 9 super_admin) ✓
+- DB direto: BT do Super Admin agora tem as 9 chaves canonicas ✓
+
+**Testes:** 36 testes passando (4 novos em `tests/test_super_admin_features.py`):
+- Backend SA catalog == frontend `allSidebarItems` (parse do JS em runtime).
+- Super Admin keys nao vazam pro catalogo tenant.
+- Todas SA features tem `category="Super Admin"`.
+
+**Como usar agora:** Super Admin → Tipos de Negocio → editar "Super Admin" → ve 9 toggles correspondentes aos itens do sidebar. Pode desligar/ligar qualquer um, e ao salvar a mudanca reflete no proximo refresh da pagina.
+
+
 ### 2026-05-16 — Toggle SGP auto-close movido para o gateway + reorganizacao sidebar ✅
 
 **Pedido:** mover o toggle "Fechar tickets SGP" das Configuracoes para dentro do modal de edicao de cada SGP Gateway (segunda tela). E reorganizar o menu lateral: SGP Gateway sai de CRM e vai pra Config Empresa, logo abaixo de "API e Integrações".

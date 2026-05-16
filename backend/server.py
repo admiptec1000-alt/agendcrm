@@ -137,11 +137,14 @@ async def seed_business_types(db):
     # Super-admin niche: lets you turn each super-admin module on/off the
     # same way a tenant type does. Keys MUST match the sidebar item keys in
     # /app/frontend/src/pages/SuperAdmin/Dashboard.js so the UI can hide
-    # entries based on the active super-admin's business type.
+    # entries based on the active super-admin's business type. Source of
+    # truth for the canonical list lives in
+    # `/app/backend/routes/scheduling_routes.py::SUPER_ADMIN_FEATURES` —
+    # we import it here so the seed and the editor stay in sync.
+    from routes.scheduling_routes import SUPER_ADMIN_FEATURES as _SA_CATALOG
     sa_features = [
-        {"feature_key": k, "enabled": True}
-        for k in ["dashboard", "companies", "payments", "support",
-                   "my-panel", "sgp-repair", "financial", "settings"]
+        {"feature_key": f["feature_key"], "enabled": True}
+        for f in _SA_CATALOG
     ]
     now = datetime.now(timezone.utc).isoformat()
     default_types = [
@@ -206,11 +209,19 @@ async def backfill_feature_keys(db):
     We key off the presence of 'atendimentos' (the core CRM feature) rather
     than plan_type, because plan_type values vary (starter/pro/...) and
     business_types may not have base_type populated on older installs.
+
+    IMPORTANT: super_admin business_types use a completely different
+    feature catalog (sidebar items for the SaaS operator's own login). We
+    excluide them from every tenant-feature backfill below so the SA
+    niche stays clean, and we run a dedicated repair step at the end that
+    re-seeds the canonical SA feature list.
     """
+    SUPER_ADMIN_EXCLUSION = {"base_type": {"$ne": "super_admin"}}
     # Companies that already have 'atendimentos' should also have the new
     # relatorio_atendimentos feature.
     await db.business_types.update_many(
-        {"features.feature_key": "atendimentos",
+        {**SUPER_ADMIN_EXCLUSION,
+         "features.feature_key": "atendimentos",
          "features.feature_key": {"$ne": "relatorio_atendimentos"}},
         {"$addToSet": {"features": {"feature_key": "relatorio_atendimentos", "enabled": True}}}
     )
@@ -222,7 +233,8 @@ async def backfill_feature_keys(db):
     )
     # Quotes (orcamentos) for the same set
     await db.business_types.update_many(
-        {"features.feature_key": "atendimentos",
+        {**SUPER_ADMIN_EXCLUSION,
+         "features.feature_key": "atendimentos",
          "features.feature_key": {"$ne": "orcamentos"}},
         {"$addToSet": {"features": {"feature_key": "orcamentos", "enabled": True}}}
     )
@@ -257,6 +269,7 @@ async def backfill_feature_keys(db):
     # item (since the feature was added later).
     await db.business_types.update_many(
         {
+            "base_type": {"$ne": "super_admin"},
             "features": {
                 "$elemMatch": {"feature_key": {"$ne": "integrações"}}
             },
@@ -331,12 +344,12 @@ async def backfill_feature_keys(db):
     # Idempotently seed the Super-Admin niche on existing installs that
     # were seeded before this BT existed. We only insert when no BT with
     # base_type=super_admin is present — safe to run on every startup.
+    from routes.scheduling_routes import SUPER_ADMIN_FEATURES as _SA_CATALOG
     existing_sa = await db.business_types.count_documents({"base_type": "super_admin"})
     if existing_sa == 0:
         sa_feats = [
-            {"feature_key": k, "enabled": True}
-            for k in ["dashboard", "companies", "payments", "support",
-                       "my-panel", "sgp-repair", "financial", "settings"]
+            {"feature_key": f["feature_key"], "enabled": True}
+            for f in _SA_CATALOG
         ]
         await db.business_types.insert_one({
             "id": str(uuid.uuid4()),
@@ -354,6 +367,38 @@ async def backfill_feature_keys(db):
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Seeded Super Admin business type (backfill)")
+    else:
+        # Repair existing Super Admin BT(s):
+        #   1. Strip any tenant feature_keys that leaked via earlier backfill
+        #      runs (relatorio_atendimentos, orcamentos, integrações, etc.)
+        #   2. Strip legacy keys that don't map to a sidebar item anymore
+        #      (`payments`, `support`).
+        #   3. Add any canonical sidebar key that's missing (default enabled).
+        # We preserve operator choices for any key that IS in the canonical
+        # catalog — only the "enabled" flag they previously set survives.
+        canonical_keys = {f["feature_key"] for f in _SA_CATALOG}
+        async for bt in db.business_types.find({"base_type": "super_admin"}):
+            existing = bt.get("features") or []
+            kept = []
+            existing_keys = set()
+            for f in existing:
+                k = f.get("feature_key")
+                if k in canonical_keys:
+                    kept.append({"feature_key": k, "enabled": bool(f.get("enabled", True))})
+                    existing_keys.add(k)
+            # Append any canonical key missing on this BT (default enabled).
+            for k in canonical_keys - existing_keys:
+                kept.append({"feature_key": k, "enabled": True})
+            if kept != existing:
+                await db.business_types.update_one(
+                    {"_id": bt["_id"]},
+                    {"$set": {"features": kept}},
+                )
+                logger.info(
+                    f"Repaired Super Admin BT features: removed "
+                    f"{len(existing) - len([k for k in existing if k.get('feature_key') in canonical_keys])} "
+                    f"non-canonical, added {len(canonical_keys - existing_keys)} missing"
+                )
 
 
 async def backfill_ticket_client_links(db):
