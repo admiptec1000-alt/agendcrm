@@ -1,0 +1,23 @@
+{
+  "short_name": "8ip Admin",
+  "name": "8ip Infinity Tilt Tech — Admin",
+  "icons": [
+    {
+      "src": "/8ip-logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/8ip-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/admin-login",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#0F172A",
+  "background_color": "#0F172A"
+}

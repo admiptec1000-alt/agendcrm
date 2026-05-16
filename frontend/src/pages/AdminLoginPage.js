@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Shield, Mail, Lock } from 'lucide-react';
+import { Mail, Lock } from 'lucide-react';
 
 const AdminLoginPage = () => {
   const [email, setEmail] = useState('');
@@ -29,9 +29,15 @@ const AdminLoginPage = () => {
       <div className="w-full max-w-sm">
         <div className="bg-slate-800 rounded-2xl shadow-2xl p-8 border border-slate-700">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-indigo-600 mb-4">
-              <Shield className="w-7 h-7 text-white" />
-            </div>
+            {/* 8ip Infinity Tilt Tech brand mark — replaces the previous
+                generic Shield icon to give the Super Admin panel its own
+                visual identity on the login screen. */}
+            <img
+              src="/8ip-logo.png"
+              alt="8ip Infinity Tilt Tech"
+              className="w-20 h-20 mx-auto mb-4 rounded-2xl shadow-lg"
+              data-testid="admin-login-logo"
+            />
             <h1 className="text-2xl font-bold font-heading tracking-tight text-white">Admin Panel</h1>
             <p className="text-slate-400 mt-1 text-sm">Acesso restrito ao administrador</p>
           </div>

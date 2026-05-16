@@ -109,9 +109,17 @@ const SuperAdminDashboard = () => {
       {/* Sidebar */}
       <aside className={`w-64 bg-white border-r border-slate-200 flex flex-col fixed h-full z-40 transition-transform duration-200 ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold font-heading text-slate-900 tracking-tight">AgentCRM</h1>
-            <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Super Admin</p>
+          <div className="flex items-center gap-3 min-w-0">
+            <img
+              src="/8ip-logo.png"
+              alt="8ip"
+              className="w-9 h-9 rounded-lg shadow-sm flex-shrink-0"
+              data-testid="super-admin-logo"
+            />
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold font-heading text-slate-900 tracking-tight truncate">AgentCRM</h1>
+              <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Super Admin</p>
+            </div>
           </div>
           <button onClick={() => setMobileSidebarOpen(false)} className="lg:hidden p-1.5 rounded-lg hover:bg-slate-100" data-testid="close-sidebar-btn">
             <X className="w-5 h-5 text-slate-500" />

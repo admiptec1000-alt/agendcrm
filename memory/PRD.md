@@ -10,6 +10,29 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-16 (E) — Branding 8ip no Super Admin (login + sidebar + PWA shortcut) ✅
+
+**Pedido:** "Insira essa logomarca no ambiente do super Admin tanto na parte de login na interna do sistema e tambem ao criar o atalho."
+
+**Mudancas:**
+
+1. **Asset:** baixado o PNG do usuario para `/app/frontend/public/8ip-logo.png` (103 KB, image/png).
+
+2. **Tela de login do admin (`/app/frontend/src/pages/AdminLoginPage.js`):** substituido o icone Shield generico (purpura) por `<img src="/8ip-logo.png" data-testid="admin-login-logo">` em 80x80 com sombra. Removido import nao usado de `Shield` lucide.
+
+3. **Sidebar do painel Super Admin (`/app/frontend/src/pages/SuperAdmin/Dashboard.js`):** logo 8ip 36x36 inserido a esquerda do titulo "AgentCRM / Super Admin", `data-testid="super-admin-logo"`.
+
+4. **PWA shortcut:**
+   - Novo `/app/frontend/public/admin-manifest.json` com `short_name="8ip Admin"`, `name="8ip Infinity Tilt Tech — Admin"`, icons apontando pra `/8ip-logo.png` (192/512 com `purpose: "any maskable"`), `start_url=/admin-login`, theme dark (#0F172A).
+   - Script inline em `/app/frontend/public/index.html` atualizado: quando a primeira parte do path eh `admin-login` ou `super-admin`, troca o `<link rel="manifest">` para `/admin-manifest.json`, hot-patcha todos `apple-touch-icon`/`shortcut icon`/`icon` para `/8ip-logo.png`, e atualiza `apple-mobile-web-app-title` e `document.title` para "8ip Admin". Resultado: "Adicionar a tela inicial" no iOS/Android gera atalho com a marca 8ip.
+
+**Validacao:**
+- Screenshot: tela de login renderiza com o logo gradient (8 em azul/roxo + P).
+- `curl /admin-manifest.json` → 200 com JSON valido.
+- `curl /8ip-logo.png` → 200 image/png 104688 bytes.
+- Sidebar logo presente no DOM (verificado via query_selector).
+
+
 ### 2026-05-16 (D) — Fallback endpoint para o catalogo de features SA ✅
 
 **Pedido:** Apos deploy, em producao o modal de "Editar Super Admin BT" mostrava a mensagem "Catalogo de features do Super Admin nao disponivel. Verifique se o backend esta atualizado." mesmo logando/saindo. Em preview funcionava.

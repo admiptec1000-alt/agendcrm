@@ -25,7 +25,40 @@
               var first = path.split("/").filter(Boolean)[0] || "";
               var blocked = { "landing":1,"admin-login":1,"register":1,"super-admin":1,"app":1,"login":1,"booking":1,"indoor":1,"static":1,"api":1 };
               var manifestHref = "/manifest.json";
-              if (first && !blocked[first]) {
+              // Routes that belong to the 8ip Super Admin product get their
+              // OWN PWA identity (icon = /8ip-logo.png, dark theme). This
+              // matters when the operator does "Add to Home Screen" from
+              // the admin login or panel — the shortcut now carries the
+              // 8ip brand instead of the generic AgentCRM icon.
+              var isAdminRoute = first === "admin-login" || first === "super-admin";
+              if (isAdminRoute) {
+                manifestHref = "/admin-manifest.json";
+                document.title = "8ip Admin";
+                // Swap apple-touch-icon AND favicon to the 8ip logo so
+                // both iOS Home Screen and the desktop browser tab show
+                // the new mark immediately on first paint.
+                var swapIcons = function (src) {
+                  var appleIcons = document.querySelectorAll('link[rel="apple-touch-icon"]');
+                  appleIcons.forEach(function (link) { link.href = src; });
+                  ["shortcut icon", "icon"].forEach(function (rel) {
+                    var l = document.querySelector('link[rel="' + rel + '"]');
+                    if (!l) {
+                      l = document.createElement("link");
+                      l.rel = rel;
+                      document.head.appendChild(l);
+                    }
+                    l.href = src;
+                  });
+                  var at = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+                  if (!at) {
+                    at = document.createElement("meta");
+                    at.setAttribute("name", "apple-mobile-web-app-title");
+                    document.head.appendChild(at);
+                  }
+                  at.content = "8ip Admin";
+                };
+                swapIcons("/8ip-logo.png");
+              } else if (first && !blocked[first]) {
                 manifestHref = "/api/public/manifest/" + encodeURIComponent(first);
               }
               var manifestLink = document.createElement("link");
