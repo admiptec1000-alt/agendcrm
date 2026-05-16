@@ -10,6 +10,30 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-16 (G) — Fallback endpoint agora cobre TODO o catalogo ✅
+
+**Pedido:** "ainda nao aparece as funcoes do CRM ne do Agendamento para Compartilhar para selecionar para o super admin conforme tela anexo."
+
+**Root cause:** Em producao, `/all-features` ainda nao tinha sido atualizado (deploy pendente OU role detection diferente do esperado). Meu fallback `/super-admin-features` antigo so retornava `SUPER_ADMIN_FEATURES` (9 items), nao incluia o catalogo tenant. Resultado: grupos CRM/Agendamento/Compartilhado renderizavam HEADERS mas sem toggles.
+
+**Mudancas:**
+
+1. **`/app/backend/routes/scheduling_routes.py`:** endpoint `/super-admin-features` agora retorna `ALL_SYSTEM_FEATURES + SUPER_ADMIN_FEATURES` (46 entries no total). Anti-fragil contra qualquer estado do `/all-features`.
+
+2. **`/app/frontend/src/pages/SuperAdmin/Dashboard.js`:**
+   - Renomeado `fallbackSAFeatures` → `fallbackAllFeatures`.
+   - Condicao do useEffect ficou mais agressiva: agora dispara o fallback se `allFeatures` nao tiver tanto categoria "Super Admin" QUANTO categorias tenant ("CRM", "Operacional", etc). Antes so checava SA.
+   - Novo `useMemo effectiveFeatures` que faz uniao por categoria: parente preenche o que tem, fallback preenche o resto. Garante que nenhum grupo fique vazio.
+   - Os 4 filtros (`crmFeatures`, `schedFeatures`, `sharedFeatures`, `superAdminFeatures`) agora usam `effectiveFeatures` em vez de `allFeatures`.
+
+**Validacao:**
+- `curl /api/scheduling/super-admin-features` → 46 features, distribuidas: CRM=15, Operacional=4, Catalogo=5, Analise=3, Config Empresa=4, Administracao=2, Super Admin=9, Permissoes=3, Principal=1.
+- 5 testes em test_super_admin_features.py passando.
+- Lint clean.
+
+Apos o proximo deploy em producao, o BT do Super Admin vai mostrar todos os toggles preenchidos em todos os 4 grupos.
+
+
 ### 2026-05-16 (F) — Editor do BT Super Admin agora expoe TODAS as features ✅
 
 **Pedido:** "Agora ja aparece as funcoes mas so as do super Admin atual preciso selecionar [...] qualquer funcao disponivel no sistema inclusive as disponibilizadas para o agendamento ou atendimento."

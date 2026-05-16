@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { superAdminAPI } from '../../services/api';
 import api from '../../services/api';
@@ -2353,19 +2353,50 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
   const [features, setFeatures] = useState(businessType?.features || []);
   const [mobileBottomNav, setMobileBottomNav] = useState(businessType?.mobile_bottom_nav || []);
   const [saving, setSaving] = useState(false);
-  // Fallback SA catalog: when the parent's `allFeatures` doesn't include
-  // the "Super Admin" category (legacy backend / role detection issue),
-  // we hit the dedicated public endpoint to populate the toggles. Without
-  // this, the modal showed a blank "Catalogo de features do Super Admin
-  // nao disponivel" message even though the data was 1 click away.
-  const [fallbackSAFeatures, setFallbackSAFeatures] = useState([]);
+  // Fallback feature catalog: when the parent's `allFeatures` doesn't
+  // include the "Super Admin" category (legacy backend / role detection
+  // issue), OR doesn't include ANY tenant features (same issue — SA user's
+  // role made /all-features return the filtered tenant branch instead of
+  // the full catalog), we hit the dedicated public endpoint which always
+  // returns the COMPLETE catalog (tenant + SA = 46 entries). Without this,
+  // the BT editor showed empty CRM / Agendamento / Compartilhado groups
+  // for the SA user in production.
+  const [fallbackAllFeatures, setFallbackAllFeatures] = useState([]);
   React.useEffect(() => {
-    const hasSAInAll = (allFeatures || []).some(f => f.category === 'Super Admin');
-    if (hasSAInAll) return;
+    const list = allFeatures || [];
+    const hasSA = list.some(f => f.category === 'Super Admin');
+    const hasTenant = list.some(f => ['CRM', 'Operacional', 'Catalogo', 'Analise', 'Config Empresa', 'Administracao'].includes(f.category));
+    if (hasSA && hasTenant) return; // /all-features already gave us everything
     api.get('/scheduling/super-admin-features')
-      .then(r => setFallbackSAFeatures(r.data || []))
+      .then(r => setFallbackAllFeatures(r.data || []))
       .catch(() => {});
   }, [allFeatures]);
+
+  // Effective catalog used by the filters below: prefer the parent-supplied
+  // `allFeatures` for any category it already has; for categories that are
+  // EMPTY in `allFeatures` but present in the fallback, use the fallback.
+  const effectiveFeatures = useMemo(() => {
+    const parentByCat = {};
+    (allFeatures || []).forEach(f => {
+      const c = f.category;
+      if (!parentByCat[c]) parentByCat[c] = [];
+      parentByCat[c].push(f);
+    });
+    const fallbackByCat = {};
+    fallbackAllFeatures.forEach(f => {
+      const c = f.category;
+      if (!fallbackByCat[c]) fallbackByCat[c] = [];
+      fallbackByCat[c].push(f);
+    });
+    // Union of categories
+    const cats = new Set([...Object.keys(parentByCat), ...Object.keys(fallbackByCat)]);
+    const out = [];
+    cats.forEach(c => {
+      const parentItems = parentByCat[c] || [];
+      out.push(...(parentItems.length > 0 ? parentItems : (fallbackByCat[c] || [])));
+    });
+    return out;
+  }, [allFeatures, fallbackAllFeatures]);
 
   const toggleBottomNav = (featureKey) => {
     setMobileBottomNav((curr) => {
@@ -2430,16 +2461,13 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
   // toggles in the BT editor rendered EMPTY. We now group by actual
   // backend categories and keep the legacy names pointing to the right
   // buckets for the "Ativar todas" shortcut buttons.
-  const crmFeatures = allFeatures.filter(f => f.category === 'CRM');
-  const schedFeatures = allFeatures.filter(f => f.category === 'Operacional');
-  const sharedFeatures = allFeatures.filter(f => ['Catalogo', 'Analise', 'Config Empresa', 'Administracao', 'Principal'].includes(f.category));
-  const superAdminFeaturesFromAll = allFeatures.filter(f => f.category === 'Super Admin');
-  // Fallback to the dedicated catalog endpoint if /all-features didn't
-  // include them (legacy backend builds where the super-admin role check
-  // doesn't expose the SA group).
-  const superAdminFeatures = superAdminFeaturesFromAll.length > 0
-    ? superAdminFeaturesFromAll
-    : fallbackSAFeatures;
+  // Use `effectiveFeatures` (parent's allFeatures + endpoint fallback) so
+  // every group renders populated even when /all-features returned an
+  // incomplete catalog for this user's role.
+  const crmFeatures = effectiveFeatures.filter(f => f.category === 'CRM');
+  const schedFeatures = effectiveFeatures.filter(f => f.category === 'Operacional');
+  const sharedFeatures = effectiveFeatures.filter(f => ['Catalogo', 'Analise', 'Config Empresa', 'Administracao', 'Principal'].includes(f.category));
+  const superAdminFeatures = effectiveFeatures.filter(f => f.category === 'Super Admin');
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>

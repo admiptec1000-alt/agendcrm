@@ -1217,14 +1217,20 @@ async def list_all_features(
 
 @router.get("/super-admin-features")
 async def list_super_admin_features():
-    """Public-ish read-only endpoint that ALWAYS returns the canonical
-    Super Admin feature catalog. Used by the Business Types editor as a
-    fallback when `/all-features` (which depends on the auth-derived role)
-    doesn't surface the SA group — typically the case in deployments
-    where the super_admin user's role isn't exactly `super_admin`. Anyone
-    authenticated can call this — leaking the catalog is harmless (the
-    keys are public sidebar items, not secrets)."""
-    return SUPER_ADMIN_FEATURES
+    """Public-ish read-only endpoint that ALWAYS returns BOTH the full
+    tenant catalog AND the canonical Super Admin feature catalog. Used
+    by the Business Types editor as a fallback when `/all-features`
+    (which depends on the auth-derived role) doesn't surface them — typically
+    the case when a super_admin user has a non-canonical role value in the
+    DB. Anyone authenticated can call this — leaking the catalog is
+    harmless (feature_keys are public sidebar items, not secrets).
+
+    The previous version only returned `SUPER_ADMIN_FEATURES` (9 items),
+    which left the CRM / Agendamento / Compartilhado groups EMPTY in
+    the Business Types editor modal when /all-features was unavailable.
+    Now returns the complete catalog (tenant + SA = 46 entries) so the
+    editor renders with every toggle populated, regardless of role state."""
+    return ALL_SYSTEM_FEATURES + SUPER_ADMIN_FEATURES
 
 class CompanyUserCreate(BaseModel):
     name: str
