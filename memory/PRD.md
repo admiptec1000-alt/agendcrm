@@ -10,6 +10,35 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-05-16 — Toggle SGP auto-close movido para o gateway + reorganizacao sidebar ✅
+
+**Pedido:** mover o toggle "Fechar tickets SGP" das Configuracoes para dentro do modal de edicao de cada SGP Gateway (segunda tela). E reorganizar o menu lateral: SGP Gateway sai de CRM e vai pra Config Empresa, logo abaixo de "API e Integrações".
+
+**Mudancas:**
+
+1. **Backend (`/app/backend/routes/sgp_gateway_routes.py`):**
+   - `GatewayCreate` e `GatewayUpdate` agora aceitam `auto_close_ticket: bool` (default False).
+   - `_public_view` expoe o campo no GET/POST/PUT.
+   - `_handle_send` agora prioriza `gw.auto_close_ticket` em vez do `companies.sgp_gateway_auto_close` (fallback mantido para tenants antigos durante migration).
+
+2. **Frontend SGP Gateway page (`/app/frontend/src/pages/CRM/SGPGatewayPage.js`):**
+   - `GatewayForm` (modal de criar/editar) ganhou seccao "Fechar tickets automaticamente" com toggle switch.
+   - `sgpGatewayAPI` ja levava o campo no objeto que envia pro backend (via spread).
+
+3. **Frontend Configuracoes:**
+   - `TicketLifecycleSettingsCard` agora SO tem o input de "Fechar tickets sem movimentacao apos X horas" (campo company-wide).
+   - O toggle SGP-auto-close foi REMOVIDO daqui — vive so no gateway agora.
+
+4. **Sidebar order (`/app/frontend/src/pages/Company/Dashboard.js`):**
+   - Item `sgp_gateway` mudou de `group: 'CRM'` para `group: 'Config Empresa'`.
+   - Adicionado campo `order` em `FEATURE_META` para items do grupo Config Empresa: `conexoes=10`, `configuracoes=20`, `meu_site=50`, `integrações=80`, `sgp_gateway=90`, `suporte=100`, `indoor=110`, `parceiros=120`.
+   - `menuGroups` useMemo agora ordena items por `order` (default 999) dentro de cada grupo. Items sem order mantem seu lugar antigo.
+
+**Backwards compat:** Empresas que tinham `companies.sgp_gateway_auto_close=true` na config antiga continuam funcionando — o `_handle_send` ainda le esse campo como fallback quando o gateway NAO tem `auto_close_ticket` definido.
+
+**Testes:** 32 testes passando (sem regressoes). Curl validou: POST cria com auto_close=true, PUT alterna entre true/false, GET retorna o valor correto.
+
+
 ### 2026-05-15 (B) — SGP Gateway: dedup, auto-close, timeout + cache Mongo ✅
 
 **3 problemas reportados:** mensagem Pix duplicada (SGP retry), "Aguardando mensagem" persistiu apos deploy do fix Baileys (cache disco efêmero no Render), e necessidade de fechar tickets SGP automaticamente.

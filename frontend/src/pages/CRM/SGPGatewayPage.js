@@ -340,6 +340,7 @@ const GatewayDebugModal = ({ gateway, onClose }) => {
 const GatewayForm = ({ initial, connections, onClose, onSave }) => {
   const [label, setLabel] = useState(initial?.label || '');
   const [connId, setConnId] = useState(initial?.connection_id || (connections[0]?.id || ''));
+  const [autoClose, setAutoClose] = useState(Boolean(initial?.auto_close_ticket));
 
   const canSave = label.trim() && connId;
 
@@ -379,6 +380,37 @@ const GatewayForm = ({ initial, connections, onClose, onSave }) => {
             </select>
             <p className="text-[11px] text-slate-500 mt-1">As mensagens disparadas por este gateway sairão desta conexão.</p>
           </div>
+
+          {/* Per-gateway auto-close-ticket toggle */}
+          <div className="border-t border-slate-100 pt-3 mt-1">
+            <div className="flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-800">Fechar tickets automaticamente</p>
+                <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                  Mensagens enviadas por este gateway (Pix, lembrete de boleto, etc) abrem o ticket,
+                  enviam, e <strong>fecham na mesma hora</strong>. Se o cliente responder depois,
+                  um <strong>novo ticket</strong> é aberto automaticamente.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoClose}
+                onClick={() => setAutoClose(v => !v)}
+                data-testid="gw-auto-close-toggle"
+                className={[
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0',
+                  autoClose ? 'bg-emerald-600' : 'bg-slate-300',
+                ].join(' ')}
+              >
+                <span className={[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  autoClose ? 'translate-x-6' : 'translate-x-1',
+                ].join(' ')} />
+              </button>
+            </div>
+          </div>
+
           {!initial?.id && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800 flex gap-2">
               <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -389,7 +421,7 @@ const GatewayForm = ({ initial, connections, onClose, onSave }) => {
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
           <button
-            onClick={() => canSave && onSave({ label: label.trim(), connection_id: connId })}
+            onClick={() => canSave && onSave({ label: label.trim(), connection_id: connId, auto_close_ticket: autoClose })}
             disabled={!canSave}
             className="btn-primary text-sm disabled:opacity-50"
             data-testid="save-gateway-btn"

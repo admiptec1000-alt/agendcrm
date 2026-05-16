@@ -47,12 +47,12 @@ const FEATURE_META = {
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
-  sgp_gateway:        { icon: 'PlugZap',          label: 'SGP Gateway', group: 'CRM' },
+  sgp_gateway:        { icon: 'PlugZap',          label: 'SGP Gateway', group: 'Config Empresa', order: 90 },
   // 'api' was a placeholder feature without page; merged into 'integrações'
   // to match the customer-facing single menu "API e Integrações".
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
   filas_chatbot:      { icon: 'Bot',              label: 'Filas', group: 'CRM' },
-  conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'Config Empresa' },
+  conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'Config Empresa', order: 10 },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
   agenda:             { icon: 'CalendarCheck',    label: 'Agenda', group: 'Operacional' },
@@ -66,16 +66,18 @@ const FEATURE_META = {
   profissionais:      { icon: 'Briefcase',        label: 'Profissionais', group: 'Catalogo' },
   financeiro:         { icon: 'DollarSign',       label: 'Financeiro', group: 'Analise' },
   comissoes:          { icon: 'PieChart',         label: 'Comissoes', group: 'Analise' },
-  meu_site:           { icon: 'Globe',            label: 'Meu Site', group: 'Config Empresa' },
+  meu_site:           { icon: 'Globe',            label: 'Meu Site', group: 'Config Empresa', order: 50 },
   // 'notificacoes' agora vive como aba dentro de Conexoes — nao aparece mais no menu lateral
-  configuracoes:      { icon: 'Settings',         label: 'Configuracoes', group: 'Config Empresa' },
-  'integrações':      { icon: 'Puzzle',           label: 'API e Integrações', group: 'Config Empresa' },
+  configuracoes:      { icon: 'Settings',         label: 'Configuracoes', group: 'Config Empresa', order: 20 },
+  // SGP Gateway lives directly under "API e Integrações" in the sidebar
+  // by request — set order=90 above (right after integrações=80).
+  'integrações':      { icon: 'Puzzle',           label: 'API e Integrações', group: 'Config Empresa', order: 80 },
   relatorios:         { icon: 'BarChart3',        label: 'Relatorios', group: 'Analise' },
-  suporte:            { icon: 'LifeBuoy',         label: 'Suporte', group: 'Config Empresa' },
-  indoor:             { icon: 'Monitor',          label: 'Indoor / TV', group: 'Config Empresa' },
+  suporte:            { icon: 'LifeBuoy',         label: 'Suporte', group: 'Config Empresa', order: 100 },
+  indoor:             { icon: 'Monitor',          label: 'Indoor / TV', group: 'Config Empresa', order: 110 },
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
   perfis_acesso:      { icon: 'Shield',           label: 'Perfis de Acesso', group: 'Administracao' },
-  parceiros:          { icon: 'HandCoins',         label: 'Programa de Parceiros', group: 'Config Empresa' },
+  parceiros:          { icon: 'HandCoins',         label: 'Programa de Parceiros', group: 'Config Empresa', order: 120 },
 };
 
 const CompanyDashboard = () => {
@@ -182,6 +184,17 @@ const CompanyDashboard = () => {
       const group = meta.group || 'Outros';
       if (!groups[group]) groups[group] = [];
       groups[group].push({ key, ...meta });
+    });
+    // Within each group, items without an explicit `order` keep their
+    // insertion-time position; items WITH an order are placed at that
+    // index in ascending fashion. We want this for the Config Empresa
+    // group so SGP Gateway sits directly under "API e Integrações".
+    Object.keys(groups).forEach(g => {
+      groups[g].sort((a, b) => {
+        const ao = a.order ?? 999;
+        const bo = b.order ?? 999;
+        return ao - bo;
+      });
     });
     return groups;
   }, [enabledFeatures]);

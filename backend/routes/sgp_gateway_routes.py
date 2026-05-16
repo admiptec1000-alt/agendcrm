@@ -118,6 +118,7 @@ def _public_view(g: dict) -> dict:
         "label": g.get("label"),
         "connection_id": g.get("connection_id"),
         "active": g.get("active", True),
+        "auto_close_ticket": bool(g.get("auto_close_ticket", False)),
         "calls_count": g.get("calls_count", 0),
         "last_called_at": g.get("last_called_at"),
         "created_at": g.get("created_at"),
@@ -134,12 +135,19 @@ def _public_view(g: dict) -> dict:
 class GatewayCreate(BaseModel):
     label: str
     connection_id: str
+    # Per-gateway opt-in for the "send and immediately close the ticket"
+    # behavior. Tenants typically have ONE gateway for one-shot SGP
+    # notifications (Pix/cobranca) where this is desirable, and possibly
+    # another for actual two-way conversations where it'd be wrong. So we
+    # keep this as a per-gateway flag rather than a per-company setting.
+    auto_close_ticket: Optional[bool] = False
 
 
 class GatewayUpdate(BaseModel):
     label: Optional[str] = None
     connection_id: Optional[str] = None
     active: Optional[bool] = None
+    auto_close_ticket: Optional[bool] = None
 
 
 # ─── admin endpoints (authenticated) ────────────────────────────────────────
@@ -174,6 +182,7 @@ async def create_gateway(
         "connection_id": data.connection_id,
         "token": _gen_token(),
         "active": True,
+        "auto_close_ticket": bool(data.auto_close_ticket),
         "calls_count": 0,
         "last_called_at": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -190,6 +199,10 @@ async def update_gateway(
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
     update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "label" in update:
+        update["label"] = update["label"].strip()
+    if "auto_close_ticket" in update:
+        update["auto_close_ticket"] = bool(update["auto_close_ticket"])
     if "connection_id" in update:
         conn = await db.channel_connections.find_one(
             {"id": update["connection_id"], "company_id": user["company_id"]}
@@ -330,14 +343,20 @@ async def _handle_send(
             if _DEDUP_CACHE[k] < cutoff:
                 _DEDUP_CACHE.pop(k, None)
 
-    # Read company-level toggle for auto-close. Default OFF so existing
-    # tenants don't get a surprise behavior change; new tenants opt-in via
-    # the toggle on /configuracoes.
-    comp = await db.companies.find_one(
-        {"id": company_id},
-        {"_id": 0, "sgp_gateway_auto_close": 1},
-    ) or {}
-    auto_close = bool(comp.get("sgp_gateway_auto_close"))
+    # Read auto-close setting. Priority: per-gateway > per-company.
+    # The per-gateway flag is the new (current) home — moved out of the
+    # company-wide /configuracoes page so operators can have different
+    # behavior per gateway (e.g. one for cobranca = auto-close, another
+    # for active campaigns = stays open). Per-company fallback kept for
+    # backwards compat with tenants that set it in the old location.
+    if "auto_close_ticket" in gw:
+        auto_close = bool(gw.get("auto_close_ticket"))
+    else:
+        comp = await db.companies.find_one(
+            {"id": company_id},
+            {"_id": 0, "sgp_gateway_auto_close": 1},
+        ) or {}
+        auto_close = bool(comp.get("sgp_gateway_auto_close"))
 
     # Find an OPEN ticket for this number (same connection). Reuse to keep
     # a single conversation thread per contact.
