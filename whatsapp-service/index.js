@@ -350,12 +350,84 @@ setInterval(async () => {
   }
 }, 30000);
 
+// ── Connection watchdog ─────────────────────────────────────────────────────
+// Every 90s, sweep every instance flagged as 'connected' and verify the
+// underlying WebSocket is actually alive. Sometimes Baileys' internal
+// keepalive misses a TCP-level FIN (e.g. proxy/CDN silently drops the
+// connection) and we end up holding a "zombie" socket — status=connected
+// but no messages flow through. The user sees: "WhatsApp ligado, mas o
+// fluxo parou de responder". This watchdog detects that and forces a
+// fresh reconnect.
+//
+// Strategy:
+//   1. Check sock.ws.readyState (1 = OPEN). If not OPEN -> reconnect.
+//   2. If no inbound activity for 5+ minutes, send a no-op presence
+//      subscribe to ourselves. If that throws -> reconnect.
+const ACTIVITY_STALE_MS = 5 * 60 * 1000;    // 5 minutes of silence
+const WATCHDOG_INTERVAL_MS = 90 * 1000;     // sweep every 90s
+setInterval(async () => {
+  for (const [instanceId, inst] of Object.entries(connections)) {
+    if (!inst || inst.status !== 'connected' || !inst.sock) continue;
+    const sock = inst.sock;
+    // 1) Hard liveness check — WebSocket layer
+    try {
+      const readyState = sock.ws?.readyState ?? sock.ws?.socket?.readyState;
+      if (readyState !== undefined && readyState !== 1) {
+        console.warn(`[${instanceId}] watchdog: ws.readyState=${readyState} (not OPEN) — forcing reconnect`);
+        inst.status = 'disconnected';
+        inst.lastError = 'watchdog: zombie socket';
+        createConnection(instanceId).catch(e => console.error(`[${instanceId}] watchdog reconnect failed:`, e.message));
+        continue;
+      }
+    } catch (e) { /* ignore */ }
+
+    // 2) Soft liveness check — only if we haven't seen any inbound activity
+    // for a while, ping ourselves with a presence subscribe. Cheap operation
+    // that exercises the encrypted send path.
+    const idle = Date.now() - (inst.lastActivityAt || 0);
+    if (idle > ACTIVITY_STALE_MS) {
+      try {
+        const selfJid = sock.user?.id;
+        if (selfJid && typeof sock.sendPresenceUpdate === 'function') {
+          await sock.sendPresenceUpdate('available');
+          inst.lastActivityAt = Date.now();
+        }
+      } catch (e) {
+        console.warn(`[${instanceId}] watchdog: presence-ping failed (${e.message}) — forcing reconnect`);
+        inst.status = 'disconnected';
+        inst.lastError = `watchdog ping: ${e.message}`;
+        createConnection(instanceId).catch(err => console.error(`[${instanceId}] watchdog reconnect failed:`, err.message));
+      }
+    }
+  }
+}, WATCHDOG_INTERVAL_MS);
+
 // Ensure auth directory
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
 async function createConnection(instanceId) {
   const authDir = path.join(AUTH_DIR, instanceId);
   if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+
+  // ── Cleanup any prior socket for this instance BEFORE creating a new one.
+  // Without this, every reconnect leaves the previous socket's event
+  // listeners alive in memory (messages.upsert fires twice, presence.update
+  // double-forwards, etc.) and slowly eats RAM until the worker is OOM-killed
+  // by Render — which the user perceives as "fluxos param".
+  const existingInstance = connections[instanceId];
+  const previousAttempts = existingInstance?.reconnectAttempts || 0;
+  if (existingInstance?.sock) {
+    try {
+      existingInstance.sock.ev.removeAllListeners?.();
+      if (typeof existingInstance.sock.end === 'function') {
+        existingInstance.sock.end(undefined);
+      } else if (typeof existingInstance.sock.ws?.close === 'function') {
+        existingInstance.sock.ws.close();
+      }
+    } catch (e) {
+      console.warn(`[${instanceId}] old-socket cleanup warn: ${e.message}`);
+    }
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
@@ -407,6 +479,8 @@ async function createConnection(instanceId) {
     status: 'connecting',
     user: null,
     lastError: null,
+    reconnectAttempts: previousAttempts,
+    lastActivityAt: Date.now(),
   };
 
   sock.ev.on('connection.update', async (update) => {
@@ -443,10 +517,20 @@ async function createConnection(instanceId) {
           }
         }, 60000);
       } else if (shouldReconnect) {
-        console.log(`[${instanceId}] Reconnecting in 5s...`);
+        // Exponential backoff: 5s, 10s, 20s, 40s, 80s, 160s, capped at 5min.
+        // This prevents hammering WA servers when they are throttling us
+        // (which would otherwise cause IP-level bans).
+        instance.reconnectAttempts = (instance.reconnectAttempts || 0) + 1;
+        const attempt = instance.reconnectAttempts;
+        const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 5 * 60 * 1000);
+        console.log(`[${instanceId}] Reconnecting (attempt #${attempt}) in ${Math.round(delayMs / 1000)}s...`);
         setTimeout(() => {
-          createConnection(instanceId).catch(e => console.error(`[${instanceId}] reconnect failed:`, e.message));
-        }, 5000);
+          // Verify the instance was not explicitly disconnected by an
+          // operator in the meantime (DELETE /instances/:id sets to undefined).
+          if (connections[instanceId] && connections[instanceId].status !== 'connected') {
+            createConnection(instanceId).catch(e => console.error(`[${instanceId}] reconnect failed:`, e.message));
+          }
+        }, delayMs);
       } else {
         // Logged out - clean auth
         try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (e) {}
@@ -457,6 +541,8 @@ async function createConnection(instanceId) {
       instance.qr = null;
       instance.qrBase64 = null;
       instance.user = sock.user;
+      instance.reconnectAttempts = 0;  // reset backoff after a healthy connect
+      instance.lastActivityAt = Date.now();
       console.log(`[${instanceId}] Connected as ${sock.user?.id}`);
 
       // Notify FastAPI
@@ -505,6 +591,7 @@ async function createConnection(instanceId) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     // Capture both 'notify' (real-time push) and 'append' (background sync)
     if (type !== 'notify' && type !== 'append') return;
+    instance.lastActivityAt = Date.now();
     for (const msg of messages) {
       // fromMe === true means the operator sent this message from the
       // linked device (cellphone WhatsApp app, WhatsApp Web, etc). We
@@ -1094,15 +1181,21 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.5',
+    version: 'v2.1.9',
+    details: Object.values(connections).map(c => ({
+      id: c.id,
+      status: c.status,
+      reconnect_attempts: c.reconnectAttempts || 0,
+      idle_ms: c.lastActivityAt ? Date.now() - c.lastActivityAt : null,
+    })),
   });
 });
 
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.8',
-    built_at: '2026-05-13',
+    version: 'v2.1.9',
+    built_at: '2026-02-15',
     features: {
       sent_message_store: true,       // anti blank message fix
       multi_message_types: true,      // captions, buttons, lists
@@ -1124,6 +1217,9 @@ app.get('/version', (req, res) => {
       lid_baileys_upgrade_6_7_21: true,        // upgraded from 6.7.16 (v2.1.5)
       lid_extra_probes_business_status: true,  // fetchStatus + getBusinessProfile + profilePictureUrl probes (v2.1.5)
       lid_double_signal_lookup: true,          // re-check signalRepository AFTER probes (v2.1.5)
+      reconnect_exponential_backoff: true,     // v2.1.9 — 5s→10s→20s→…→5min cap
+      old_socket_cleanup: true,                // v2.1.9 — prevents duplicate listeners
+      zombie_socket_watchdog: true,            // v2.1.9 — 90s ws.readyState + presence ping check
     },
     fastapi_url: FASTAPI_URL,
   });

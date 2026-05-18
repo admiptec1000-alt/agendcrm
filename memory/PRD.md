@@ -10,6 +10,43 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 — Baileys: resilience hardening (auto-reconnect + watchdog) ✅
+
+**Pedido:** Usuário reportou que "às vezes a instância web para de processar fluxos" — sessões caindo silenciosamente sem auto-recuperação.
+
+**Mudanças em `/app/whatsapp-service/index.js` (v2.1.8 → v2.1.9):**
+
+1. **Cleanup de socket antigo** dentro de `createConnection(instanceId)`:
+   - Antes de criar o novo `sock`, remove `ev.removeAllListeners()` e fecha o socket anterior. Sem isso, cada reconexão deixava listeners ativos → `messages.upsert` disparava em duplicidade + memory leak gradual → Render matava o worker por OOM (sintoma: "fluxos param").
+
+2. **Exponential backoff** no handler `connection.update` (close, `shouldReconnect=true`):
+   - Era: `setTimeout(reconnect, 5000)` fixo (hammer em WA).
+   - Agora: `min(5s × 2^(attempt-1), 5min)` → 5s → 10s → 20s → 40s → 80s → 160s → 300s (capa).
+   - Contador `instance.reconnectAttempts` é **resetado para 0** ao receber `connection === 'open'`.
+
+3. **Watchdog de socket zumbi** (`setInterval` a cada 90s):
+   - Para cada instância marcada como `'connected'`:
+     - Checa `sock.ws.readyState` — se não for OPEN, força reconexão.
+     - Se inativa há mais de 5 minutos, dispara `sock.sendPresenceUpdate('available')`. Falha → reconexão.
+   - `lastActivityAt` é atualizado em `messages.upsert`.
+
+4. **`/health` enriquecido**: agora retorna `details[]` com `status`, `reconnect_attempts`, `idle_ms` por instância (útil pra alarmes externos).
+
+5. **Bump de versão**: `v2.1.9` com flags `reconnect_exponential_backoff`, `old_socket_cleanup`, `zombie_socket_watchdog`.
+
+**Validação:**
+- `node -c index.js` → SYNTAX_OK.
+- Serviço reinicia limpo (sem erros nos supervisord logs).
+- `curl /version` → confirma `v2.1.9` + 3 features novas.
+- Teste unitário `/app/whatsapp-service/tests/reconnect-backoff.test.js` passando (sequência 5→10→20→40→80→160→300→300).
+
+**Pré-requisitos já existentes (não tocados):**
+- `process.on('uncaughtException')` / `unhandledRejection` (linhas 63-68) — guards contra crash global.
+- `DisconnectReason.loggedOut` (401) — limpa `auth_sessions/` e não tenta reconectar.
+- `isConflict` (440) — 60s + retry único.
+
+
+
 ### 2026-05-16 (G) — Fallback endpoint agora cobre TODO o catalogo ✅
 
 **Pedido:** "ainda nao aparece as funcoes do CRM ne do Agendamento para Compartilhar para selecionar para o super admin conforme tela anexo."
