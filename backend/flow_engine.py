@@ -14,7 +14,9 @@ Node shapes (set by the SGP importer + UI):
         nodeType: 'start' | 'message' | 'menu' | 'http' | 'ticket' | ...,
         label,
         config: { text, options:[{label,key}], capture_var, url, method,
-                  body, headers, queue, summary }
+                  body, headers, queue, summary,
+                  capture_format: 'cpf'|'cnpj'|'cpfcnpj'|'email'|'cep'|'phone'|'number',
+                  capture_invalid_message: 'Mensagem custom em caso de invalido' }
       }
     }
 
@@ -42,6 +44,68 @@ FLOW_TIMEOUT_HOURS = 24
 def _node_type(n: dict) -> str:
     d = n.get("data") or {}
     return (d.get("nodeType") or n.get("type") or "").lower()
+
+
+# ── Capture-format validators ──────────────────────────────────────────────
+# When a node has `config.capture_format` set, the engine validates the
+# incoming text BEFORE storing it in flow_vars. Invalid input keeps the flow
+# paused at the same node and re-sends the prompt (optionally with a custom
+# `capture_invalid_message`). This lets operators say "ask CPF and refuse
+# to continue until customer types a valid one" without writing custom code.
+# 2026-02-15 (E) — user requirement: "solicito ao cliente um CPF ou CNPJ
+# e só posso continuar com o fluxo depois que o mesmo insere essas informacoes".
+
+def _validate_cpf(digits: str) -> bool:
+    if len(digits) != 11 or len(set(digits)) == 1:
+        return False
+    s = sum(int(digits[i]) * (10 - i) for i in range(9))
+    r = (s * 10) % 11
+    if r == 10: r = 0
+    if r != int(digits[9]): return False
+    s = sum(int(digits[i]) * (11 - i) for i in range(10))
+    r = (s * 10) % 11
+    if r == 10: r = 0
+    return r == int(digits[10])
+
+
+def _validate_cnpj(digits: str) -> bool:
+    if len(digits) != 14 or len(set(digits)) == 1:
+        return False
+    def calc(slc):
+        w = [5,4,3,2,9,8,7,6,5,4,3,2] if len(slc) == 12 else [6,5,4,3,2,9,8,7,6,5,4,3,2]
+        s = sum(int(slc[i]) * w[i] for i in range(len(slc)))
+        r = s % 11
+        return 0 if r < 2 else 11 - r
+    if calc(digits[:12]) != int(digits[12]): return False
+    return calc(digits[:13]) == int(digits[13])
+
+
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def validate_capture(value: str, fmt: str) -> Tuple[bool, str]:
+    """Returns (is_valid, default_error_message)."""
+    if not fmt:
+        return True, ""
+    fmt = (fmt or "").strip().lower()
+    text = (value or "").strip()
+    digits = re.sub(r"\D", "", text)
+    if fmt == "cpf":
+        return (_validate_cpf(digits), "Por favor envie um CPF valido (somente numeros, 11 digitos).")
+    if fmt == "cnpj":
+        return (_validate_cnpj(digits), "Por favor envie um CNPJ valido (somente numeros, 14 digitos).")
+    if fmt == "cpfcnpj":
+        ok = _validate_cpf(digits) or _validate_cnpj(digits)
+        return (ok, "Por favor envie um CPF (11 digitos) ou CNPJ (14 digitos) valido.")
+    if fmt == "email":
+        return (bool(_EMAIL_RE.match(text)), "Por favor envie um email valido (exemplo: nome@dominio.com).")
+    if fmt == "cep":
+        return (len(digits) == 8, "Por favor envie um CEP valido (8 digitos).")
+    if fmt == "phone":
+        return (10 <= len(digits) <= 13, "Por favor envie um telefone valido (DDD + numero).")
+    if fmt == "number":
+        return (digits.isdigit() and len(digits) > 0, "Por favor envie apenas numeros.")
+    return True, ""
 
 
 def _node_text(n: dict, vars_: dict, missing: Optional[set] = None) -> Optional[str]:
@@ -792,6 +856,24 @@ async def advance_flow(
             cfg = (prev.get("data") or {}).get("config") or {}
             cap = cfg.get("capture_var")
             if cap and incoming_text:
+                # Validate against capture_format if set. Invalid input
+                # keeps the flow paused and re-prompts (with optional
+                # custom invalid message).
+                fmt = cfg.get("capture_format")
+                if fmt:
+                    ok, default_err = validate_capture(incoming_text, fmt)
+                    if not ok:
+                        err = cfg.get("capture_invalid_message") or default_err
+                        logger.info(f"[flow_engine] node {prev_id} capture_format={fmt!r} REJECTED {incoming_text!r}; re-prompting")
+                        await _emit_and_persist(err)
+                        # Re-emit the original prompt so customer sees the question again.
+                        prompt_txt = _node_text(prev, vars_)
+                        if prompt_txt:
+                            await _emit_and_persist(prompt_txt)
+                        # Stay on the same node, do NOT advance.
+                        if not dry_run:
+                            await _save_state(db, ticket["id"], flow_id, prev_id, vars_)
+                        return sent
                 vars_[cap] = incoming_text.strip()
                 logger.info(f"[flow_engine] captured {cap}={incoming_text.strip()!r} from node {prev_id}")
         nxt_edge = _next_edge(edges, prev_id, branch_handle)

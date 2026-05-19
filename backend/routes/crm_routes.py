@@ -2282,8 +2282,8 @@ class KanbanColumnUpdate(_BM):
 # delete or rename it from the UI.
 NATIVE_FIRST_COLUMN = {
     "id": "native:atendimentos",
-    "name": "Atendimentos",
-    "color": "#4F46E5",
+    "name": "Aguardando",
+    "color": "#F59E0B",
     "order": 0,
     "is_native": True,
 }

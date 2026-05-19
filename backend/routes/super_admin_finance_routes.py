@@ -558,12 +558,39 @@ async def adm_update_transaction(
 @router.post("/finance/transactions/{txn_id}/pay")
 async def adm_mark_paid(
     txn_id: str,
+    payload: dict = None,
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
+    """Marca o lancamento como pago. Aceita opcional `payment_method`
+    no body — quando enviado, atualiza o metodo (Pix/Boleto/Dinheiro)
+    como parte do mesmo update. UI usa isso pra dar baixa direto da
+    lista clicando no metodo desejado (2026-02-15 (E))."""
+    update = {
+        "status": "pago",
+        "paid_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if isinstance(payload, dict) and payload.get("payment_method"):
+        update["payment_method"] = payload["payment_method"]
+    r = await db.super_admin_transactions.update_one(
+        {"id": txn_id}, {"$set": update}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(404, "Lancamento nao encontrado")
+    return await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
+
+
+@router.post("/finance/transactions/{txn_id}/unpay")
+async def adm_mark_unpaid(
+    txn_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    """Desfaz a baixa — volta ao estado 'aberto/pendente'. Usado pelo
+    botao 'Desfazer' do toast (2026-02-15 (E))."""
     r = await db.super_admin_transactions.update_one(
         {"id": txn_id},
-        {"$set": {"status": "pago", "paid_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"status": "pendente"}, "$unset": {"paid_at": ""}},
     )
     if r.matched_count == 0:
         raise HTTPException(404, "Lancamento nao encontrado")

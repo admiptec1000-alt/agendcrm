@@ -271,11 +271,18 @@ async def list_companies(
 
     companies = await db.companies.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
-    # Enrich with business type names
+    # Enrich with business type names + license usage (used/max) so the
+    # Empresas list shows "X/Y conexoes" and "X/Y usuarios" inline.
+    # 2026-02-15 (E): avoids N+1 round-trips from the frontend (would have
+    # called /licenses/usage/{id} once per row).
+    from routes.licenses_routes import compute_company_usage
     for company in companies:
         if company.get("business_type_id"):
             bt = await db.business_types.find_one({"id": company["business_type_id"]}, {"_id": 0})
             company["business_type_name"] = bt["name"] if bt else "Personalizado"
+        used_conn, used_usr = await compute_company_usage(db, company["id"])
+        company["used_connections"] = used_conn
+        company["used_users"] = used_usr
 
     return companies
 

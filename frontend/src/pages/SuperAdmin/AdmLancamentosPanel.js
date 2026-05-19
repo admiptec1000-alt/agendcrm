@@ -8,6 +8,15 @@ import {
 
 const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
 
+// Pagamento unificado: o operador escolhe Pix/Boleto/Dinheiro pra dar baixa
+// direto da lista. "Aberto" = ainda nao pago (status=pendente OR ausente).
+const PAYMENT_METHODS = [
+  { value: 'pix',      label: 'Pix' },
+  { value: 'boleto',   label: 'Boleto' },
+  { value: 'dinheiro', label: 'Dinheiro' },
+];
+const labelForMethod = (m) => (PAYMENT_METHODS.find(x => x.value === m)?.label || m || '—');
+
 /**
  * Financeiro ADM — Lancamentos
  * Mirrors the company-level Financial > Lançamentos tab but stored in the
@@ -47,19 +56,35 @@ export const AdmLancamentosPanel = () => {
     try {
       await api.delete(`/super-admin/finance/transactions/${id}`);
       toast.success('Lancamento excluido');
-      load();
-    } catch (e) {
+      load();    } catch (e) {
       toast.error('Falha ao excluir');
     }
   };
 
-  const handlePay = async (id) => {
+  // Pay with a specific method (Pix/Boleto/Dinheiro). Shows a 5s "Desfazer"
+  // toast — clicking it reverts the txn to status=pendente. The user
+  // explicitly asked for direct action with undo (2026-02-15 (E)).
+  const handlePayWithMethod = async (id, method) => {
     try {
-      await api.post(`/super-admin/finance/transactions/${id}/pay`);
-      toast.success('Marcado como pago');
+      await api.post(`/super-admin/finance/transactions/${id}/pay`, { payment_method: method });
       load();
+      toast.success(`Baixa em ${labelForMethod(method)}`, {
+        action: {
+          label: 'Desfazer',
+          onClick: async () => {
+            try {
+              await api.post(`/super-admin/finance/transactions/${id}/unpay`);
+              toast.info('Baixa desfeita');
+              load();
+            } catch (_) {
+              toast.error('Nao foi possivel desfazer');
+            }
+          },
+        },
+        duration: 5000,
+      });
     } catch (e) {
-      toast.error('Falha ao marcar como pago');
+      toast.error('Falha ao dar baixa');
     }
   };
 
@@ -91,9 +116,9 @@ export const AdmLancamentosPanel = () => {
           className="px-3 py-2 border border-slate-300 rounded text-sm"
           data-testid="adm-filter-status"
         >
-          <option value="">Todos status</option>
-          <option value="pago">Pago</option>
-          <option value="pendente">Pendente</option>
+          <option value="">Todos pagamentos</option>
+          <option value="pendente">Em aberto</option>
+          <option value="pago">Baixados</option>
         </select>
         <select
           value={filters.kind}
@@ -127,15 +152,14 @@ export const AdmLancamentosPanel = () => {
                 <th className="px-3 py-2 text-left">Tipo</th>
                 <th className="px-3 py-2 text-left">Descricao</th>
                 <th className="px-3 py-2 text-left">Categoria</th>
-                <th className="px-3 py-2 text-left">Metodo</th>
                 <th className="px-3 py-2 text-right">Valor</th>
-                <th className="px-3 py-2 text-center">Status</th>
+                <th className="px-3 py-2 text-center">Pagamento</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {items.length === 0 && (
-                <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-400">Nenhum lancamento encontrado.</td></tr>
+                <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400">Nenhum lancamento encontrado.</td></tr>
               )}
               {items.map(t => {
                 const isOut = t.direction === 'saida';
@@ -184,26 +208,37 @@ export const AdmLancamentosPanel = () => {
                       </div>
                     </td>
                     <td className="px-3 py-2 text-slate-500">{t.category || '—'}</td>
-                    <td className="px-3 py-2 text-slate-500">{t.payment_method || '—'}</td>
                     <td className={`px-3 py-2 text-right font-semibold ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
                       {isOut ? '−' : '+'} {fmt(t.amount)}
                       {overdue && (
                         <div className="text-[10px] text-slate-500 font-normal">Devido: {fmt(t.late_fee_computed.valor_devido)}</div>
                       )}
                     </td>
+                    {/* Pagamento unificado — quando 'Aberto' o operador clica
+                        em Pix/Boleto/Dinheiro pra dar baixa direto. Quando ja
+                        pago, mostra o metodo com check verde. 2026-02-15 (E). */}
                     <td className="px-3 py-2 text-center">
                       {t.status === 'pago' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-medium">
-                          <CheckCircle2 className="w-3 h-3" /> Pago
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-medium" data-testid={`adm-paid-${t.id}`}>
+                          <CheckCircle2 className="w-3 h-3" /> {labelForMethod(t.payment_method)}
                         </span>
                       ) : (
-                        <button
-                          onClick={() => handlePay(t.id)}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded text-xs font-medium"
-                          data-testid={`adm-pay-${t.id}`}
-                        >
-                          <Clock className="w-3 h-3" /> Pendente
-                        </button>
+                        <div className="inline-flex items-center gap-1" data-testid={`adm-open-${t.id}`}>
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-semibold uppercase">
+                            <Clock className="w-3 h-3" /> Aberto
+                          </span>
+                          {PAYMENT_METHODS.map(pm => (
+                            <button
+                              key={pm.value}
+                              onClick={() => handlePayWithMethod(t.id, pm.value)}
+                              className="text-[10px] px-1.5 py-0.5 rounded border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 transition-colors"
+                              title={`Baixar como ${pm.label}`}
+                              data-testid={`adm-pay-${pm.value}-${t.id}`}
+                            >
+                              {pm.label}
+                            </button>
+                          ))}
+                        </div>
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -446,10 +481,25 @@ const AdmTxnFormModal = ({ onClose, onSaved }) => {
               </Field>
             </>
           )}
-          <Field label="Status">
-            <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="input" data-testid="adm-form-status">
-              <option value="pago">Pago</option>
-              <option value="pendente">Pendente</option>
+          {/* Pagamento unificado: 'aberto' (= status pendente, sem metodo
+              definitivo) ou um dos 3 metodos baixados ja na criacao.
+              2026-02-15 (E). */}
+          <Field label="Pagamento">
+            <select
+              value={form.status === 'pago' ? form.payment_method : 'aberto'}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === 'aberto') {
+                  setForm({ ...form, status: 'pendente' });
+                } else {
+                  setForm({ ...form, status: 'pago', payment_method: v });
+                }
+              }}
+              className="input" data-testid="adm-form-pagamento">
+              <option value="aberto">Aberto</option>
+              <option value="pix">Pix</option>
+              <option value="boleto">Boleto</option>
+              <option value="dinheiro">Dinheiro</option>
             </select>
           </Field>
           <Field label="Descricao" className="col-span-2">
@@ -457,17 +507,6 @@ const AdmTxnFormModal = ({ onClose, onSaved }) => {
           </Field>
           <Field label="Valor (R$)">
             <input type="number" step="0.01" min="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="input" data-testid="adm-form-amount" />
-          </Field>
-          <Field label="Metodo de pagamento">
-            <select value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })} className="input" data-testid="adm-form-method">
-              <option value="pix">PIX</option>
-              <option value="cartao_credito">Cartao credito</option>
-              <option value="cartao_debito">Cartao debito</option>
-              <option value="dinheiro">Dinheiro</option>
-              <option value="boleto">Boleto</option>
-              <option value="transferencia">Transferencia</option>
-              <option value="outros">Outros</option>
-            </select>
           </Field>
           <Field label="Categoria">
             <input type="text" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input" data-testid="adm-form-category" />

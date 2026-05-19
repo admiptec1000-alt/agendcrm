@@ -402,6 +402,8 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden md:table-cell">Contato</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden lg:table-cell">Subdominio</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden md:table-cell">Tipo</th>
+                <th className="text-center py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden lg:table-cell">Conexoes</th>
+                <th className="text-center py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400 hidden lg:table-cell">Usuarios</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Status</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-widest text-slate-400">Acoes</th>
               </tr>
@@ -428,6 +430,13 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                   <td className="py-3 px-4 hidden md:table-cell">
                     <span className="text-sm text-slate-600">{company.business_type_name || 'Personalizado'}</span>
                   </td>
+                  {/* Conexoes (X/Y) — `used_*` enriched by the list endpoint to avoid N+1 */}
+                  <td className="py-3 px-4 hidden lg:table-cell text-center">
+                    <UsageBadge used={company.used_connections} max={company.max_connections} />
+                  </td>
+                  <td className="py-3 px-4 hidden lg:table-cell text-center">
+                    <UsageBadge used={company.used_users} max={company.max_users} />
+                  </td>
                   <td className="py-3 px-4">
                     <StatusBadge status={company.status} />
                   </td>
@@ -451,7 +460,7 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={6} className="py-8 text-center text-sm text-slate-500">Nenhuma empresa encontrada</td></tr>
+                <tr><td colSpan={8} className="py-8 text-center text-sm text-slate-500">Nenhuma empresa encontrada</td></tr>
               )}
             </tbody>
           </table>
@@ -2856,6 +2865,21 @@ const StatusBadge = ({ status }) => (
     {status === 'active' ? 'Ativa' : status === 'trial' ? 'Trial' : 'Bloqueada'}
   </span>
 );
+
+// Inline "X / Y" counter. Highlights red when used==max (saturado), amber
+// when used > max (excedeu o limite — empresas legadas), slate otherwise.
+// Legacy mode (max=null) shows just `used` to avoid "X / null" garbage.
+const UsageBadge = ({ used, max }) => {
+  const u = Number(used || 0);
+  if (max === null || max === undefined) {
+    return <span className="text-xs font-mono text-slate-500">{u} <span className="text-slate-300">/ ∞</span></span>;
+  }
+  const m = Number(max);
+  let cls = 'text-slate-700';
+  if (u > m) cls = 'text-amber-700 font-semibold';
+  else if (u === m) cls = 'text-rose-600 font-semibold';
+  return <span className={`text-xs font-mono ${cls}`}>{u} <span className="text-slate-400">/</span> {m}</span>;
+};
 
 const PlanBadge = ({ planType }) => (
   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${

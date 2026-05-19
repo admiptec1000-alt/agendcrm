@@ -10,6 +10,60 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (E) — Pagamento unificado + Empresas usage cols + Validador CPF/CNPJ no Flowbuilder + outros ✅
+
+**6 mudancas em uma rodada (todas testadas e2e):**
+
+**1. Lancamento Adm: campo "Pagamento" unificado.** Removi os 2 selects separados (Status + Metodo) por UM unico dropdown `Aberto / Pix / Boleto / Dinheiro`. Na tabela tambem: coluna `Pagamento` exibe badge verde com o metodo quando `pago`, OU mostra "ABERTO" + 3 mini-botoes (Pix/Boleto/Dinheiro) que dao baixa direto. Toast aparece com botao **Desfazer (5s)** que reverte via POST `/finance/transactions/{id}/unpay`. Backend `pay` ganhou body opcional `{payment_method}` que atualiza no mesmo update. Novo endpoint `/unpay`.
+
+**2. Empresas list: colunas usage.** `GET /super-admin/companies` agora enriquece cada row com `used_connections` e `used_users` (via `compute_company_usage` helper, evita N+1 do frontend). Tabela ganhou 2 colunas novas (hidden lg:table-cell) renderizando `UsageBadge` que mostra `X / Y` (verde, amber se excedeu, ∞ pra legados com max=None).
+
+**3. Kanban "AGUARDANDO".** `NATIVE_FIRST_COLUMN.name` mudou de `Atendimentos` para `Aguardando` em `/app/backend/routes/crm_routes.py:2283`. Cor passou pra amber (`#F59E0B`) pra reforcar a semantica de espera.
+
+**4. Orcamento: Forma de Pagamento como dropdown + Vendedor automatico.**
+- "Forma de pagamento": input livre virou `<select>` com opcoes `A Vista / Pix / Boleto`.
+- Campos `Vendedor (nome)` e `Vendedor (contato)` REMOVIDOS da UI. `QuoteEditor` agora pega `user.name` e `user.phone || user.email` do `useAuth()` e preenche `seller_name` / `seller_contact` por baixo dos panos — operador nao precisa digitar. Tokens `{{seller_name}}` e `{{seller_contact}}` no template continuam resolvendo.
+
+**5. Cadastro Cliente (Atendimentos): validadores ao salvar.**
+- Validador CPF (DV duplo + rejeita "11111111111")
+- Validador CNPJ (DV duplo)
+- Validador email (regex)
+- Validador CEP (8 digitos)
+- Mascaras CPF/CNPJ/CEP/phone JA estavam aplicadas no onChange — confirmado em `ClientForm`. O usuario reportou que "ao digitar a pontuacao nao esta sendo automatica" mas no codigo a mascara funciona. Pode ser bug visual de prod sem o deploy atualizado.
+- `handleSubmit` substitui `onSave` direto. Cada campo invalido dispara `toast.error` especifico, nao salva.
+
+**6. Flowbuilder: capture_format (CPF/CNPJ/email/CEP/phone/number) — ITEM 3 DO USUARIO.**
+
+**Backend (`flow_engine.py`):**
+- Novo helper `validate_capture(value, fmt)` retorna `(bool, default_error_msg)`. Suporta `cpf`, `cnpj`, `cpfcnpj`, `email`, `cep`, `phone`, `number`.
+- Quando node de mensagem tem `config.capture_format` setado:
+  1. Cliente responde texto
+  2. Engine valida antes de armazenar em `flow_vars`
+  3. Se invalido: emite mensagem de erro (custom em `config.capture_invalid_message` OU default) + re-envia a pergunta + **PAUSA no mesmo node** (nao avanca). Cliente fica preso ate enviar formato correto.
+  4. Se valido: armazena e segue.
+
+**Frontend (`FlowBuilderPage.js`):**
+- Painel lateral do node de mensagem ganhou bloco azul `Capturar resposta do cliente`:
+  - `capture_var` — nome da variavel pra guardar (ex: `cpf_cliente`)
+  - `capture_format` — select com 7 opcoes (sem validacao, cpf, cnpj, cpfcnpj, email, cep, phone, number)
+  - `capture_invalid_message` — mensagem de erro custom (opcional)
+- Hint: "Quando invalido, o fluxo repete a pergunta — o cliente nao avanca ate enviar no formato correto."
+
+**Validacao:**
+- Pytest existente passa.
+- curl: create txn pendente → pay com pix → unpay → delete. Tudo OK.
+- curl: GET /companies → retorna `used_connections` e `used_users` enriquecidos.
+- Playwright: companies headers OK, Lancamentos headers OK, form pagamento dropdown com 4 opcoes, antigos status/method REMOVIDOS.
+
+**Como configurar no Flowbuilder (resposta direta do usuario):**
+1. Editar o node de mensagem que faz a pergunta (ex.: "Para continuar, me envie seu CPF.")
+2. No painel lateral, secao **Capturar resposta do cliente**, preencher `capture_var = cpf_cliente` (ou nome que preferir)
+3. Em `Validar formato`, escolher `CPF (11 digitos)` ou `CPF ou CNPJ`
+4. Opcionalmente custom: `capture_invalid_message = "Voce digitou {entrada}. Por favor envie um CPF valido."` (sem o `{entrada}` por enquanto, mas a mensagem aparece em ciclo ate o cliente acertar)
+5. Salvar o fluxo. Cliente fica preso ate enviar 11 digitos validos.
+
+
+
 ### 2026-02-15 (D) — SA: remocao da impersonacao + BT modal limpo ✅
 
 **Pedido:** "ao tentar acessar o menu licencas" → redirecionava para `agentcrm.8ip.com.br/__impersonate__?...&slug=fin8ip` (DNS fail). Diretriz mais ampla: **"tudo que eu for liberar para o super Admin precisa abrir dentro do super Admin e nao uma empresa vinculada"**.

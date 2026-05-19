@@ -1466,7 +1466,61 @@ const ClientForm = ({ client, onSave }) => {
   }, [form.birth_date]);
 
   const initials = (form.name || '?').split(' ').slice(0,2).map(p => p[0]).join('').toUpperCase();
-  const isValid = form.name.trim().length >= 2 && form.phone.replace(/\D/g,'').length >= 10;
+
+  // Validadores ao salvar — bloqueiam o submit com toast explicativo
+  // quando CPF/CNPJ/email/CEP estao preenchidos mas em formato invalido.
+  // Campos vazios sao permitidos (so nome+telefone sao obrigatorios).
+  const isValidCPF = (cpf) => {
+    const d = (cpf || '').replace(/\D/g, '');
+    if (!d) return true;
+    if (d.length !== 11 || /^(\d)\1+$/.test(d)) return false;
+    let sum = 0;
+    for (let i = 0; i < 9; i++) sum += parseInt(d[i]) * (10 - i);
+    let r = (sum * 10) % 11;
+    if (r === 10) r = 0;
+    if (r !== parseInt(d[9])) return false;
+    sum = 0;
+    for (let i = 0; i < 10; i++) sum += parseInt(d[i]) * (11 - i);
+    r = (sum * 10) % 11;
+    if (r === 10) r = 0;
+    return r === parseInt(d[10]);
+  };
+  const isValidCNPJ = (cnpj) => {
+    const d = (cnpj || '').replace(/\D/g, '');
+    if (!d) return true;
+    if (d.length !== 14 || /^(\d)\1+$/.test(d)) return false;
+    const calc = (slice) => {
+      const w = slice.length === 12 ? [5,4,3,2,9,8,7,6,5,4,3,2] : [6,5,4,3,2,9,8,7,6,5,4,3,2];
+      let s = 0;
+      for (let i = 0; i < slice.length; i++) s += parseInt(slice[i]) * w[i];
+      const r = s % 11;
+      return r < 2 ? 0 : 11 - r;
+    };
+    if (calc(d.slice(0,12)) !== parseInt(d[12])) return false;
+    return calc(d.slice(0,13)) === parseInt(d[13]);
+  };
+  const isValidEmail = (e) => !e || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+  const isValidCEP = (c) => !c || (c.replace(/\D/g, '').length === 8);
+
+  const isValid = (
+    form.name.trim().length >= 2 &&
+    form.phone.replace(/\D/g,'').length >= 10 &&
+    isValidCPF(form.cpf) &&
+    isValidCNPJ(form.cnpj) &&
+    isValidEmail(form.email) &&
+    isValidCEP(form.cep)
+  );
+
+  const handleSubmit = () => {
+    // Per-field error messages — let user know which one is wrong.
+    if (form.name.trim().length < 2) { toast.error('Informe o nome completo'); return; }
+    if (form.phone.replace(/\D/g,'').length < 10) { toast.error('Telefone invalido'); return; }
+    if (!isValidCPF(form.cpf))   { toast.error('CPF invalido'); return; }
+    if (!isValidCNPJ(form.cnpj)) { toast.error('CNPJ invalido'); return; }
+    if (!isValidEmail(form.email)) { toast.error('Email invalido'); return; }
+    if (!isValidCEP(form.cep))   { toast.error('CEP invalido (precisa ter 8 digitos)'); return; }
+    onSave(form);
+  };
 
   return (
     <div className="space-y-4" data-testid="client-form">
@@ -1652,8 +1706,7 @@ const ClientForm = ({ client, onSave }) => {
 
       <div className="flex justify-end pt-2 border-t border-slate-100">
         <button
-          onClick={() => isValid && onSave(form)}
-          disabled={!isValid}
+          onClick={handleSubmit}
           className="btn-primary text-sm flex items-center gap-2"
           data-testid="save-client-btn"
         >

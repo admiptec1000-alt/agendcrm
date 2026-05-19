@@ -501,6 +501,63 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, o
                 </button>
               </div>
               <p className="text-[10px] text-slate-400 mt-1">{`{saudacao}`} retorna "Bom dia/Boa tarde/Boa noite" conforme a hora do envio.</p>
+
+              {/* Captura de resposta — 2026-02-15 (E). Quando capture_var
+                  esta setado, o engine PAUSA aqui esperando a resposta do
+                  cliente. Com capture_format = cpf/cnpj/cpfcnpj/email/cep,
+                  o engine valida o formato e re-pergunta se invalido —
+                  garantindo que o cliente nao avance no fluxo sem dar a
+                  informacao no formato correto. */}
+              <div className="mt-4 p-3 rounded-lg bg-indigo-50/40 border border-indigo-200 space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-700">Capturar resposta do cliente</p>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-500">Variavel para guardar a resposta</label>
+                  <input
+                    value={config.capture_var || ''}
+                    onChange={e => setConfig({...config, capture_var: e.target.value})}
+                    placeholder="ex: cpf_cliente, email, contrato_id"
+                    className="input-field text-sm"
+                    data-testid="msg-capture-var"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">Se preenchido, o fluxo PAUSA aqui ate o cliente responder. A resposta vai parar em <code>{`{${config.capture_var || 'sua_variavel'}}`}</code>.</p>
+                </div>
+                {config.capture_var && (
+                  <>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-500">Validar formato (opcional)</label>
+                      <select
+                        value={config.capture_format || ''}
+                        onChange={e => setConfig({...config, capture_format: e.target.value})}
+                        className="input-field text-sm"
+                        data-testid="msg-capture-format"
+                      >
+                        <option value="">Sem validacao (aceita qualquer texto)</option>
+                        <option value="cpf">CPF (11 digitos)</option>
+                        <option value="cnpj">CNPJ (14 digitos)</option>
+                        <option value="cpfcnpj">CPF ou CNPJ</option>
+                        <option value="email">Email</option>
+                        <option value="cep">CEP (8 digitos)</option>
+                        <option value="phone">Telefone (DDD + numero)</option>
+                        <option value="number">Apenas numeros</option>
+                      </select>
+                      <p className="text-[10px] text-slate-500 mt-0.5">Quando invalido, o fluxo repete a pergunta — o cliente nao avanca ate enviar no formato correto.</p>
+                    </div>
+                    {config.capture_format && (
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-slate-500">Mensagem de erro (opcional)</label>
+                        <input
+                          value={config.capture_invalid_message || ''}
+                          onChange={e => setConfig({...config, capture_invalid_message: e.target.value})}
+                          placeholder="Por favor envie um CPF valido."
+                          className="input-field text-sm"
+                          data-testid="msg-capture-invalid-msg"
+                        />
+                        <p className="text-[10px] text-slate-500 mt-0.5">Se vazio, usa a mensagem padrao do sistema.</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           )}
           {node.data?.nodeType === 'menu' && (

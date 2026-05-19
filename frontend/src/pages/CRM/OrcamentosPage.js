@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import { quotesAPI, schedulingAPI, channelsAPI } from '../../services/api';
 import api from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import { toast } from 'sonner';
 import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy, Upload, Send, Loader2, RefreshCw } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
@@ -914,6 +915,14 @@ const QuotesTab = () => {
 
 const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
   const isEdit = !!initial?.id;
+  const { user } = useAuth();
+  // Auto-fill vendor fields from the logged user. Operator can still
+  // override before saving — these are just sensible defaults. The
+  // explicit text fields were removed from the form on user request
+  // (2026-02-15 (E)); the values keep flowing via {{seller_name}} /
+  // {{seller_contact}} template tokens.
+  const fallbackSellerName = initial?.seller_name || user?.name || '';
+  const fallbackSellerContact = initial?.seller_contact || user?.phone || user?.email || '';
   const [form, setForm] = useState({
     template_id: initial?.template_id || '',
     client_id: initial?.client_id || '',
@@ -924,8 +933,8 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
     payment_terms: initial?.payment_terms || '30',
     payment_method: initial?.payment_method || 'Boleto',
     average_delivery_days: initial?.average_delivery_days || '',
-    seller_name: initial?.seller_name || '',
-    seller_contact: initial?.seller_contact || '',
+    seller_name: fallbackSellerName,
+    seller_contact: fallbackSellerContact,
     validity_days: initial?.validity_days || 15,
     notes: initial?.notes || '',
     status: initial?.status || 'rascunho',
@@ -1155,7 +1164,12 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
             <input data-testid="quote-payment-terms" className="w-full border rounded px-3 py-2 text-sm" value={form.payment_terms} onChange={(e) => setForm({ ...form, payment_terms: e.target.value })} />
           </Field>
           <Field label="Forma de pagamento">
-            <input data-testid="quote-payment-method" className="w-full border rounded px-3 py-2 text-sm" value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })} />
+            <select data-testid="quote-payment-method" className="w-full border rounded px-3 py-2 text-sm" value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })}>
+              <option value="">Selecione...</option>
+              <option value="A Vista">A Vista</option>
+              <option value="Pix">Pix</option>
+              <option value="Boleto">Boleto</option>
+            </select>
           </Field>
           <Field label="Prazo médio (placeholder {{prazo_medio}})">
             <input
@@ -1166,12 +1180,12 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
               onChange={(e) => setForm({ ...form, average_delivery_days: e.target.value })}
             />
           </Field>
-          <Field label="Vendedor (nome)">
-            <input data-testid="quote-seller-name" className="w-full border rounded px-3 py-2 text-sm" value={form.seller_name} onChange={(e) => setForm({ ...form, seller_name: e.target.value })} />
-          </Field>
-          <Field label="Vendedor (contato)">
-            <input data-testid="quote-seller-contact" className="w-full border rounded px-3 py-2 text-sm" value={form.seller_contact} onChange={(e) => setForm({ ...form, seller_contact: e.target.value })} />
-          </Field>
+          {/* Vendedor: nome e contato saem AUTOMATICAMENTE do usuario logado
+              (auth context) ao salvar — campo manual removido por pedido do
+              usuario (2026-02-15 (E)). O template do orcamento usa as
+              variaveis {{seller_name}} / {{seller_contact}} resolvidas no
+              backend. Quem precisar editar manualmente pode usar a edicao
+              avancada do registro do orcamento via API. */}
         </section>
 
         <Field label="Observacoes">
