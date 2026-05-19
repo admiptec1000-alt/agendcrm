@@ -371,10 +371,23 @@ class AdmTxnIn(BaseModel):
     category: Optional[str] = "outros"
     date: str
     due_date: Optional[str] = None
-    status: str = "pago"  # 'pago' | 'pendente'
+    status: str = "pago"  # 'pago' | 'pendente'  (separado de `kind`)
     notes: Optional[str] = None
     recurrence: Optional[_RecurrenceIn] = None
     late_fee: Optional[_LateFeeIn] = None
+    # Tipo do lancamento — 2026-02-15. 'licenca' associa o lancamento a uma
+    # Empresa cadastrada (ou cliente externo); 'diversos' eh o lancamento
+    # manual generico (modelo antigo). Existentes ficam sem kind = tratados
+    # como diversos pelo frontend.
+    kind: Optional[str] = None             # 'licenca' | 'diversos'
+    company_id: Optional[str] = None       # quando kind=licenca e cliente nativo
+    external_client_name: Optional[str] = None  # quando cliente externo
+    # Auto-popular ao selecionar empresa nativa. Mantidos no doc pra audit
+    # mesmo que a empresa mude os limites depois.
+    license_connections: Optional[int] = None
+    license_users: Optional[int] = None
+    license_cost: Optional[float] = None
+    license_sale_price: Optional[float] = None
 
 
 class AdmTxnUpdate(BaseModel):
@@ -388,6 +401,13 @@ class AdmTxnUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     late_fee: Optional[_LateFeeIn] = None
+    kind: Optional[str] = None
+    company_id: Optional[str] = None
+    external_client_name: Optional[str] = None
+    license_connections: Optional[int] = None
+    license_users: Optional[int] = None
+    license_cost: Optional[float] = None
+    license_sale_price: Optional[float] = None
 
 
 @router.get("/finance/transactions")
@@ -397,6 +417,8 @@ async def adm_list_transactions(
     payment_method: Optional[str] = None,
     direction: Optional[str] = None,
     status: Optional[str] = None,
+    kind: Optional[str] = None,
+    company_id: Optional[str] = None,
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
@@ -411,6 +433,10 @@ async def adm_list_transactions(
         q["direction"] = direction
     if status:
         q["status"] = status
+    if kind:
+        q["kind"] = kind
+    if company_id:
+        q["company_id"] = company_id
     rows = await db.super_admin_transactions.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
     from finance_helpers import compute_late_fee_amount
     for t in rows:
@@ -483,6 +509,19 @@ async def adm_create_transaction(
                 "multa_pct": float(data.late_fee.multa_pct or 0),
                 "juros_dia_pct": float(data.late_fee.juros_dia_pct or 0),
             }
+        # Lancamento Licenca metadata — 2026-02-15. Stored on EVERY recurrence
+        # row so each invoice in a yearly cycle carries the same Empresa link
+        # and license snapshot.
+        if data.kind:
+            txn["kind"] = data.kind
+        if data.company_id:
+            txn["company_id"] = data.company_id
+        if data.external_client_name:
+            txn["external_client_name"] = data.external_client_name
+        for k in ("license_connections", "license_users", "license_cost", "license_sale_price"):
+            v = getattr(data, k, None)
+            if v is not None:
+                txn[k] = v
         if status == "pago":
             txn["paid_at"] = datetime.now(timezone.utc).isoformat()
         await db.super_admin_transactions.insert_one(txn)

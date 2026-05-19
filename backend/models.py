@@ -112,6 +112,34 @@ class ThemeColors(BaseModel):
     secondary: str = "#10B981"
     accent: str = "#F43F5E"
 
+# License catalog — defines a sellable bundle that grants a company a
+# fixed number of connections and/or users. Can be unitary (qty=1 of one
+# kind) or composite (e.g. Pacote Pro = 10 connections + 5 users).
+class LicenseCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    connections_qty: int = 0
+    users_qty: int = 0
+    cost: float = 0.0          # custo unitario
+    sale_price: float = 0.0    # valor de venda padrao
+
+class LicenseUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    connections_qty: Optional[int] = None
+    users_qty: Optional[int] = None
+    cost: Optional[float] = None
+    sale_price: Optional[float] = None
+    is_active: Optional[bool] = None
+
+# A license assigned to a Company (with optional sale-price override and
+# quantity multiplier — buying "5x Pacote Pro" is one CompanyLicense entry
+# with qty=5, not five separate rows).
+class CompanyLicense(BaseModel):
+    license_id: str
+    qty: int = 1
+    custom_sale_price: Optional[float] = None  # overrides license.sale_price * qty
+
 class CompanyCreate(BaseModel):
     name: str
     cnpj: Optional[str] = None
@@ -126,6 +154,15 @@ class CompanyCreate(BaseModel):
     admin_password: str
     subdomain: Optional[str] = None
     referred_by: Optional[str] = None  # partner referral code captured from /r/<code>
+    # Billing & limits moved from BusinessType to Company (2026-02-15). The
+    # BT only keeps `show_on_landing` for landing-page card display.
+    licenses: List[CompanyLicense] = []
+    monthly_price: Optional[float] = None
+    billing_cycle: Optional[str] = None     # monthly | yearly | one_time
+    installments: Optional[int] = None
+    grace_days: Optional[int] = None
+    max_connections: Optional[int] = None  # auto-computed from licenses, can be overridden
+    max_users: Optional[int] = None        # idem
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -138,6 +175,13 @@ class CompanyUpdate(BaseModel):
     plan_id: Optional[str] = None
     theme_colors: Optional[ThemeColors] = None
     subdomain: Optional[str] = None
+    licenses: Optional[List[CompanyLicense]] = None
+    monthly_price: Optional[float] = None
+    billing_cycle: Optional[str] = None
+    installments: Optional[int] = None
+    grace_days: Optional[int] = None
+    max_connections: Optional[int] = None
+    max_users: Optional[int] = None
 
 class CompanyResponse(BaseModel):
     id: str

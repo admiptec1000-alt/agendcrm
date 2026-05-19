@@ -1160,6 +1160,7 @@ SUPER_ADMIN_FEATURES = [
     {"feature_key": "dashboard", "label": "Dashboard", "category": "Super Admin"},
     {"feature_key": "companies", "label": "Empresas", "category": "Super Admin"},
     {"feature_key": "business-types", "label": "Tipos de Negocio", "category": "Super Admin"},
+    {"feature_key": "licenses", "label": "Licencas", "category": "Super Admin"},
     {"feature_key": "partners", "label": "Parceiros", "category": "Super Admin"},
     {"feature_key": "financial", "label": "Financeiro Admin", "category": "Super Admin"},
     {"feature_key": "indoor", "label": "Indoor / TV", "category": "Super Admin"},
@@ -1264,6 +1265,10 @@ async def create_company_user(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    # Enforce the company's license-derived user limit (see channel limit).
+    from routes.licenses_routes import enforce_company_limit
+    await enforce_company_limit(db, user["company_id"], "user")
+
     existing = await db.company_users.find_one({"email": data.email})
     if existing:
         raise HTTPException(status_code=400, detail="Email ja cadastrado")

@@ -10,6 +10,33 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (C) — Licencas: catalogo + cobranca por empresa + enforcement ✅
+
+**Pedido:** Catalogo de licencas (unidade ou pacote: conexao/usuario), cobranca movida do BusinessType para a Empresa, Lancamentos do Financeiro Admin com campo Tipo (Licenca/Diversos) e seletor de Empresa, e enforcement de criacao acima do limite.
+
+**Backend (~250 linhas):**
+- `models.py`: novos `LicenseCreate/Update`, `CompanyLicense`. `CompanyCreate/Update` ganharam `licenses[]`, `monthly_price`, `billing_cycle`, `installments`, `grace_days`, `max_connections`, `max_users`.
+- `routes/licenses_routes.py` (novo): CRUD `/api/super-admin/licenses` (incluindo soft-deactivate quando referenciada por empresa), helper `compute_company_limits` que soma `connections_qty*qty` e `users_qty*qty`, `compute_company_usage` que conta `channel_connections` e `company_users`, `enforce_company_limit(resource)` que retorna 403 quando used>=cap. Endpoint `GET /usage/{company_id}` para a UI.
+- `routes/super_admin_routes.py`: `create_company` e `update_company` recomputam max_* automaticamente quando `licenses` muda; `licenses=[]` => max=None (modo legado, sem enforcement). Mantem override manual via `max_connections`/`max_users`.
+- `routes/channels_routes.py:226` e `routes/scheduling_routes.py:1261`: chamam `enforce_company_limit` antes de inserir.
+- `routes/super_admin_finance_routes.py`: `AdmTxnIn`/`Update` aceitam `kind` (licenca|diversos), `company_id`, `external_client_name`, snapshot `license_connections/users/cost/sale_price`. `GET /finance/transactions` ganhou filtros `kind` + `company_id`.
+- `routes/scheduling_routes.py`: `licenses` adicionado ao `SUPER_ADMIN_FEATURES` (10 keys agora).
+
+**Frontend:**
+- `pages/SuperAdmin/LicensesPanel.js` (novo): tab Licencas com tabela + modal de criacao/edicao.
+- `pages/SuperAdmin/LicenseAssignmentPanel.js` (novo): picker reutilizavel embutido no CompanyModal, com 4 counter-cards (Conexoes X/Y, Usuarios X/Y, Custo total, Valor venda total) e badge "uso excede limite".
+- `pages/SuperAdmin/Dashboard.js`: aba `licenses` no sidebar + branch de render + CompanyModal renderiza secao "Licencas e Cobranca" (picker + monthly_price + billing_cycle + installments + grace_days).
+- `pages/SuperAdmin/AdmLancamentosPanel.js`: filtro `Tipo` na toolbar, coluna `Tipo` na tabela com badge Licenca/Diversos, form com selector Tipo + toggle Cliente cadastrada/Externo + dropdown de Empresa que chama `/usage/{id}` no onChange e auto-popula license_connections/users/cost/sale_price + amount.
+
+**Validacao:**
+- Pytest: `tests/test_iteration_54_licenses.py` — **17/17 passing** em 8.07s, cobrindo Licenses CRUD, integracao Company-licenses, enforcement positivo (block 403), enforcement negativo (legacy max=None passa), AdmTxn kind/snapshot/filters, soft-deactivate.
+- Playwright smoke: 3 flows UI confirmados (Licencas tab cria licenca, CompanyModal mostra LicenseAssignmentPanel + counters, AdmLancamento form tem Tipo + Cliente + snapshot fields).
+- BT modal continua expondo `show_on_landing` (mantido conforme pedido); demais campos billing nao serao mais editaveis no BT a partir da prox iteracao (UI cleanup pendente).
+
+**Para producao:** redeploy do preview. O usuario precisa: (1) cadastrar licencas em "SA -> Licencas", (2) atribuir em "SA -> Empresas -> editar -> Licencas e Cobranca", (3) usar em "Financeiro Admin -> Lancamentos -> Novo -> Tipo=Licenca -> selecionar Empresa".
+
+
+
 ### 2026-02-15 (B) — SA Sidebar: features tenant agora aparecem como "Modulos Operacionais" ✅
 
 **Pedido:** "no Super Admin eu configurei para que tenha mais menus no ambiente de super Admin porém salvo e mesmo assim o super Admin não as assume os novos menus".

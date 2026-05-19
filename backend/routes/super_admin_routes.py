@@ -329,6 +329,34 @@ async def create_company(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": user["id"]
     }
+
+    # Licenses & billing (moved from BusinessType — 2026-02-15).
+    # Compute max_connections/max_users from the assigned licenses; allow
+    # explicit `max_*` to override (operator concession). Empty licenses =>
+    # legacy mode (max_*=None, no enforcement) — matches UPDATE semantics.
+    licenses_list = [cl.model_dump() for cl in (data.licenses or [])]
+    company["licenses"] = licenses_list
+    if licenses_list:
+        from routes.licenses_routes import compute_company_limits
+        c_max, u_max, total_cost, total_sale = await compute_company_limits(db, licenses_list)
+        company["max_connections"] = data.max_connections if data.max_connections is not None else c_max
+        company["max_users"] = data.max_users if data.max_users is not None else u_max
+        company["total_cost"] = total_cost
+        company["total_sale_price"] = total_sale
+    else:
+        company["max_connections"] = data.max_connections if data.max_connections is not None else None
+        company["max_users"] = data.max_users if data.max_users is not None else None
+        company["total_cost"] = 0.0
+        company["total_sale_price"] = 0.0
+    if data.monthly_price is not None:
+        company["monthly_price"] = data.monthly_price
+    if data.billing_cycle is not None:
+        company["billing_cycle"] = data.billing_cycle
+    if data.installments is not None:
+        company["installments"] = data.installments
+    if data.grace_days is not None:
+        company["grace_days"] = data.grace_days
+
     await db.companies.insert_one(company)
 
     # Auto-generate invoices. Priority: explicit plan_id (legacy) > business_type
@@ -398,6 +426,9 @@ async def update_company(
         if v is not None:
             if k == "theme_colors":
                 update_data[k] = v.model_dump() if hasattr(v, 'model_dump') else v
+            elif k == "licenses":
+                # licenses is a List[CompanyLicense]; pydantic gives us dicts already
+                update_data[k] = v
             else:
                 update_data[k] = v
 
@@ -407,6 +438,34 @@ async def update_company(
         if bt:
             update_data["features"] = bt.get("features", [])
             update_data["mobile_bottom_nav"] = bt.get("mobile_bottom_nav", [])
+
+    # Recompute max_connections/max_users/total_cost/total_sale_price whenever
+    # the license bundle changes — keeps the Empresa modal counters honest
+    # without forcing the frontend to send all 4 derived values.
+    if "licenses" in update_data:
+        from routes.licenses_routes import compute_company_limits
+        licenses_payload = update_data["licenses"] or []
+        if licenses_payload:
+            c_max, u_max, total_cost, total_sale = await compute_company_limits(
+                db, licenses_payload
+            )
+            if "max_connections" not in update_data:
+                update_data["max_connections"] = c_max
+            if "max_users" not in update_data:
+                update_data["max_users"] = u_max
+            update_data["total_cost"] = total_cost
+            update_data["total_sale_price"] = total_sale
+        else:
+            # Empty licenses → operator removed all licenses. Clear the
+            # derived totals but DON'T set max_* to 0 (would break legacy
+            # accounts). Use $unset semantics: write None so enforcement
+            # treats them as "no limit / legacy" again.
+            if "max_connections" not in update_data:
+                update_data["max_connections"] = None
+            if "max_users" not in update_data:
+                update_data["max_users"] = None
+            update_data["total_cost"] = 0.0
+            update_data["total_sale_price"] = 0.0
 
     if update_data:
         await db.companies.update_one({"id": company_id}, {"$set": update_data})

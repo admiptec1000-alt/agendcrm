@@ -229,6 +229,12 @@ async def create_connection(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    # Enforce the company's license-derived connection limit. Companies
+    # without a max (legacy / pre-licenses) are exempt. Block ONLY new
+    # creation; pre-existing excess connections keep working.
+    from routes.licenses_routes import enforce_company_limit
+    await enforce_company_limit(db, user["company_id"], "connection")
+
     conn = {
         "id": str(uuid.uuid4()),
         "company_id": user["company_id"],

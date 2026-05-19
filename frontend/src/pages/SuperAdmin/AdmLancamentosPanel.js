@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import api from '../../services/api';
 import {
   Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
-  CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent,
+  CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent, Building,
 } from 'lucide-react';
 
 const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
@@ -21,7 +21,7 @@ const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
 export const AdmLancamentosPanel = () => {
   const [items, setItems] = useState([]);
   const [summary, setSummary] = useState(null);
-  const [filters, setFilters] = useState({ direction: '', status: '' });
+  const [filters, setFilters] = useState({ direction: '', status: '', kind: '' });
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -95,6 +95,16 @@ export const AdmLancamentosPanel = () => {
           <option value="pago">Pago</option>
           <option value="pendente">Pendente</option>
         </select>
+        <select
+          value={filters.kind}
+          onChange={(e) => setFilters({ ...filters, kind: e.target.value })}
+          className="px-3 py-2 border border-slate-300 rounded text-sm"
+          data-testid="adm-filter-kind"
+        >
+          <option value="">Todos tipos</option>
+          <option value="licenca">Licenca</option>
+          <option value="diversos">Diversos</option>
+        </select>
         <button onClick={load} className="px-3 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 flex items-center gap-1" data-testid="adm-refresh-btn">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
         </button>
@@ -114,6 +124,7 @@ export const AdmLancamentosPanel = () => {
             <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider">
               <tr>
                 <th className="px-3 py-2 text-left">Data</th>
+                <th className="px-3 py-2 text-left">Tipo</th>
                 <th className="px-3 py-2 text-left">Descricao</th>
                 <th className="px-3 py-2 text-left">Categoria</th>
                 <th className="px-3 py-2 text-left">Metodo</th>
@@ -124,7 +135,7 @@ export const AdmLancamentosPanel = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {items.length === 0 && (
-                <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400">Nenhum lancamento encontrado.</td></tr>
+                <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-400">Nenhum lancamento encontrado.</td></tr>
               )}
               {items.map(t => {
                 const isOut = t.direction === 'saida';
@@ -133,7 +144,27 @@ export const AdmLancamentosPanel = () => {
                   <tr key={t.id} data-testid={`adm-txn-row-${t.id}`} className="hover:bg-slate-50">
                     <td className="px-3 py-2 text-slate-700 font-mono text-xs">{(t.due_date || t.date || '').slice(0,10)}</td>
                     <td className="px-3 py-2">
+                      {t.kind === 'licenca' ? (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded font-medium">
+                          <Building className="w-3 h-3" /> Licenca
+                        </span>
+                      ) : (
+                        <span className="inline-block text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-medium">Diversos</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
                       <div className="font-medium text-slate-800">{t.description}</div>
+                      {(t.company_id || t.external_client_name) && (
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          Cliente: {t.external_client_name || t.company_id?.slice(0, 8)}
+                          {t.license_connections !== undefined && t.license_connections !== null && (
+                            <> · {t.license_connections}c</>
+                          )}
+                          {t.license_users !== undefined && t.license_users !== null && (
+                            <> · {t.license_users}u</>
+                          )}
+                        </div>
+                      )}
                       <div className="flex items-center gap-2 mt-0.5">
                         {t.recurrence_group_id && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded font-medium">
@@ -229,10 +260,48 @@ const AdmTxnFormModal = ({ onClose, onSaved }) => {
     due_date: today,
     status: 'pago',
     notes: '',
+    // 2026-02-15 — Tipo do lancamento (Licenca / Diversos) + cliente nativo/externo.
+    kind: 'licenca',
+    client_kind: 'native',         // 'native' (empresa cadastrada) | 'external'
+    company_id: '',
+    external_client_name: '',
+    // Snapshot a partir de /usage — preenchido ao escolher a empresa.
+    license_connections: '',
+    license_users: '',
+    license_cost: '',
+    license_sale_price: '',
   });
   const [recurrence, setRecurrence] = useState({ enabled: false, interval: 'mensal', until: '' });
   const [lateFee, setLateFee] = useState({ enabled: false, multa_pct: 2.0, juros_dia_pct: 0.033 });
   const [saving, setSaving] = useState(false);
+  const [companies, setCompanies] = useState([]);
+
+  // Load companies once when the modal opens (only needed when kind=licenca
+  // & client_kind=native, but we cache eagerly — list is small).
+  useEffect(() => {
+    api.get('/super-admin/companies').then(r => setCompanies(r.data || [])).catch(() => {});
+  }, []);
+
+  // When an Empresa is selected, fetch usage/limits and auto-populate the
+  // license fields + suggested amount. Operator can still edit any field.
+  const handleCompanyChange = async (companyId) => {
+    setForm(f => ({ ...f, company_id: companyId }));
+    if (!companyId) return;
+    try {
+      const { data } = await api.get(`/super-admin/licenses/usage/${companyId}`);
+      const c = companies.find(co => co.id === companyId);
+      setForm(f => ({
+        ...f,
+        license_connections: data.max_connections ?? '',
+        license_users: data.max_users ?? '',
+        license_cost: data.total_cost ?? '',
+        license_sale_price: data.total_sale_price ?? '',
+        // Suggested amount = total sale price (operator can edit).
+        amount: f.amount || (data.total_sale_price ?? ''),
+        description: f.description || `Licenca — ${c?.name || ''}`.trim(),
+      }));
+    } catch (_) {/* ignore */}
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -246,6 +315,30 @@ const AdmTxnFormModal = ({ onClose, onSaved }) => {
         ...form,
         amount: parseFloat(form.amount),
       };
+      // New fields (2026-02-15). Only send the relevant ones — backend
+      // accepts them via Optional[...] so omitting is fine.
+      if (form.kind === 'licenca') {
+        if (form.client_kind === 'native') {
+          payload.company_id = form.company_id || null;
+          payload.external_client_name = null;
+        } else {
+          payload.company_id = null;
+          payload.external_client_name = form.external_client_name || null;
+        }
+        // Snapshot — convert empty strings to null
+        for (const k of ['license_connections', 'license_users']) {
+          payload[k] = form[k] === '' || form[k] === null ? null : parseInt(form[k], 10);
+        }
+        for (const k of ['license_cost', 'license_sale_price']) {
+          payload[k] = form[k] === '' || form[k] === null ? null : parseFloat(form[k]);
+        }
+      } else {
+        // Diversos — strip licenca-specific fields so they don't pollute the doc.
+        payload.company_id = null;
+        payload.external_client_name = null;
+      }
+      // Strip helper-only field — backend doesn't know about it.
+      delete payload.client_kind;
       if (recurrence.enabled) {
         payload.recurrence = {
           interval: recurrence.interval,
@@ -289,12 +382,70 @@ const AdmTxnFormModal = ({ onClose, onSaved }) => {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
+          {/* Tipo do lancamento — Licenca (vincula a empresa cadastrada/externa) OU Diversos. */}
+          <Field label="Tipo">
+            <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} className="input" data-testid="adm-form-kind">
+              <option value="licenca">Licenca</option>
+              <option value="diversos">Diversos</option>
+            </select>
+          </Field>
           <Field label="Direcao">
             <select value={form.direction} onChange={(e) => setForm({ ...form, direction: e.target.value })} className="input" data-testid="adm-form-direction">
               <option value="entrada">Entrada (receber)</option>
               <option value="saida">Saida (pagar)</option>
             </select>
           </Field>
+          {form.kind === 'licenca' && (
+            <>
+              <Field label="Cliente" className="col-span-2">
+                <div className="flex gap-2 mb-2">
+                  <button type="button" onClick={() => setForm({ ...form, client_kind: 'native' })}
+                    className={`flex-1 px-3 py-2 text-xs font-medium rounded border ${form.client_kind === 'native' ? 'bg-primary text-white border-primary' : 'bg-white border-slate-300 text-slate-600'}`}
+                    data-testid="adm-form-client-native">
+                    Empresa cadastrada
+                  </button>
+                  <button type="button" onClick={() => setForm({ ...form, client_kind: 'external' })}
+                    className={`flex-1 px-3 py-2 text-xs font-medium rounded border ${form.client_kind === 'external' ? 'bg-primary text-white border-primary' : 'bg-white border-slate-300 text-slate-600'}`}
+                    data-testid="adm-form-client-external">
+                    Externo (texto livre)
+                  </button>
+                </div>
+                {form.client_kind === 'native' ? (
+                  <select value={form.company_id} onChange={(e) => handleCompanyChange(e.target.value)} className="input" data-testid="adm-form-company">
+                    <option value="">Selecione a empresa...</option>
+                    {companies.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type="text" value={form.external_client_name}
+                    onChange={(e) => setForm({ ...form, external_client_name: e.target.value })}
+                    className="input" placeholder="Nome do cliente externo" data-testid="adm-form-external-name" />
+                )}
+              </Field>
+              {/* License snapshot — editable. Filled automatically when picking an Empresa. */}
+              <Field label="Qtd conexoes">
+                <input type="number" min="0" value={form.license_connections}
+                  onChange={(e) => setForm({ ...form, license_connections: e.target.value })}
+                  className="input" data-testid="adm-form-license-conn" />
+              </Field>
+              <Field label="Qtd usuarios">
+                <input type="number" min="0" value={form.license_users}
+                  onChange={(e) => setForm({ ...form, license_users: e.target.value })}
+                  className="input" data-testid="adm-form-license-usr" />
+              </Field>
+              <Field label="Custo total (R$)">
+                <input type="number" step="0.01" min="0" value={form.license_cost}
+                  onChange={(e) => setForm({ ...form, license_cost: e.target.value })}
+                  className="input" data-testid="adm-form-license-cost" />
+              </Field>
+              <Field label="Valor venda total (R$)">
+                <input type="number" step="0.01" min="0" value={form.license_sale_price}
+                  onChange={(e) => setForm({ ...form, license_sale_price: e.target.value })}
+                  className="input" data-testid="adm-form-license-sale" />
+              </Field>
+            </>
+          )}
           <Field label="Status">
             <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="input" data-testid="adm-form-status">
               <option value="pago">Pago</option>

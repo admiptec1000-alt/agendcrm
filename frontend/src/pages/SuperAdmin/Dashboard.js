@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import SgpRepairTab from './SgpRepairTab';
 import { AdmLancamentosPanel } from './AdmLancamentosPanel';
+import { LicensesPanel } from './LicensesPanel';
+import { LicenseAssignmentPanel } from './LicenseAssignmentPanel';
 
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
@@ -107,6 +109,7 @@ const SuperAdminDashboard = () => {
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { key: 'companies', label: 'Empresas', icon: Building },
     { key: 'business-types', label: 'Tipos de Negocio', icon: Briefcase },
+    { key: 'licenses', label: 'Licencas', icon: Package },
     { key: 'partners', label: 'Parceiros', icon: HandCoins },
     { key: 'financial', label: 'Financeiro Admin', icon: Receipt },
     { key: 'indoor', label: 'Indoor', icon: Tv },
@@ -315,6 +318,7 @@ const SuperAdminDashboard = () => {
             />
           )}
           {activeTab === 'plans' && <PlansTab />}
+          {activeTab === 'licenses' && <LicensesPanel />}
           {activeTab === 'partners' && <PartnersTab companies={companies} onRefresh={loadAll} />}
           {activeTab === 'financial' && <FinancialTab companies={companies} />}
           {activeTab === 'indoor' && <IndoorTab companies={companies} />}
@@ -2180,6 +2184,12 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     admin_password: '',
     status: company?.status || 'active',
     subdomain: company?.subdomain || '',
+    // Billing/limits — moved from BusinessType to Company (2026-02-15).
+    licenses: company?.licenses || [],
+    monthly_price: company?.monthly_price ?? '',
+    billing_cycle: company?.billing_cycle || 'monthly',
+    installments: company?.installments ?? 1,
+    grace_days: company?.grace_days ?? 5,
   });
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
@@ -2216,6 +2226,16 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Billing fields: send as numbers (or null when empty). The backend
+      // recomputes max_connections/max_users from the licenses array, so we
+      // don't need to send those.
+      const billingPayload = {
+        licenses: form.licenses || [],
+        monthly_price: form.monthly_price === '' || form.monthly_price === null ? null : Number(form.monthly_price),
+        billing_cycle: form.billing_cycle || null,
+        installments: form.installments === '' ? null : Number(form.installments),
+        grace_days: form.grace_days === '' ? null : Number(form.grace_days),
+      };
       if (isEditing) {
         await superAdminAPI.updateCompany(company.id, {
           name: form.name,
@@ -2226,6 +2246,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           business_type_id: form.business_type_id || null,
           status: form.status,
           subdomain: form.subdomain || null,
+          ...billingPayload,
         });
         if (showCustomFeatures) {
           await superAdminAPI.updateCompanyFeatures(company.id, customFeatures);
@@ -2239,6 +2260,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         }
         await superAdminAPI.createCompany({
           ...form,
+          ...billingPayload,
           business_type_id: form.business_type_id || null,
           subdomain: form.subdomain || null,
         });
@@ -2374,6 +2396,46 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               </div>
             </div>
           )}
+
+          {/* Licenses & Billing — moved from BusinessType to Company (2026-02-15). */}
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Licencas e Cobranca</h3>
+            <LicenseAssignmentPanel
+              value={form.licenses}
+              onChange={(licenses) => setForm({...form, licenses})}
+              companyId={isEditing ? company?.id : null}
+            />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Mensalidade (R$)</label>
+                <input type="number" step="0.01" value={form.monthly_price}
+                  onChange={e => setForm({...form, monthly_price: e.target.value})}
+                  className="input-field text-sm" data-testid="company-monthly-price" placeholder="0,00" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Ciclo</label>
+                <select value={form.billing_cycle}
+                  onChange={e => setForm({...form, billing_cycle: e.target.value})}
+                  className="input-field text-sm" data-testid="company-billing-cycle">
+                  <option value="monthly">Mensal</option>
+                  <option value="yearly">Anual</option>
+                  <option value="one_time">Avulso</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Parcelas</label>
+                <input type="number" min="1" value={form.installments}
+                  onChange={e => setForm({...form, installments: e.target.value})}
+                  className="input-field text-sm" data-testid="company-installments" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Carencia (dias)</label>
+                <input type="number" min="0" value={form.grace_days}
+                  onChange={e => setForm({...form, grace_days: e.target.value})}
+                  className="input-field text-sm" data-testid="company-grace-days" />
+              </div>
+            </div>
+          </div>
 
           {/* Status (editing only) */}
           {isEditing && (

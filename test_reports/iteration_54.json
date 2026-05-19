@@ -1,0 +1,68 @@
+{
+  "iteration": 54,
+  "feature": "Licenses & License-driven Company limits + AdmTxn Tipo field",
+  "phases": ["Phase 1 Backend", "Phase 2 Licenses tab", "Phase 3 Company modal", "Phase 4 AdmLancamentos"],
+  "test_credentials_present": true,
+  "backend_results": {
+    "pytest_file": "/app/backend/tests/test_iteration_54_licenses.py",
+    "junit_xml": "/app/test_reports/pytest/iteration_54.xml",
+    "passed": 17,
+    "failed": 0,
+    "total": 17,
+    "duration_seconds": 8.07,
+    "coverage_areas": [
+      "Licenses CRUD (unitary + package + 400 on zero + list + update + delete)",
+      "Company licenses integration (compute limits + usage endpoint + clear-licenses-null-limits)",
+      "Enforcement connections (block 2nd at cap)",
+      "Enforcement users (block 2nd at cap)",
+      "Enforcement legacy (max=None bypasses)",
+      "AdmTxn kind=licenca persists snapshot",
+      "AdmTxn kind=diversos works without company_id",
+      "AdmTxn filters by kind + company_id",
+      "License soft-deactivate when referenced by company"
+    ]
+  },
+  "frontend_results": {
+    "method": "playwright smoke screenshots",
+    "flow1_licenses_tab": {
+      "sidebar_licenses_present": true,
+      "create_license_modal_works": true,
+      "license_row_after_save": 1
+    },
+    "flow2_company_modal": {
+      "license_assignment_panel": true,
+      "monthly_price_field": true,
+      "billing_cycle_field": true,
+      "usage_counters": true,
+      "legacy_mode_message_when_empty": true
+    },
+    "flow3_adm_lancamentos": {
+      "kind_filter_in_toolbar": true,
+      "kind_field_in_form": true,
+      "client_native_external_toggle": true,
+      "company_selector": true,
+      "license_snapshot_fields": ["license_connections", "license_users", "license_cost", "license_sale_price"]
+    }
+  },
+  "code_changes": {
+    "backend": [
+      "/app/backend/models.py — LicenseCreate/Update, CompanyLicense, CompanyCreate/Update extended (licenses, monthly_price, billing_cycle, installments, grace_days, max_connections, max_users)",
+      "/app/backend/routes/licenses_routes.py — new file: CRUD + compute_company_limits + compute_company_usage + enforce_company_limit + GET /usage/{company_id}",
+      "/app/backend/server.py — register licenses_router",
+      "/app/backend/routes/super_admin_routes.py — create_company/update_company recompute max_* from licenses (legacy mode = max=None when empty)",
+      "/app/backend/routes/channels_routes.py — POST /connections enforces connection limit",
+      "/app/backend/routes/scheduling_routes.py — POST /company-users enforces user limit + add 'licenses' feature_key to SUPER_ADMIN_FEATURES catalog",
+      "/app/backend/routes/super_admin_finance_routes.py — AdmTxnIn/Update with kind/company_id/external_client_name/license_*; list filters kind+company_id"
+    ],
+    "frontend": [
+      "/app/frontend/src/pages/SuperAdmin/LicensesPanel.js — new file: catalog CRUD tab",
+      "/app/frontend/src/pages/SuperAdmin/LicenseAssignmentPanel.js — new file: picker + counters used inside CompanyModal",
+      "/app/frontend/src/pages/SuperAdmin/Dashboard.js — sidebar adds Licencas item, render branch, CompanyModal embeds LicenseAssignmentPanel + billing fields, payload sends licenses/monthly_price/etc.",
+      "/app/frontend/src/pages/SuperAdmin/AdmLancamentosPanel.js — new Tipo filter + form fields (Tipo, Cliente native/external, Empresa selector with auto-populate of license_* snapshot)"
+    ]
+  },
+  "regression_check": "All 17 tests pass on a single run; backend boots clean; frontend compiles with only pre-existing unrelated warnings.",
+  "production_status": "Preview validated. User must redeploy to push to https://agentcrm.8ip.com.br.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false
+}
