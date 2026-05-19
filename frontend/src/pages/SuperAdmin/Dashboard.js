@@ -122,6 +122,14 @@ const SuperAdminDashboard = () => {
   // which sidebar entries are visible. We always keep `business-types` and
   // `settings` visible so an operator who accidentally disables everything
   // can still recover by re-toggling features.
+  //
+  // 2026-02-15 (D): Tenant-only features that happen to be toggled on the SA
+  // BT must NOT appear here. The SA panel has no tenant data of its own, so
+  // routing to a tenant page from the SA sidebar would either 404 or open
+  // the wrong-tenant operational panel via impersonation. The previous
+  // "MODULOS OPERACIONAIS" external-link group was removed — anything the
+  // operator wants inside the SA panel MUST be a SA-native feature (i.e.
+  // appear in `allSidebarItems` AND the backend `SUPER_ADMIN_FEATURES` catalog).
   const saFeatures = (user?.business_type?.features || []);
   const featureMap = Object.fromEntries(
     saFeatures.map(f => [f.feature_key, !!f.enabled])
@@ -132,24 +140,6 @@ const SuperAdminDashboard = () => {
         ALWAYS_VISIBLE.has(i.key) || featureMap[i.key] !== false
       )
     : allSidebarItems;
-
-  // EXTRA items: tenant feature_keys explicitly ENABLED on the SA BT that
-  // are NOT part of the 9 native SA sidebar items. The operator ticked
-  // these in the SA BT modal expecting them to appear in the SA sidebar.
-  // We render them under a separate "Modulos Operacionais" group; clicking
-  // any of them opens the operational-company impersonation in a new tab.
-  // Without this block, ticking e.g. `kanban` or `agenda` on the SA BT
-  // would silently do nothing — the bug reported on 2026-02-15.
-  const saNativeKeys = new Set(allSidebarItems.map(i => i.key));
-  const tenantSidebarItems = saFeatures
-    .filter(f => f.enabled && !saNativeKeys.has(f.feature_key))
-    .map(f => {
-      const meta = TENANT_SIDEBAR_META[f.feature_key] || {
-        icon: ExternalLink,
-        label: f.feature_key,
-      };
-      return { key: f.feature_key, label: meta.label, icon: meta.icon, external: true };
-    });
 
   const openOperationalPanel = async () => {
     try {
@@ -210,27 +200,6 @@ const SuperAdminDashboard = () => {
               {item.label}
             </button>
           ))}
-
-          {tenantSidebarItems.length > 0 && (
-            <div className="mt-4 pt-3 border-t border-slate-200" data-testid="sa-operational-modules-group">
-              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 px-4 py-2">
-                Modulos Operacionais
-              </p>
-              {tenantSidebarItems.map(item => (
-                <button
-                  key={`op-${item.key}`}
-                  onClick={() => { openOperationalPanel(); setMobileSidebarOpen(false); }}
-                  data-testid={`sidebar-op-${item.key}`}
-                  title={`Abrir ${item.label} no painel operacional (impersonacao)`}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all"
-                >
-                  <item.icon className="w-5 h-5" />
-                  <span className="flex-1 text-left">{item.label}</span>
-                  <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-                </button>
-              ))}
-            </div>
-          )}
         </nav>
         <div className="p-4 border-t border-slate-200">
           <div className="flex items-center gap-3 mb-3">
@@ -2664,113 +2633,63 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
           </div>
 
           <div className="border-t border-slate-200 pt-5">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-1">Plano e Cobranca</h3>
+            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-1">Landing Page</h3>
             <p className="text-xs text-slate-500 mb-4">
-              Estes valores sao aplicados automaticamente quando uma empresa for vinculada a este Tipo de Negocio. As faturas sao geradas no cadastro da empresa.
+              Valor, ciclo, parcelas, carencia e quantidades de conexao/usuario foram
+              movidos para o <strong>cadastro da Empresa</strong> (Empresas {'>'} editar {'>'} Licencas e Cobranca).
+              Aqui no Tipo de Negocio mantemos somente o controle de exibicao na Landing Page.
             </p>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Valor mensal (R$)</label>
-                <input
-                  type="number" min={0} step="0.01"
-                  data-testid="bt-monthly-price"
-                  value={form.monthly_price}
-                  onChange={e => setForm({...form, monthly_price: parseFloat(e.target.value) || 0})}
-                  className="input-field" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Ciclo</label>
-                <select
-                  data-testid="bt-billing-cycle"
-                  value={form.billing_cycle}
-                  onChange={e => setForm({...form, billing_cycle: e.target.value})}
-                  className="input-field">
-                  <option value="monthly">Mensal</option>
-                  <option value="yearly">Anual</option>
-                  <option value="one_time">Avulso</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Parcelas</label>
-                <input
-                  type="number" min={1} max={60}
-                  data-testid="bt-installments"
-                  value={form.installments}
-                  onChange={e => setForm({...form, installments: Math.max(1, parseInt(e.target.value) || 1)})}
-                  className="input-field" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Carencia (dias)</label>
-                <input
-                  type="number" min={0} max={90}
-                  data-testid="bt-grace-days"
-                  value={form.grace_days}
-                  onChange={e => setForm({...form, grace_days: Math.max(0, parseInt(e.target.value) || 0)})}
-                  className="input-field" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Max. conexoes</label>
-                <input
-                  type="number" min={0} max={50}
-                  data-testid="bt-max-connections"
-                  value={form.max_connections}
-                  onChange={e => setForm({...form, max_connections: Math.max(0, parseInt(e.target.value) || 0)})}
-                  className="input-field" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Max. usuarios</label>
-                <input
-                  type="number" min={0} max={500}
-                  data-testid="bt-max-users"
-                  value={form.max_users}
-                  onChange={e => setForm({...form, max_users: Math.max(0, parseInt(e.target.value) || 0)})}
-                  className="input-field" />
-              </div>
-            </div>
-            <label className="mt-4 flex items-center gap-2 cursor-pointer p-3 rounded-lg border border-slate-200 hover:border-primary/40">
+            <label className="flex items-center gap-2 cursor-pointer p-3 rounded-lg border border-slate-200 hover:border-primary/40">
               <input
                 type="checkbox"
                 data-testid="bt-show-on-landing"
                 checked={form.show_on_landing}
                 onChange={e => setForm({...form, show_on_landing: e.target.checked})}
                 className="w-4 h-4 text-primary border-slate-300 rounded" />
-              <span className="text-sm font-medium text-slate-700">Exibir como plano na Landing Page (página de venda)</span>
+              <span className="text-sm font-medium text-slate-700">Exibir como plano na Landing Page (pagina de venda)</span>
             </label>
           </div>
 
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Funcionalidades Habilitadas</h3>
             {/* Tenant feature groups (CRM, Agendamento, Compartilhado).
-                Visible for ALL business types — including the Super Admin
-                niche by request: the SA operator should be able to enable
-                ANY system feature on the SA login (atendimentos, agenda,
-                etc) for cross-tenant viewing or admin tooling. */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-slate-700">CRM</span>
-                  <button onClick={() => enableAll('CRM')} className="text-xs text-primary hover:underline">Ativar todas</button>
+                2026-02-15 (D): HIDDEN for the Super Admin niche by user
+                requirement — "tudo que eu for liberar para o super Admin
+                precisa abrir dentro do super Admin e nao uma empresa
+                vinculada". Tenant features cannot render natively inside
+                the SA panel (no tenant data) so exposing them only causes
+                broken impersonation redirects. SA-native features live in
+                the amber block below. */}
+            {form.base_type !== 'super_admin' && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-slate-700">CRM</span>
+                      <button onClick={() => enableAll('CRM')} className="text-xs text-primary hover:underline">Ativar todas</button>
+                    </div>
+                    {crmFeatures.map(f => (
+                      <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
+                    ))}
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-slate-700">Agendamento</span>
+                      <button onClick={() => enableAll('Operacional')} className="text-xs text-primary hover:underline">Ativar todas</button>
+                    </div>
+                    {schedFeatures.map(f => (
+                      <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
+                    ))}
+                  </div>
                 </div>
-                {crmFeatures.map(f => (
-                  <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
-                ))}
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-slate-700">Agendamento</span>
-                  <button onClick={() => enableAll('Operacional')} className="text-xs text-primary hover:underline">Ativar todas</button>
+                <div className="mt-4">
+                  <span className="text-sm font-medium text-slate-700 mb-2 block">Compartilhado</span>
+                  {sharedFeatures.map(f => (
+                    <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
+                  ))}
                 </div>
-                {schedFeatures.map(f => (
-                  <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
-                ))}
-              </div>
-            </div>
-            <div className="mt-4">
-              <span className="text-sm font-medium text-slate-700 mb-2 block">Compartilhado</span>
-              {sharedFeatures.map(f => (
-                <FeatureToggle key={f.feature_key} feature={f} enabled={isFeatureEnabled(f.feature_key)} onToggle={() => toggleFeature(f.feature_key)} />
-              ))}
-            </div>
+              </>
+            )}
             {/* Super Admin sidebar items — exclusive to the SA niche. We
                 only render this group when editing the Super Admin BT so
                 tenant editors don't see super-admin-only keys. */}

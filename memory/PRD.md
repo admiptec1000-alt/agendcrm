@@ -10,6 +10,27 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (D) — SA: remocao da impersonacao + BT modal limpo ✅
+
+**Pedido:** "ao tentar acessar o menu licencas" → redirecionava para `agentcrm.8ip.com.br/__impersonate__?...&slug=fin8ip` (DNS fail). Diretriz mais ampla: **"tudo que eu for liberar para o super Admin precisa abrir dentro do super Admin e nao uma empresa vinculada"**.
+
+**Mudancas em `/app/frontend/src/pages/SuperAdmin/Dashboard.js`:**
+
+1. **Removido o grupo "MODULOS OPERACIONAIS"** que renderizava features tenant ENABLED no SA BT como links externos via `openOperationalPanel()`. Era a fonte do redirect indesejado. `tenantSidebarItems` e seu render bloco foram deletados; `TENANT_SIDEBAR_META` ficou no codigo como dead code mas inativo (sem impacto).
+
+2. **BT modal: ocultar grupos tenant para SA BT.** Quando `form.base_type === 'super_admin'`, os blocos CRM / Agendamento / Compartilhado **nao renderizam** (envolvidos em fragment condicional). So fica visivel o "Itens do menu Super Admin" (amber block) com as 10 keys SA-nativas (incluindo o novo `licenses`).
+
+3. **Seção "Plano e Cobranca" removida do BT modal.** Antes tinha 6 campos (monthly_price, billing_cycle, installments, grace_days, max_connections, max_users). Agora substituida por aviso explicativo + UNICO checkbox `show_on_landing` — exatamente o que o usuario pediu na sessao anterior ao mover billing para a Empresa. Os campos do form (`form.monthly_price` etc) permanecem em memoria para nao quebrar o `BusinessTypeUpdate` do backend; apenas a UI nao expoe mais.
+
+**Validacao:**
+- Lint clean.
+- Playwright: click `[data-testid="sidebar-licenses"]` → URL permanece `/super-admin`, `LicensesPanel` renderiza inline, `sa-operational-modules-group` count = 0.
+- Screenshot BT tenant (Salao de Beleza): mostra "LANDING PAGE" + texto explicativo + checkbox `show_on_landing` apenas; campos `bt-monthly-price`/etc count = 0. CRM / Agendamento ainda visiveis (correto para BT tenant).
+
+**Para producao:** redeploy. Apos, qualquer feature tenant que ja estava marcada no SA BT continua marcada no banco mas **nao tem UI para desmarcar** e **nao causa mais redirect** (toggle nao renderiza, sidebar nao renderiza). Caso o usuario queira limpar: editar BT SA → desabilitar tudo no amber block → salvar. Sem regressao no fluxo tenant.
+
+
+
 ### 2026-02-15 (C) — Licencas: catalogo + cobranca por empresa + enforcement ✅
 
 **Pedido:** Catalogo de licencas (unidade ou pacote: conexao/usuario), cobranca movida do BusinessType para a Empresa, Lancamentos do Financeiro Admin com campo Tipo (Licenca/Diversos) e seletor de Empresa, e enforcement de criacao acima do limite.
