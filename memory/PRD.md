@@ -10,6 +10,36 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (B) — SA Sidebar: features tenant agora aparecem como "Modulos Operacionais" ✅
+
+**Pedido:** "no Super Admin eu configurei para que tenha mais menus no ambiente de super Admin porém salvo e mesmo assim o super Admin não as assume os novos menus".
+
+**Root cause:** O modal do BT "Super Admin" expõe TODAS as 46 features do sistema (mudança da iter 53), mas o `allSidebarItems` em `/app/frontend/src/pages/SuperAdmin/Dashboard.js` era hardcoded com apenas **9 chaves SA-native** (`dashboard, companies, business-types, partners, financial, indoor, my-panel, sgp-repair, settings`). Habilitar `kanban`, `agenda`, `orcamentos`, etc no BT do SA salvava no banco corretamente (verificado com PUT + `/auth/me`), mas o frontend não tinha mapeamento de ícone/label pra eles → silenciosamente ignorava.
+
+**Mudanças em `/app/frontend/src/pages/SuperAdmin/Dashboard.js`:**
+
+1. Importados ícones lucide-react adicionais (Columns3, CalendarCheck, Tag, Zap, Megaphone, UserCog, Shield, FileText, LifeBuoy, Puzzle, PlugZap, FolderOpen, CreditCard, Clock, PieChart, LayoutDashboard, MessageSquare, UserCheck, etc).
+
+2. Novo `TENANT_SIDEBAR_META` (34 entries) mapeando cada feature_key tenant a `{ icon, label }`.
+
+3. `tenantSidebarItems` calculado em runtime: feature_keys ENABLED no BT do SA que NÃO estão nos 9 SA-native viram items extras com `external: true`.
+
+4. Render do `<nav>` ganhou bloco condicional `tenantSidebarItems.length > 0` renderizando o grupo separado `MODULOS OPERACIONAIS` com borda superior. Cada item externo dispara `openOperationalPanel()` (impersonação da Empresa Operacional em nova aba) ao ser clicado — única forma do SA acessar dados tenant.
+
+5. `data-testid` adicionados: `sa-operational-modules-group` e `sidebar-op-{feature_key}`.
+
+**Validação e2e (script bash + curl + screenshot):**
+- PUT `/api/super-admin/business-types/{id}` com features incluindo `kanban`, `agenda`, `orcamentos` → persistiu.
+- `/api/auth/me` retornou os 11 enabled keys.
+- Screenshot do painel SA pos-login mostrou os 9 itens nativos + grupo `MODULOS OPERACIONAIS` contendo Kanban / Agenda / Orcamentos com ícone de ExternalLink.
+- BT revertido após teste para preservar estado limpo do preview.
+
+**Não houve mudança de backend** — o save de BT já estava OK (verificado em `routes/super_admin_routes.py:177-229`).
+
+**Próximo deploy em produção corrige imediatamente o bug reportado pelo usuário.**
+
+
+
 ### 2026-02-15 — Baileys: resilience hardening (auto-reconnect + watchdog) ✅
 
 **Pedido:** Usuário reportou que "às vezes a instância web para de processar fluxos" — sessões caindo silenciosamente sem auto-recuperação.

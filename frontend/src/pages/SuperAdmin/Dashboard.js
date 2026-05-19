@@ -9,7 +9,11 @@ import {
   Briefcase, BarChart3, Eye, Check, Scissors, Stethoscope,
   Headphones, Sparkles, GitBranch, Bot, Code, Menu, Globe,
   Monitor, ExternalLink, Tv, Link as LinkIcon, RefreshCw,
-  Receipt, Package, Copy, HandCoins, ShieldCheck, Wrench
+  Receipt, Package, Copy, HandCoins, ShieldCheck, Wrench,
+  Columns3, Calendar, CalendarCheck, CalendarDays, Tag, Zap,
+  Megaphone, UserCog, Shield, FileText, LifeBuoy, Puzzle,
+  PlugZap, FolderOpen, CreditCard, Clock, PieChart, LayoutDashboard,
+  MessageSquare, UserCheck
 } from 'lucide-react';
 import SgpRepairTab from './SgpRepairTab';
 import { AdmLancamentosPanel } from './AdmLancamentosPanel';
@@ -17,6 +21,50 @@ import { AdmLancamentosPanel } from './AdmLancamentosPanel';
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
   Sparkles, GitBranch, Bot, Code, Briefcase, Settings, Users
+};
+
+// Tenant feature_keys that the Super Admin can additionally enable on the
+// "Super Admin" Business Type. When ticked there, they appear as EXTRA items
+// in the SA sidebar under the "Modulos Operacionais" group. Clicking opens
+// the operational impersonation panel in a new tab — the SA has no tenant
+// data of its own, so the link is meant to give 1-click access to the
+// tenant-side modules (which were configured to be assignable from the SA
+// BT modal back in iteration 53 / 2026-05-16 F).
+const TENANT_SIDEBAR_META = {
+  dashboard:              { icon: LayoutDashboard, label: 'Início' },
+  atendimentos:           { icon: Headphones,      label: 'Atendimentos' },
+  relatorio_atendimentos: { icon: BarChart3,       label: 'Relatorio Atendimentos' },
+  orcamentos:             { icon: FileText,        label: 'Orcamentos' },
+  respostas_rapidas:      { icon: Zap,             label: 'Respostas Rapidas' },
+  kanban:                 { icon: Columns3,        label: 'Kanban' },
+  contatos:               { icon: Users,           label: 'Clientes / Leads' },
+  tags:                   { icon: Tag,             label: 'Tags' },
+  campanhas:              { icon: Megaphone,       label: 'Campanhas' },
+  flowbuilder:            { icon: GitBranch,       label: 'Flowbuilder' },
+  sgp_gateway:            { icon: PlugZap,         label: 'SGP Gateway' },
+  filas_chatbot:          { icon: Bot,             label: 'Filas' },
+  conexoes:               { icon: LinkIcon,        label: 'Conexoes' },
+  agente_ia:              { icon: Sparkles,        label: 'Agente IA' },
+  calendario:             { icon: Calendar,        label: 'Calendario' },
+  agenda:                 { icon: CalendarCheck,   label: 'Agenda' },
+  agenda_pro:             { icon: CalendarDays,    label: 'Agenda Pro' },
+  agendamentos:           { icon: Clock,           label: 'Agendamento Msg' },
+  clientes:               { icon: UserCheck,       label: 'Clientes / Leads' },
+  categorias:             { icon: FolderOpen,      label: 'Categorias' },
+  servicos_produtos:      { icon: Scissors,        label: 'Servicos e Produtos' },
+  assinaturas:            { icon: CreditCard,      label: 'Assinaturas' },
+  planos:                 { icon: Tag,             label: 'Planos' },
+  profissionais:          { icon: Briefcase,       label: 'Profissionais' },
+  financeiro:             { icon: DollarSign,      label: 'Financeiro' },
+  comissoes:              { icon: PieChart,        label: 'Comissoes' },
+  meu_site:               { icon: Globe,           label: 'Meu Site' },
+  configuracoes:          { icon: Settings,        label: 'Configuracoes Empresa' },
+  'integrações':          { icon: Puzzle,          label: 'API e Integrações' },
+  relatorios:             { icon: BarChart3,       label: 'Relatorios' },
+  suporte:                { icon: LifeBuoy,        label: 'Suporte' },
+  usuarios:               { icon: UserCog,         label: 'Usuarios' },
+  perfis_acesso:          { icon: Shield,          label: 'Perfis de Acesso' },
+  parceiros:              { icon: HandCoins,       label: 'Programa de Parceiros' },
 };
 
 const SuperAdminDashboard = () => {
@@ -82,6 +130,24 @@ const SuperAdminDashboard = () => {
       )
     : allSidebarItems;
 
+  // EXTRA items: tenant feature_keys explicitly ENABLED on the SA BT that
+  // are NOT part of the 9 native SA sidebar items. The operator ticked
+  // these in the SA BT modal expecting them to appear in the SA sidebar.
+  // We render them under a separate "Modulos Operacionais" group; clicking
+  // any of them opens the operational-company impersonation in a new tab.
+  // Without this block, ticking e.g. `kanban` or `agenda` on the SA BT
+  // would silently do nothing — the bug reported on 2026-02-15.
+  const saNativeKeys = new Set(allSidebarItems.map(i => i.key));
+  const tenantSidebarItems = saFeatures
+    .filter(f => f.enabled && !saNativeKeys.has(f.feature_key))
+    .map(f => {
+      const meta = TENANT_SIDEBAR_META[f.feature_key] || {
+        icon: ExternalLink,
+        label: f.feature_key,
+      };
+      return { key: f.feature_key, label: meta.label, icon: meta.icon, external: true };
+    });
+
   const openOperationalPanel = async () => {
     try {
       const { data } = await api.post('/super-admin/me/operational-impersonate');
@@ -125,7 +191,7 @@ const SuperAdminDashboard = () => {
             <X className="w-5 h-5 text-slate-500" />
           </button>
         </div>
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {sidebarItems.map(item => (
             <button
               key={item.key}
@@ -141,6 +207,27 @@ const SuperAdminDashboard = () => {
               {item.label}
             </button>
           ))}
+
+          {tenantSidebarItems.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-slate-200" data-testid="sa-operational-modules-group">
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 px-4 py-2">
+                Modulos Operacionais
+              </p>
+              {tenantSidebarItems.map(item => (
+                <button
+                  key={`op-${item.key}`}
+                  onClick={() => { openOperationalPanel(); setMobileSidebarOpen(false); }}
+                  data-testid={`sidebar-op-${item.key}`}
+                  title={`Abrir ${item.label} no painel operacional (impersonacao)`}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all"
+                >
+                  <item.icon className="w-5 h-5" />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
         <div className="p-4 border-t border-slate-200">
           <div className="flex items-center gap-3 mb-3">
