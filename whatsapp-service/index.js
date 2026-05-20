@@ -86,6 +86,12 @@ const connections = {};
 // it to MongoDB with a 24h TTL. On `getMessage` miss we GET back from the
 // backend before returning the empty fallback.
 const sentMessageStore = {};
+// Map<jid, timestamp> — last successful sendMessage per JID. Used by the
+// assertSessions stale-detection heuristic (2026-02-15 (G2)). When a JID
+// hasn't been talked to in >12h, we proactively re-fetch the prekey bundle
+// to avoid the "Aguardando mensagem" placeholder caused by stale sessions.
+const jidLastSentAt = new Map();
+const JID_LAST_SENT_MAX = 5000;  // cap memory; evict oldest if exceeded
 const SENT_STORE_MAX = 2000;
 
 async function persistSentToBackend(jid, msgId, message) {
@@ -925,15 +931,32 @@ app.post('/instances/:id/send', async (req, res) => {
     // to a brand-new contact. Without this, the recipient's WhatsApp shows
     // "Aguardando mensagem. Essa ação pode levar alguns instantes." (the
     // pre-key ciphertext arrived but the keys weren't yet established).
-    // This is the standard fix for that placeholder and is recommended by
-    // the Baileys maintainers for all outbound flows that don't go through
-    // the natural inbound→reply cycle (which lazily establishes sessions).
-    // `force=false` keeps existing sessions intact; only NEW contacts pay
-    // the one-time round-trip cost.
+    // 2026-02-15 (G2) — Two-stage approach:
+    //   1. Try force=false (cheap, idempotent — preserves existing session)
+    //   2. If it throws OR the JID has not been talked to in >12h (probable
+    //      stale session), retry with force=true to refetch the prekey
+    //      bundle and rebuild the session. This catches the recurring
+    //      "Aguardando mensagem" bug reported on production where the
+    //      recipient opens a long-stale chat — the session our side has
+    //      is technically valid but the recipient's device rotated keys.
+    const lastSeen = jidLastSentAt.get(targetJid);
+    const isStale = !lastSeen || (Date.now() - lastSeen) > (12 * 60 * 60 * 1000); // 12h
     try {
       await instance.sock.assertSessions([targetJid], false);
+      if (isStale) {
+        // Force re-bundle on stale contacts. WA rarely rate-limits this.
+        try {
+          await instance.sock.assertSessions([targetJid], true);
+          console.log(`[${req.params.id}] [STALE FIX] force-assertSessions ok for ${targetJid} (idle=${lastSeen ? Math.round((Date.now() - lastSeen) / 1000 / 60) + 'min' : 'never'})`);
+        } catch (e2) {
+          console.warn(`[${req.params.id}] [STALE FIX] force-assertSessions retry failed for ${targetJid}:`, e2.message);
+        }
+      }
     } catch (e) {
-      console.warn(`[${req.params.id}] assertSessions failed for ${targetJid}:`, e.message);
+      console.warn(`[${req.params.id}] assertSessions failed for ${targetJid} (force=false):`, e.message);
+      // Fallback: force=true. Worth the round-trip if the soft one threw.
+      try { await instance.sock.assertSessions([targetJid], true); }
+      catch (e2) { console.warn(`[${req.params.id}] force-assertSessions also failed:`, e2.message); }
     }
 
     // disabling link preview avoids some WA edge cases where the server
@@ -947,6 +970,16 @@ app.post('/instances/:id/send', async (req, res) => {
       // the recipient. If the cache is empty there, the recipient ends up
       // stuck on the "Aguardando mensagem" placeholder forever.
       rememberSent(targetJid, sent.key.id, { conversation: message });
+      // Track last-sent timestamp for the stale-detection heuristic in
+      // assertSessions (2026-02-15 (G2)).
+      jidLastSentAt.set(targetJid, Date.now());
+      if (jidLastSentAt.size > JID_LAST_SENT_MAX) {
+        // Evict the oldest entries — Map preserves insertion order so
+        // delete from .keys() iterator (oldest first).
+        const overflow = jidLastSentAt.size - JID_LAST_SENT_MAX;
+        const it = jidLastSentAt.keys();
+        for (let i = 0; i < overflow; i++) jidLastSentAt.delete(it.next().value);
+      }
     }
 
     // Persist LID <-> phone mapping for the @lid fallback in incoming.
@@ -1181,7 +1214,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.9',
+    version: 'v2.1.10',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1194,7 +1227,7 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.9',
+    version: 'v2.1.10',
     built_at: '2026-02-15',
     features: {
       sent_message_store: true,       // anti blank message fix
@@ -1214,12 +1247,14 @@ app.get('/version', (req, res) => {
       lid_active_resolver: true,
       lid_background_retry: true,
       lid_manual_probe_endpoint: true,
-      lid_baileys_upgrade_6_7_21: true,        // upgraded from 6.7.16 (v2.1.5)
-      lid_extra_probes_business_status: true,  // fetchStatus + getBusinessProfile + profilePictureUrl probes (v2.1.5)
-      lid_double_signal_lookup: true,          // re-check signalRepository AFTER probes (v2.1.5)
-      reconnect_exponential_backoff: true,     // v2.1.9 — 5s→10s→20s→…→5min cap
-      old_socket_cleanup: true,                // v2.1.9 — prevents duplicate listeners
-      zombie_socket_watchdog: true,            // v2.1.9 — 90s ws.readyState + presence ping check
+      lid_baileys_upgrade_6_7_21: true,
+      lid_extra_probes_business_status: true,
+      lid_double_signal_lookup: true,
+      reconnect_exponential_backoff: true,
+      old_socket_cleanup: true,
+      zombie_socket_watchdog: true,
+      stale_session_force_assert: true,        // v2.1.10 — re-bundle prekey for JIDs idle >12h
+      sent_cache_ttl_7d: true,                 // v2.1.10 — backend cache TTL 24h -> 7d
     },
     fastapi_url: FASTAPI_URL,
   });

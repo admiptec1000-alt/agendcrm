@@ -24,7 +24,16 @@ logger = logging.getLogger("internal_routes")
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 INTERNAL_TOKEN = os.environ.get("INTERNAL_TOKEN", "agentcrm-internal")
-SENT_CACHE_TTL_HOURS = 24  # Auto-evict cached payloads after a day.
+# Plaintext cache for outbound messages — used by Baileys' `getMessage`
+# callback when a recipient asks for a retry decrypt. Pre-2026-02-15 (G2)
+# this was 24h, which left messages older than a day unrecoverable when
+# the recipient's WhatsApp opens days later asking for the original
+# plaintext (very common pattern: customer ignores message Friday, opens
+# Tuesday, phone requests retry, Baileys cache MISS → "Aguardando
+# mensagem" placeholder displayed forever). Bumped to 7 days covering the
+# vast majority of late-open windows. Storage cost is negligible — text
+# payloads only, MongoDB TTL evicts automatically.
+SENT_CACHE_TTL_HOURS = 24 * 7  # 7 days
 
 
 def _require_internal_token(x_internal_token: Optional[str] = Header(default=None)) -> None:

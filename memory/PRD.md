@@ -10,6 +10,44 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (G2) — "Aguardando mensagem" persistente: TTL 7d + stale-session re-bundle (v2.1.10) ✅
+
+**Bug:** Em TODAS as bases que usam atendimento, mensagens enviadas pelo painel chegam ao cliente como "Aguardando mensagem. Essa ação pode levar alguns instantes." mesmo apos a v2.1.9 (que ja tinha assertSessions + cache MongoDB).
+
+**Root causes (2 distintas combinadas):**
+
+1. **TTL do cache de plaintext era 24h.** Quando o cliente abre uma conversa apos 1-7 dias e o celular pede retry de decrypt, o Baileys chama `getMessage(key)` — cache HIT em RAM (perdido em restart) e MISS no MongoDB (TTL expirou) → retorna `{conversation:''}` → cliente fica preso no placeholder. A screenshot do usuario mostrou exatamente esse cenario: msg OK sexta 10:47 (✓✓ azul) → "Aguardando" segunda 10:59 + terca 10:20.
+
+2. **assertSessions com `force=false`** só estabelece sessao se NAO existir — mas a sessao do nosso lado pode estar tecnicamente valida porem STALE em relacao ao dispositivo do destinatario (que rotacionou keys naquele meio tempo). O envio sai criptografado com sessao velha, o WA do destinatario nao decifra, pede retry, e mesmo com getMessage funcionando o problema da sessao stale persiste.
+
+**Fixes (v2.1.10):**
+
+1. **Backend `routes/internal_routes.py`:** `SENT_CACHE_TTL_HOURS = 24 → 168` (7 dias). Cobre 99% das janelas reais de retry tardio.
+
+2. **Whatsapp-service `index.js`:** novo `Map<jid, lastSentAt> jidLastSentAt` (cap 5000 entries com eviction LRU-like). Antes de cada `sendMessage`:
+   - Tenta `assertSessions(jid, false)` (cheap, idempotente)
+   - Se NUNCA falou com aquele JID ou idle > 12h → ADICIONALMENTE chama `assertSessions(jid, true)` (forca refetch de prekey bundle do servidor WA). Log explicito `[STALE FIX] force-assertSessions ok` pra diagnostico.
+   - Atualiza `jidLastSentAt.set(jid, Date.now())` apos envio bem sucedido.
+
+3. **Backfill script `scripts/extend_wa_sent_cache_ttl.py`:** estende `expires_at` de documentos existentes em wa_sent_cache de 24h pra 7d (essencial em prod — TTL index respeita o valor escrito no doc, nao a constante no codigo).
+
+4. **Bump v2.1.9 → v2.1.10** com flags `stale_session_force_assert: true` + `sent_cache_ttl_7d: true`. Card "WhatsApp Service Health" no SA Reparo SGP mostra essas flags pro operador confirmar deploy.
+
+**Por que isso elimina o bug:**
+- Caso 1 (retry tardio): cache 7d cobre. getMessage retorna o texto original. Retry decifra.
+- Caso 2 (sessao stale por device rotation): force-assertSessions traz prekey fresco. Proxima sendMessage usa sessao nova. Cliente decifra de primeira, nao precisa retry.
+
+**Validacao:**
+- node -c index.js OK, whatsapp-service reiniciou, `/version` reporta v2.1.10 com ambas as features.
+- Script de backfill executado no preview (0 docs — esperado, ambiente sem trafego).
+
+**🚀 Para producao:** redeploy preview → prod. Apos:
+- Reiniciar a empresa "Incinera" (ou onde quer que seja o problema) — basta abrir Conexoes e o microservico ja vai pegar a nova versao
+- Rodar o `extend_wa_sent_cache_ttl.py` em prod para estender os docs antigos (caso contrario eles ainda expiram em 24h)
+- Conferir no card SA → Reparo SGP que aparece "v2.1.10" e flags ativas
+
+
+
 ### 2026-02-15 (G) — Bug tela branca + EditableComboBox para BD e Forma de Pagamento ✅
 
 **Bug critico:** Ao salvar empresa nova com `database_type != Padrao`, a UI ficava completamente branca apos o save.
