@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import api from '../../services/api';
 import {
   Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
-  CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent, Building,
+  CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent, Building, Pencil,
 } from 'lucide-react';
 
 const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
@@ -32,6 +32,7 @@ export const AdmLancamentosPanel = () => {
   const [summary, setSummary] = useState(null);
   const [filters, setFilters] = useState({ direction: '', status: '', kind: '' });
   const [showForm, setShowForm] = useState(false);
+  const [editingTxn, setEditingTxn] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -242,14 +243,24 @@ export const AdmLancamentosPanel = () => {
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <button
-                        onClick={() => handleDelete(t.id)}
-                        className="p-1.5 hover:bg-rose-50 rounded text-rose-500"
-                        title="Excluir"
-                        data-testid={`adm-delete-${t.id}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          onClick={() => { setEditingTxn(t); setShowForm(true); }}
+                          className="p-1.5 hover:bg-indigo-50 rounded text-indigo-600"
+                          title="Editar"
+                          data-testid={`adm-edit-${t.id}`}
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(t.id)}
+                          className="p-1.5 hover:bg-rose-50 rounded text-rose-500"
+                          title="Excluir"
+                          data-testid={`adm-delete-${t.id}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -259,7 +270,7 @@ export const AdmLancamentosPanel = () => {
         </div>
       </div>
 
-      {showForm && <AdmTxnFormModal onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
+      {showForm && <AdmTxnFormModal initial={editingTxn} onClose={() => { setShowForm(false); setEditingTxn(null); }} onSaved={() => { setShowForm(false); setEditingTxn(null); load(); }} />}
     </div>
   );
 };
@@ -283,28 +294,27 @@ const MetricCard = ({ label, value, icon: Icon, color }) => {
   );
 };
 
-const AdmTxnFormModal = ({ onClose, onSaved }) => {
+const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
+  const isEdit = !!initial?.id;
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
-    direction: 'entrada',
-    description: '',
-    amount: '',
-    payment_method: 'pix',
-    category: 'servico',
-    date: today,
-    due_date: today,
-    status: 'pago',
-    notes: '',
-    // 2026-02-15 — Tipo do lancamento (Licenca / Diversos) + cliente nativo/externo.
-    kind: 'licenca',
-    client_kind: 'native',         // 'native' (empresa cadastrada) | 'external'
-    company_id: '',
-    external_client_name: '',
-    // Snapshot a partir de /usage — preenchido ao escolher a empresa.
-    license_connections: '',
-    license_users: '',
-    license_cost: '',
-    license_sale_price: '',
+    direction: initial?.direction || 'entrada',
+    description: initial?.description || '',
+    amount: initial?.amount ?? '',
+    payment_method: initial?.payment_method || 'pix',
+    category: initial?.category || 'servico',
+    date: initial?.date || today,
+    due_date: initial?.due_date || today,
+    status: initial?.status || 'pendente',
+    notes: initial?.notes || '',
+    kind: initial?.kind || 'licenca',
+    client_kind: initial?.external_client_name ? 'external' : 'native',
+    company_id: initial?.company_id || '',
+    external_client_name: initial?.external_client_name || '',
+    license_connections: initial?.license_connections ?? '',
+    license_users: initial?.license_users ?? '',
+    license_cost: initial?.license_cost ?? '',
+    license_sale_price: initial?.license_sale_price ?? '',
   });
   const [recurrence, setRecurrence] = useState({ enabled: false, interval: 'mensal', until: '' });
   const [lateFee, setLateFee] = useState({ enabled: false, multa_pct: 2.0, juros_dia_pct: 0.033 });
@@ -387,11 +397,17 @@ const AdmTxnFormModal = ({ onClose, onSaved }) => {
           juros_dia_pct: parseFloat(lateFee.juros_dia_pct) || 0,
         };
       }
-      const { data } = await api.post('/super-admin/finance/transactions', payload);
-      if (data._siblings_created > 0) {
-        toast.success(`Lancamento + ${data._siblings_created} parcelas recorrentes criados`);
+      if (isEdit) {
+        // Edit mode — PUT existing txn (does NOT propagate to siblings).
+        await api.put(`/super-admin/finance/transactions/${initial.id}`, payload);
+        toast.success('Lancamento atualizado');
       } else {
-        toast.success('Lancamento criado');
+        const { data } = await api.post('/super-admin/finance/transactions', payload);
+        if (data._siblings_created > 0) {
+          toast.success(`Lancamento + ${data._siblings_created} parcelas recorrentes criados`);
+        } else {
+          toast.success('Lancamento criado');
+        }
       }
       onSaved();
     } catch (e) {
@@ -410,7 +426,7 @@ const AdmTxnFormModal = ({ onClose, onSaved }) => {
         data-testid="adm-txn-form-modal"
       >
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-slate-900">Novo Lancamento (Adm)</h2>
+          <h2 className="text-xl font-bold text-slate-900">{isEdit ? 'Editar Lancamento' : 'Novo Lancamento (Adm)'}</h2>
           <button type="button" onClick={onClose} className="p-1 hover:bg-slate-100 rounded">
             <X className="w-5 h-5" />
           </button>

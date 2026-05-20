@@ -10,6 +10,45 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (F) — UX/UI batch: BD field, filtros Empresas, msg suporte, WA health, edit Lancamento, etc ✅
+
+**7 melhorias numa rodada (todas testadas):**
+
+**1. Mensagem do limite mais user-friendly:** "Adicione mais licencas no Super Admin" → "Entre em contato com o suporte da 8iP" em `enforce_company_limit()`.
+
+**2. Card "WhatsApp Service Health" no Reparo SGP:** novo componente `WhatsAppHealthCard` em `SgpRepairTab.js` que mostra version (v2.1.9), online/offline status, instancias, latencia, features de resiliencia ativas + breakdown por instancia (status, reconnect_attempts, idle_ms). Backend `/channels/service-health` enriquecido com `version`, `features`, `details`.
+
+**3. Financeiro Admin: removidas abas Faturas e Despesas.** Tudo consolidado em Lancamentos. Default subtab agora abre direto em "Lancamentos".
+
+**4. Botao "Editar" por linha de Lancamento:** `setEditingTxn(t)` + form modal aceita `initial` prop, faz PUT quando `isEdit`. Titulo do modal muda dinamicamente.
+
+**5. Orcamento: Forma de Pagamento auto-cadastravel:** `<select>` virou `<input list>` com `<datalist>` (8 sugestoes pre-cadastradas: A Vista, Pix, Boleto, Cartao de credito/debito, Transferencia, Cheque, Faturamento). Usuario pode digitar qualquer outro.
+
+**6. Empresas: filtros + totais + BD field auto-cadastravel:**
+- Toolbar ganhou filtros `BD` (datalist) e `Status` (Ativas/Trial/Bloqueadas)
+- Grid de TotalCards: Empresas, Total Licencas (max_conn+max_users), Conexoes em uso, Usuarios em uso — recalculam com o filtro aplicado
+- Backend GET `/companies` aceita `database_type` filter, novo endpoint `/companies/database-types` retorna distinct values + sempre "Padrao"
+- Backfill script aplicado (2 empresas)
+
+**7. BD no CompanyModal — empresas nativas vs externas:**
+- Campo `database_type` no topo do modal (datalist com Padrao/SGP/Vox/ERP Externo)
+- **Quando "Padrao"** (nativa): renderiza todos os campos normais (Dados, Subdominio, Tipo de Negocio, Funcionalidades, Licencas, Cobranca, Administrador)
+- **Quando != "Padrao"** (externa SGP/Vox/etc): renderiza SOMENTE "Dados Basicos" (Nome/CNPJ/Email/Telefone) + "Licencas e Cobranca". Subdominio/CRM/Plano/Features e secao do Administrador todos OCULTOS. Save manda placeholders pro admin_* (necessario pelo Pydantic CompanyCreate) e business_type_id=null
+- Backend model `CompanyCreate` ganhou `database_type: str = "Padrao"`
+
+**Whatsapp prod (Incinera "Aguardando mensagem"):**
+- Verificacao via novo card mostrou que **prod JA esta em v2.1.9** com todas as resilience features ativas (zombie_socket_watchdog, reconnect_exponential_backoff, old_socket_cleanup).
+- 2 instancias na produçao reportaram 326 reconnect_attempts (limite cap de 5min) com idle ~3min — isso indica **sessao deslogada** (precisa QR novo). O Baileys nao consegue reconectar porque a credencial foi invalidada pelo WhatsApp. O fix do `connection.update => loggedOut` ja limpa essas pastas, mas se o usuario nao reconectar via QR no painel, fica em loop. Acao: na empresa Incinera, abrir Conexoes → reescanear QR.
+
+**Testado e2e (Playwright):**
+- FLOW A (Empresas): BD filter, status filter, totals row presentes; BD options = `['Todas BD', 'Padrao']`
+- FLOW B (Reparo SGP): WA health card present, version `v2.1.9`
+- FLOW C (Financial): tabs invoices/expenses count=0; lancamentos/summary/commissions/external count=1
+- FLOW D (CompanyModal): BD input present; ao mudar pra "SGP", subdomain field HIDDEN, ext-name field SHOWN (modo externo)
+- Backend curl: distinct types, filtered list, BD persisted
+
+
+
 ### 2026-02-15 (E) — Pagamento unificado + Empresas usage cols + Validador CPF/CNPJ no Flowbuilder + outros ✅
 
 **6 mudancas em uma rodada (todas testadas e2e):**

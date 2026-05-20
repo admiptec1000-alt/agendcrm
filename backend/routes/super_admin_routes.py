@@ -255,6 +255,7 @@ async def list_companies(
     db: AsyncIOMotorDatabase = Depends(get_database),
     status_filter: str = None,
     plan_type: str = None,
+    database_type: str = None,
     search: str = None
 ):
     query = {}
@@ -262,6 +263,8 @@ async def list_companies(
         query["status"] = status_filter
     if plan_type:
         query["plan_type"] = plan_type
+    if database_type:
+        query["database_type"] = database_type
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},
@@ -283,8 +286,24 @@ async def list_companies(
         used_conn, used_usr = await compute_company_usage(db, company["id"])
         company["used_connections"] = used_conn
         company["used_users"] = used_usr
+        # Backfill default BD for legacy companies. They are all native.
+        if not company.get("database_type"):
+            company["database_type"] = "Padrao"
 
     return companies
+
+
+@router.get("/companies/database-types")
+async def list_company_database_types(
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Returns the distinct list of BD (database_type) values currently in
+    use, so the frontend can render a datalist with auto-completion.
+    Always includes "Padrao". 2026-02-15 (F)."""
+    distinct_values = await db.companies.distinct("database_type")
+    types = sorted({v for v in distinct_values if v} | {"Padrao"})
+    return {"types": types}
 
 @router.post("/companies")
 async def create_company(
@@ -363,6 +382,10 @@ async def create_company(
         company["installments"] = data.installments
     if data.grace_days is not None:
         company["grace_days"] = data.grace_days
+    # BD (database_type) — defaults to "Padrao" pra empresas nativas.
+    # Auto-cadastravel via UI: o operador pode digitar um valor novo
+    # ("SGP", "Vox", etc) que aparece no datalist na proxima vez.
+    company["database_type"] = data.database_type or "Padrao"
 
     await db.companies.insert_one(company)
 

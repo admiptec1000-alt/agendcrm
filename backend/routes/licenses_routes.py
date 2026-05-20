@@ -179,14 +179,14 @@ async def enforce_company_limit(
         if cap is not None and used_conn >= int(cap):
             raise HTTPException(
                 status_code=403,
-                detail=f"Limite de conexoes atingido ({used_conn}/{cap}). Adicione mais licencas no Super Admin.",
+                detail=f"Limite de conexoes atingido ({used_conn}/{cap}). Entre em contato com o suporte da 8iP.",
             )
     elif resource == "user":
         cap = company.get("max_users")
         if cap is not None and used_usr >= int(cap):
             raise HTTPException(
                 status_code=403,
-                detail=f"Limite de usuarios atingido ({used_usr}/{cap}). Adicione mais licencas no Super Admin.",
+                detail=f"Limite de usuarios atingido ({used_usr}/{cap}). Entre em contato com o suporte da 8iP.",
             )
 
 

@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import api from '../../services/api';
 import {
   Wrench, Search, AlertTriangle, CheckCircle2, Download,
   RefreshCw, Building, ChevronRight, Play, ScrollText, Bug,
+  Wifi, WifiOff, Activity,
 } from 'lucide-react';
 
 // Map issue codes returned by GET /audit-sgp-flow* to friendly Portuguese
@@ -127,6 +128,12 @@ const SgpRepairTab = ({ companies }) => {
 
   return (
     <div className="space-y-6" data-testid="sgp-repair-tab">
+      {/* WhatsApp service health card — 2026-02-15 (F). Lets the SA see
+          which patch level of the Baileys microservice is running in
+          production. v2.1.9 includes the auto-reconnect/watchdog fixes;
+          if prod still reports v2.1.8 or older, the user needs to redeploy. */}
+      <WhatsAppHealthCard />
+
       {/* Header card */}
       <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-indigo-50 to-white p-5 flex items-start gap-4">
         <div className="p-3 rounded-xl bg-indigo-600 text-white shrink-0">
@@ -378,3 +385,87 @@ const SgpRepairTab = ({ companies }) => {
 };
 
 export default SgpRepairTab;
+
+
+// ── WhatsApp Service Health Card ──────────────────────────────────────────
+// Inline component (no separate file — only used here). Hits the SA-facing
+// proxy GET /api/channels/service-health which forwards to the Baileys
+// microservice /health + /version. Shows the current version, online
+// status, instance count and the resilience-feature flags so the operator
+// can confirm prod is on v2.1.9+ with auto-reconnect/watchdog enabled.
+const WhatsAppHealthCard = () => {
+  const [health, setHealth] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/channels/service-health');
+      setHealth(data);
+    } catch (e) {
+      setHealth({ online: false, error: 'Falha ao consultar' });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const online = !!health?.online;
+  const version = health?.version || 'desconhecida';
+  const hasResilience = !!(health?.features?.zombie_socket_watchdog && health?.features?.reconnect_exponential_backoff);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5" data-testid="wa-health-card">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 flex-1">
+          <div className={`p-3 rounded-xl shrink-0 ${online ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+            {online ? <Wifi className="w-6 h-6" /> : <WifiOff className="w-6 h-6" />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-bold text-slate-900">WhatsApp Service</h3>
+              <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded ${online ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                {online ? 'Online' : 'Offline'}
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700" data-testid="wa-version">
+                {version}
+              </span>
+              {online && (
+                <span className="text-[10px] text-slate-500 flex items-center gap-1">
+                  <Activity className="w-3 h-3" /> {health?.instances || 0} instancia(s) · {health?.latency_ms ?? '—'}ms
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-slate-600 mt-1">
+              {online
+                ? hasResilience
+                  ? <span className="text-emerald-700 font-medium">Patches de resiliencia ativos (auto-reconnect + watchdog).</span>
+                  : <span className="text-amber-700 font-medium">Versao antiga — faca novo deploy para habilitar auto-reconnect e watchdog (v2.1.9+).</span>
+                : <span className="text-rose-700">Microserviço indisponivel. {health?.error}</span>}
+            </p>
+            {online && health?.details?.length > 0 && (
+              <details className="mt-2">
+                <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700">Detalhes por instancia ({health.details.length})</summary>
+                <ul className="mt-1 text-[11px] font-mono text-slate-600 space-y-0.5">
+                  {health.details.map(d => (
+                    <li key={d.id}>
+                      <span className="inline-block w-2 h-2 rounded-full mr-1" style={{background: d.status === 'connected' ? '#10b981' : '#f59e0b'}}></span>
+                      {d.id.slice(0,8)} · {d.status} · retries:{d.reconnect_attempts || 0} · idle:{d.idle_ms ? Math.round(d.idle_ms / 1000) + 's' : '—'}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        </div>
+        <button onClick={load} disabled={loading}
+          className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 hover:bg-slate-50 flex items-center gap-1"
+          data-testid="wa-health-refresh">
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Atualizar
+        </button>
+      </div>
+    </div>
+  );
+};

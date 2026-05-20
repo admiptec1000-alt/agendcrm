@@ -1164,12 +1164,26 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
             <input data-testid="quote-payment-terms" className="w-full border rounded px-3 py-2 text-sm" value={form.payment_terms} onChange={(e) => setForm({ ...form, payment_terms: e.target.value })} />
           </Field>
           <Field label="Forma de pagamento">
-            <select data-testid="quote-payment-method" className="w-full border rounded px-3 py-2 text-sm" value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })}>
-              <option value="">Selecione...</option>
-              <option value="A Vista">A Vista</option>
-              <option value="Pix">Pix</option>
-              <option value="Boleto">Boleto</option>
-            </select>
+            {/* Auto-cadastravel via datalist: usuario seleciona uma das
+                sugestoes OU digita uma nova. 2026-02-15 (F). */}
+            <input
+              list="quote-payment-method-options"
+              data-testid="quote-payment-method"
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={form.payment_method}
+              onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
+              placeholder="Selecione ou digite uma forma de pagamento..."
+            />
+            <datalist id="quote-payment-method-options">
+              <option value="A Vista" />
+              <option value="Pix" />
+              <option value="Boleto" />
+              <option value="Cartao de credito" />
+              <option value="Cartao de debito" />
+              <option value="Transferencia bancaria" />
+              <option value="Cheque" />
+              <option value="Faturamento" />
+            </datalist>
           </Field>
           <Field label="Prazo médio (placeholder {{prazo_medio}})">
             <input

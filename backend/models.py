@@ -163,6 +163,12 @@ class CompanyCreate(BaseModel):
     grace_days: Optional[int] = None
     max_connections: Optional[int] = None  # auto-computed from licenses, can be overridden
     max_users: Optional[int] = None        # idem
+    # 2026-02-15 (F) — BD (Base de Dados) auto-cadastravel. "Padrao" = nativa
+    # do AgentCRM (todos os modulos disponiveis). Outros valores ex.: SGP,
+    # Vox, ERP_X = empresas que sao clientes de OUTROS sistemas e estao no
+    # AgentCRM apenas pra controle de licenca/cobranca. Quando != Padrao,
+    # a UI desabilita campos especificos do tenant nativo.
+    database_type: Optional[str] = "Padrao"
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -182,6 +188,7 @@ class CompanyUpdate(BaseModel):
     grace_days: Optional[int] = None
     max_connections: Optional[int] = None
     max_users: Optional[int] = None
+    database_type: Optional[str] = None
 
 class CompanyResponse(BaseModel):
     id: str

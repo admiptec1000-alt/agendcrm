@@ -368,15 +368,39 @@ const DashboardTab = ({ stats, companies, businessTypes }) => (
 
 /* ========== COMPANIES TAB ========== */
 const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onAdd, onEdit, onDelete, onImpersonate }) => {
-  const filtered = companies.filter(c =>
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (c.cnpj || '').includes(searchTerm)
-  );
+  // 2026-02-15 (F) — filtros adicionais (BD e Ativas) + totais.
+  const [bdFilter, setBdFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [bdOptions, setBdOptions] = useState(['Padrao']);
+
+  useEffect(() => {
+    api.get('/super-admin/companies/database-types')
+      .then(r => setBdOptions(r.data?.types || ['Padrao']))
+      .catch(() => {});
+  }, [companies]);
+
+  const filtered = companies.filter(c => {
+    const matchSearch = !searchTerm ||
+      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (c.cnpj || '').includes(searchTerm);
+    const matchBd = !bdFilter || (c.database_type || 'Padrao') === bdFilter;
+    const matchStatus = !statusFilter || c.status === statusFilter;
+    return matchSearch && matchBd && matchStatus;
+  });
+
+  // Totais — recalculam sempre com base no filtro aplicado.
+  const totals = {
+    count: filtered.length,
+    licenses: filtered.reduce((s, c) => s + (Number(c.max_connections || 0) + Number(c.max_users || 0)), 0),
+    used_connections: filtered.reduce((s, c) => s + Number(c.used_connections || 0), 0),
+    used_users: filtered.reduce((s, c) => s + Number(c.used_users || 0), 0),
+  };
 
   return (
     <div className="animate-fade-in">
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-6">
+      {/* Filtros + busca compactos. 2026-02-15 (F). */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mb-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
@@ -388,9 +412,37 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
             placeholder="Buscar por nome, CNPJ ou email..."
           />
         </div>
+        <select
+          data-testid="company-bd-filter"
+          value={bdFilter}
+          onChange={e => setBdFilter(e.target.value)}
+          className="input-field sm:w-40"
+        >
+          <option value="">Todas BD</option>
+          {bdOptions.map(bd => <option key={bd} value={bd}>{bd}</option>)}
+        </select>
+        <select
+          data-testid="company-status-filter"
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          className="input-field sm:w-36"
+        >
+          <option value="">Todas</option>
+          <option value="active">Ativas</option>
+          <option value="trial">Trial</option>
+          <option value="blocked">Bloqueadas</option>
+        </select>
         <button onClick={onAdd} data-testid="add-company-btn" className="btn-primary flex items-center justify-center gap-2 whitespace-nowrap">
           <Plus className="w-4 h-4" /> Nova Empresa
         </button>
+      </div>
+
+      {/* Totais — recalculam com o filtro */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4" data-testid="companies-totals">
+        <TotalCard label="Empresas" value={totals.count} accent="indigo" />
+        <TotalCard label="Total Licencas" value={totals.licenses} accent="emerald" />
+        <TotalCard label="Conexoes em uso" value={totals.used_connections} accent="amber" />
+        <TotalCard label="Usuarios em uso" value={totals.used_users} accent="rose" />
       </div>
 
       <div className="card">
@@ -942,12 +994,13 @@ const KPI = ({ label, value, icon: Icon, color, testid }) => (
 
 // ─── FINANCIAL TAB (invoices + suspension control) ──────────────────────────
 const FinancialTab = ({ companies }) => {
-  const [subTab, setSubTab] = useState('summary');
+  const [subTab, setSubTab] = useState('lancamentos');
+  // 2026-02-15 (F): "Faturas" e "Despesas" removidas — todos os lancamentos
+  // (faturas E despesas) ficam centralizados na aba Lancamentos com filtro
+  // de Direcao (entrada/saida).
   const tabs = [
     { key: 'summary', label: 'Resumo' },
     { key: 'lancamentos', label: 'Lancamentos' },
-    { key: 'invoices', label: 'Faturas' },
-    { key: 'expenses', label: 'Despesas' },
     { key: 'commissions', label: 'Comissoes' },
     { key: 'external', label: 'Clientes Externos' },
   ];
@@ -2162,6 +2215,10 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     admin_password: '',
     status: company?.status || 'active',
     subdomain: company?.subdomain || '',
+    // 2026-02-15 (F) — BD (Base de Dados). "Padrao" = empresa nativa.
+    // Outros valores ex.: SGP, Vox, ERP_X = empresas externas, so
+    // gerencia-se licenca/cobranca aqui.
+    database_type: company?.database_type || 'Padrao',
     // Billing/limits — moved from BusinessType to Company (2026-02-15).
     licenses: company?.licenses || [],
     monthly_price: company?.monthly_price ?? '',
@@ -2224,6 +2281,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           business_type_id: form.business_type_id || null,
           status: form.status,
           subdomain: form.subdomain || null,
+          database_type: form.database_type || 'Padrao',
           ...billingPayload,
         });
         if (showCustomFeatures) {
@@ -2231,7 +2289,10 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         }
         toast.success('Empresa atualizada!');
       } else {
-        if (!form.admin_email || !form.admin_password || !form.admin_name) {
+        // External (BD != Padrao) companies don't need admin login. They
+        // are billed/managed in the SA but never authenticate.
+        const isExternal = form.database_type && form.database_type !== 'Padrao';
+        if (!isExternal && (!form.admin_email || !form.admin_password || !form.admin_name)) {
           toast.error('Preencha os dados do administrador');
           setSaving(false);
           return;
@@ -2239,8 +2300,16 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         await superAdminAPI.createCompany({
           ...form,
           ...billingPayload,
-          business_type_id: form.business_type_id || null,
-          subdomain: form.subdomain || null,
+          // For external companies, send minimal admin placeholders so the
+          // backend pydantic Create model accepts the payload. They wont
+          // be able to login anyway (status defaults to active but admin
+          // user is a no-op stub).
+          admin_name: isExternal ? (form.name || 'Externo') : form.admin_name,
+          admin_email: isExternal ? (form.email || `ext-${Date.now()}@external.local`) : form.admin_email,
+          admin_password: isExternal ? `ext_${Math.random().toString(36).slice(2)}` : form.admin_password,
+          business_type_id: isExternal ? null : (form.business_type_id || null),
+          subdomain: isExternal ? null : (form.subdomain || null),
+          database_type: form.database_type || 'Padrao',
         });
         toast.success('Empresa criada!');
       }
@@ -2276,6 +2345,42 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         </div>
 
         <div className="p-6 space-y-6">
+          {/* BD (Base de Dados) — 2026-02-15 (F). Auto-cadastravel via
+              datalist: o operador seleciona uma BD existente OU digita uma
+              nova (ex: SGP, Vox). Quando != "Padrao", a empresa eh
+              externa — desabilitamos campos Subdominio, Tipo de Negocio,
+              Tipo de Plano e Funcionalidades pra deixar so cadastro
+              + licencas/cobranca. */}
+          <div className="rounded-xl border border-indigo-100 bg-indigo-50/30 p-4">
+            <div className="flex items-center gap-3">
+              <div>
+                <label className="block text-sm font-bold uppercase tracking-widest text-indigo-700 mb-1">Base de Dados (BD)</label>
+                <p className="text-xs text-slate-600">Empresas nativas usam <strong>Padrao</strong>. Para empresas que sao clientes de outros sistemas (SGP, Vox, ERP), use um BD especifico — so os campos de licenca/cobranca ficam ativos.</p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <input
+                list="company-bd-options"
+                data-testid="company-database-type"
+                value={form.database_type}
+                onChange={e => setForm({...form, database_type: e.target.value || 'Padrao'})}
+                className="input-field"
+                placeholder="Padrao"
+              />
+              <datalist id="company-bd-options">
+                <option value="Padrao" />
+                <option value="SGP" />
+                <option value="Vox" />
+                <option value="ERP Externo" />
+              </datalist>
+            </div>
+          </div>
+
+          {/* Campos exclusivos de empresa NATIVA. Quando BD != Padrao,
+              a empresa eh externa: nao precisa de subdominio, tipo de
+              negocio, plano nem features — so cadastro + cobranca. */}
+          {form.database_type === 'Padrao' && (
+            <>
           {/* Company Info */}
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Dados da Empresa</h3>
@@ -2376,6 +2481,40 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           )}
 
           {/* Licenses & Billing — moved from BusinessType to Company (2026-02-15). */}
+            </>
+          )}
+
+          {/* When BD != Padrao, render a minimal Dados Basicos block so the
+              operator can still input name/CNPJ/email/telefone for the
+              external client before going to licenses/billing. */}
+          {form.database_type !== 'Padrao' && (
+            <div>
+              <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Dados Basicos</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Nome / Razao social</label>
+                  <input data-testid="ext-company-name-input" value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="input-field" required />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">CNPJ</label>
+                  <input data-testid="ext-company-cnpj-input" value={form.cnpj} onChange={e => setForm({...form, cnpj: e.target.value})} className="input-field" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                  <input type="email" data-testid="ext-company-email-input" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="input-field" required />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Telefone</label>
+                  <input data-testid="ext-company-phone-input" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className="input-field" />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Empresas externas nao tem subdomain/CRM/Tipo de Negocio. Vao direto pra cobranca.
+              </p>
+            </div>
+          )}
+
+          {/* Licenses & Billing — section continues for both BD types. */}
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Licencas e Cobranca</h3>
             <LicenseAssignmentPanel
@@ -2427,8 +2566,9 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
             </div>
           )}
 
-          {/* Admin User (creating only) */}
-          {!isEditing && (
+          {/* Admin User (creating only — and only for native BD companies,
+              since external ones don't login). */}
+          {!isEditing && form.database_type === 'Padrao' && (
             <div>
               <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-4">Administrador da Empresa</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -2865,6 +3005,22 @@ const StatusBadge = ({ status }) => (
     {status === 'active' ? 'Ativa' : status === 'trial' ? 'Trial' : 'Bloqueada'}
   </span>
 );
+
+// Compact totals card used at top of the Empresas list. 2026-02-15 (F).
+const TotalCard = ({ label, value, accent }) => {
+  const accentMap = {
+    indigo: 'bg-indigo-50 text-indigo-700 border-indigo-100',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    amber: 'bg-amber-50 text-amber-700 border-amber-100',
+    rose: 'bg-rose-50 text-rose-700 border-rose-100',
+  };
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${accentMap[accent] || accentMap.indigo}`}>
+      <p className="text-[10px] font-bold uppercase tracking-widest opacity-70">{label}</p>
+      <p className="text-xl font-bold mt-0.5 font-mono">{value}</p>
+    </div>
+  );
+};
 
 // Inline "X / Y" counter. Highlights red when used==max (saturado), amber
 // when used > max (excedeu o limite — empresas legadas), slate otherwise.

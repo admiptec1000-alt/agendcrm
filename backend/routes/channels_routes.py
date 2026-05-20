@@ -106,17 +106,31 @@ async def _persist_inbound_media(
 
 @router.get("/service-health")
 async def service_health(user: dict = Depends(get_current_user)):
-    """Check if the WhatsApp microservice (Baileys) is reachable."""
+    """Check if the WhatsApp microservice (Baileys) is reachable.
+    Now (2026-02-15 (F)) returns the running `version` + feature flags so
+    the SA panel can show whether prod is on the latest patch level."""
     import time
     start = time.time()
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(f"{WA_SERVICE_URL}/health")
             data = resp.json()
+            # Also fetch /version for the feature flag block. Optional —
+            # ignored if endpoint not present (older builds).
+            version_info = None
+            try:
+                vresp = await client.get(f"{WA_SERVICE_URL}/version")
+                if vresp.status_code == 200:
+                    version_info = vresp.json()
+            except Exception:
+                pass
             elapsed_ms = int((time.time() - start) * 1000)
             return {
                 "online": True,
                 "instances": data.get("instances", 0),
+                "version": data.get("version") or (version_info or {}).get("version"),
+                "details": data.get("details") or [],
+                "features": (version_info or {}).get("features") or {},
                 "latency_ms": elapsed_ms,
                 "url": WA_SERVICE_URL,
             }
