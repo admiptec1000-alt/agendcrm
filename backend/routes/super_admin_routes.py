@@ -305,6 +305,24 @@ async def list_company_database_types(
     types = sorted({v for v in distinct_values if v} | {"Padrao"})
     return {"types": types}
 
+
+@router.delete("/companies/database-types/{db_name}")
+async def delete_company_database_type(
+    db_name: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Removes a BD label from the catalog (the value is unset on each
+    company currently using it, falling back to "Padrao"). Refuses to
+    delete "Padrao" — that is the protected default. 2026-02-15 (G)."""
+    if db_name == "Padrao":
+        raise HTTPException(400, "A opcao 'Padrao' nao pode ser excluida")
+    res = await db.companies.update_many(
+        {"database_type": db_name},
+        {"$set": {"database_type": "Padrao"}},
+    )
+    return {"ok": True, "companies_reassigned": res.modified_count}
+
 @router.post("/companies")
 async def create_company(
     data: CompanyCreate,

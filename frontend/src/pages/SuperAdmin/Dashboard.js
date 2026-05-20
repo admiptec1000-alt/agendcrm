@@ -19,6 +19,7 @@ import SgpRepairTab from './SgpRepairTab';
 import { AdmLancamentosPanel } from './AdmLancamentosPanel';
 import { LicensesPanel } from './LicensesPanel';
 import { LicenseAssignmentPanel } from './LicenseAssignmentPanel';
+import { EditableComboBox } from '../../components/EditableComboBox';
 
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
@@ -2229,6 +2230,17 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
   const [saving, setSaving] = useState(false);
+  // BD catalog — preloaded from backend, excludes the permanent "Padrao"
+  // entry. Used by the EditableComboBox to render the custom list.
+  const [bdCustomOptions, setBdCustomOptions] = useState([]);
+  useEffect(() => {
+    api.get('/super-admin/companies/database-types')
+      .then(r => {
+        const all = r.data?.types || [];
+        setBdCustomOptions(all.filter(t => t !== 'Padrao'));
+      })
+      .catch(() => {});
+  }, []);
 
   const handleTypeChange = (typeId) => {
     setForm({ ...form, business_type_id: typeId });
@@ -2301,11 +2313,11 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           ...form,
           ...billingPayload,
           // For external companies, send minimal admin placeholders so the
-          // backend pydantic Create model accepts the payload. They wont
-          // be able to login anyway (status defaults to active but admin
-          // user is a no-op stub).
+          // backend pydantic Create model accepts the payload. Use a real
+          // public TLD pattern (`.com`) — Pydantic rejects `.local`/`.invalid`.
+          // Random subdomain keeps emails unique without collision risk.
           admin_name: isExternal ? (form.name || 'Externo') : form.admin_name,
-          admin_email: isExternal ? (form.email || `ext-${Date.now()}@external.local`) : form.admin_email,
+          admin_email: isExternal ? `ext-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@noreply-agentcrm.com` : form.admin_email,
           admin_password: isExternal ? `ext_${Math.random().toString(36).slice(2)}` : form.admin_password,
           business_type_id: isExternal ? null : (form.business_type_id || null),
           subdomain: isExternal ? null : (form.subdomain || null),
@@ -2316,7 +2328,14 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
       onSave();
       onClose();
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Erro ao salvar');
+      // Pydantic 422 errors come as array of {msg, loc, ...} — passing that
+      // to toast.error renders "Objects are not valid as a React child" and
+      // crashes the whole page (white screen reported 2026-02-15 (G)).
+      let detail = e.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        detail = detail.map(d => `${(d.loc || []).slice(-1).join('.') || 'erro'}: ${d.msg}`).join(' | ');
+      }
+      toast.error(detail || e.message || 'Erro ao salvar');
     } finally {
       setSaving(false);
     }
@@ -2359,20 +2378,30 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               </div>
             </div>
             <div className="mt-3">
-              <input
-                list="company-bd-options"
-                data-testid="company-database-type"
-                value={form.database_type}
-                onChange={e => setForm({...form, database_type: e.target.value || 'Padrao'})}
-                className="input-field"
+              <EditableComboBox
+                value={form.database_type || 'Padrao'}
+                onChange={(v) => setForm({...form, database_type: v || 'Padrao'})}
+                permanentOptions={['Padrao']}
+                customOptions={bdCustomOptions}
+                onAddCustom={async (v) => {
+                  // The new option is auto-persisted as soon as the company
+                  // is saved — but we also expose it immediately on the list
+                  // so other modals see it. Catalog refresh handled by parent.
+                  setBdCustomOptions(prev => prev.includes(v) ? prev : [...prev, v]);
+                }}
+                onDeleteCustom={async (v) => {
+                  try {
+                    await api.delete(`/super-admin/companies/database-types/${encodeURIComponent(v)}`);
+                    setBdCustomOptions(prev => prev.filter(x => x !== v));
+                    toast.success(`BD "${v}" removida`);
+                  } catch (e) {
+                    toast.error(e?.response?.data?.detail || 'Falha ao excluir');
+                    throw e;
+                  }
+                }}
                 placeholder="Padrao"
+                testid="company-database-type"
               />
-              <datalist id="company-bd-options">
-                <option value="Padrao" />
-                <option value="SGP" />
-                <option value="Vox" />
-                <option value="ERP Externo" />
-              </datalist>
             </div>
           </div>
 

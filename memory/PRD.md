@@ -10,6 +10,44 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (G) — Bug tela branca + EditableComboBox para BD e Forma de Pagamento ✅
+
+**Bug critico:** Ao salvar empresa nova com `database_type != Padrao`, a UI ficava completamente branca apos o save.
+
+**Root cause:** O placeholder de admin_email pra empresas externas era `ext-{ts}@external.local` mas o Pydantic `EmailStr` rejeita TLD `.local` como reservado. O backend retornava HTTP 422 com `detail = [{...}, {...}]` (array). O frontend fazia `toast.error(detail || ...)` — quando `detail` eh array, `toast.error` recebe um objeto e o React lanca "Objects are not valid as a React child", crashando a arvore inteira e deixando a pagina em branco. Dois fixes:
+
+1. **Email placeholder** mudou de `@external.local` (rejeitado) pra `@noreply-agentcrm.com` (aceito).
+2. **Tratamento defensivo do detail** no catch: se for array de objetos `{loc, msg}`, normaliza pra string `"campo: msg | campo: msg"` antes de passar pro toast.
+
+**EditableComboBox — componente custom em `/app/frontend/src/components/EditableComboBox.js`:**
+- Aparenta um select nativo com ChevronDown
+- Click → popover com TODAS as opcoes (permanentes + customizadas)
+- Permanentes (ex: "Padrao" pra BD, "Boleto" pra pagamento) tem badge "padrao" e nao podem ser excluidas
+- Customizadas tem botao X — confirmacao + delete via callback async
+- Footer com input + botao "+" para adicionar nova opcao (Enter tambem aciona)
+- Click fora fecha o popover
+
+**Aplicado em 2 lugares:**
+
+1. **BD (CompanyModal):**
+   - `permanentOptions = ['Padrao']`
+   - `customOptions` carregado de `GET /super-admin/companies/database-types`
+   - Add: optimistic update na lista local (persistido na proxima save da empresa)
+   - Delete: chama `DELETE /super-admin/companies/database-types/{db_name}` (novo endpoint). Reassigna todas as empresas que usam aquela BD para "Padrao" e retorna `companies_reassigned: N`. Recusa deletar "Padrao".
+
+2. **Forma de Pagamento (QuoteEditor):**
+   - `permanentOptions = ['Boleto', 'Pix', 'A Vista', 'Cartao de credito', 'Cartao de debito', 'Transferencia bancaria']`
+   - **Boleto e o default** (conforme pedido do usuario: "trazer a opcao boleto como The full mais deixar as outras opcoes ao clicar na seta")
+   - `customOptions` persistidas em `localStorage['quote_payment_methods']` por usuario — sem custo de backend pra tracking por orcamento
+
+**Testado:**
+- Backend curl: POST empresa externa com email `@noreply-agentcrm.com` agora retorna 201 (era 422). Catalog GET retorna `[Padrao, SGP]`. DELETE SGP retorna `{ok: true, companies_reassigned: 1}`. GET volta a retornar so `[Padrao]`.
+- Playwright: trigger expande popover, input add aceita "Vox System", trigger atualiza pra "Vox System", modal mostra modo externo (so Dados Basicos + Licencas/Cobranca).
+
+**Cleanup:** empresa de teste removida via DELETE.
+
+
+
 ### 2026-02-15 (F) — UX/UI batch: BD field, filtros Empresas, msg suporte, WA health, edit Lancamento, etc ✅
 
 **7 melhorias numa rodada (todas testadas):**

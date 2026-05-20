@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { quotesAPI, schedulingAPI, channelsAPI } from '../../services/api';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { EditableComboBox } from '../../components/EditableComboBox';
 import { toast } from 'sonner';
 import { Plus, Trash2, Edit2, FileText, Truck, Package, Layers, Printer, X, Search, Eye, Copy, Upload, Send, Loader2, RefreshCw } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
@@ -949,6 +950,14 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
   const [pickService, setPickService] = useState(false);
   const [pickFreight, setPickFreight] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Forma de pagamento — opcoes customizadas pelo usuario persistidas em
+  // localStorage. Permanentes ficam hardcoded no proprio EditableComboBox.
+  const [paymentCustomOptions, setPaymentCustomOptions] = useState(() => {
+    try {
+      const raw = localStorage.getItem('quote_payment_methods');
+      return raw ? JSON.parse(raw) : [];
+    } catch (_) { return []; }
+  });
 
   useEffect(() => {
     Promise.all([
@@ -1164,26 +1173,30 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
             <input data-testid="quote-payment-terms" className="w-full border rounded px-3 py-2 text-sm" value={form.payment_terms} onChange={(e) => setForm({ ...form, payment_terms: e.target.value })} />
           </Field>
           <Field label="Forma de pagamento">
-            {/* Auto-cadastravel via datalist: usuario seleciona uma das
-                sugestoes OU digita uma nova. 2026-02-15 (F). */}
-            <input
-              list="quote-payment-method-options"
-              data-testid="quote-payment-method"
-              className="w-full border rounded px-3 py-2 text-sm"
-              value={form.payment_method}
-              onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
-              placeholder="Selecione ou digite uma forma de pagamento..."
+            {/* EditableComboBox — substituido o datalist nativo. Permite
+                selecionar uma das sugestoes pre-cadastradas, ADICIONAR uma
+                nova (persistida em localStorage por usuario) e EXCLUIR
+                opcoes customizadas. As permanentes nao podem ser apagadas.
+                2026-02-15 (G). */}
+            <EditableComboBox
+              value={form.payment_method || 'Boleto'}
+              onChange={(v) => setForm({ ...form, payment_method: v })}
+              permanentOptions={['Boleto', 'Pix', 'A Vista', 'Cartao de credito', 'Cartao de debito', 'Transferencia bancaria']}
+              customOptions={paymentCustomOptions}
+              onAddCustom={async (v) => {
+                const next = [...paymentCustomOptions, v];
+                setPaymentCustomOptions(next);
+                localStorage.setItem('quote_payment_methods', JSON.stringify(next));
+              }}
+              onDeleteCustom={async (v) => {
+                const next = paymentCustomOptions.filter(x => x !== v);
+                setPaymentCustomOptions(next);
+                localStorage.setItem('quote_payment_methods', JSON.stringify(next));
+                toast.success(`Opcao "${v}" removida`);
+              }}
+              placeholder="Boleto"
+              testid="quote-payment-method"
             />
-            <datalist id="quote-payment-method-options">
-              <option value="A Vista" />
-              <option value="Pix" />
-              <option value="Boleto" />
-              <option value="Cartao de credito" />
-              <option value="Cartao de debito" />
-              <option value="Transferencia bancaria" />
-              <option value="Cheque" />
-              <option value="Faturamento" />
-            </datalist>
           </Field>
           <Field label="Prazo médio (placeholder {{prazo_medio}})">
             <input
