@@ -323,6 +323,29 @@ async def delete_company_database_type(
     )
     return {"ok": True, "companies_reassigned": res.modified_count}
 
+
+@router.post("/maintenance/extend-wa-sent-cache-ttl")
+async def extend_wa_sent_cache_ttl(
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """One-off maintenance: extends `expires_at` of every document in
+    wa_sent_cache by 7 days from now. Use after the v2.1.10 deploy to
+    rescue docs created under the old 24h TTL — TTL index respects the
+    value written on each doc, not the constant in code. Idempotent;
+    safe to call multiple times. 2026-02-15 (G2)."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) + timedelta(hours=24 * 7)
+    res = await db.wa_sent_cache.update_many(
+        {"expires_at": {"$lt": cutoff}},
+        {"$set": {"expires_at": cutoff}},
+    )
+    return {
+        "ok": True,
+        "documents_extended": res.modified_count,
+        "new_expires_at": cutoff.isoformat(),
+    }
+
 @router.post("/companies")
 async def create_company(
     data: CompanyCreate,
