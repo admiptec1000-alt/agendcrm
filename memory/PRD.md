@@ -10,6 +10,49 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
 
 
+### 2026-02-15 (I) — 5 tarefas em lote: auto-close msg + 3 cards SA + auto AdmTxn + mobile + flow obs ✅
+
+**T1 — Mensagem custom de auto-close (`ticket_auto_close_message`):**
+- `scheduler.py::_process_ticket_auto_close` agora envia mensagem antes de fechar, substituindo `{{nome}}` (e `{nome}` legado) pelo nome do contato e `{{empresa}}`/`{empresa}` pelo nome da empresa.
+- Endpoint `PUT /api/crm/company/ticket-settings` aceita o campo com cap em 1000 chars; GET retorna o valor.
+- Frontend `TicketLifecycleSettingsCard`: textarea com hint para `{{nome}}` e `{{empresa}}`, contador de chars, desabilitado quando `hours=0`, save on blur via debounce manual.
+
+**T2 — SA Empresas: 3 cards totalizadores:**
+- Substituidos os 4 cards (`Empresas`, `Total Licencas`, `Conexoes em uso`, `Usuarios em uso`) por 3 cards exatos:
+  - `total-card-empresas`: contagem de empresas
+  - `total-connections`: `used / total_limit`
+  - `total-users`: `used / total_limit`
+- `TotalCard` aceita prop `testid` para data-testid customizado.
+
+**T3 — Auto-criacao de Lancamentos Adm:**
+- Novo helper `_generate_adm_txns_for_company` em `super_admin_routes.py` cria N rows em `super_admin_transactions` com `kind=licenca`, `status=pendente`, `auto_company_billing=true`, `direction=entrada`, descricao "Mensalidade {empresa} - parcela X/N".
+- Cycle suportado: `monthly` (incrementa mês), `yearly` (incrementa ano), `one_time` (gera 1 só).
+- Chamado em `create_company` (sempre) e em `update_company` (so quando `monthly_price`/`installments`/`billing_cycle` mudaram, com `reset_pending=True`).
+- **Idempotente:** wipes apenas rows pendentes auto-geradas; PAGOS sao preservados (auditoria/historico).
+- Falhas no auto-gen sao logadas como warning mas nunca bloqueiam o save da empresa.
+
+**T4 — Mobile layout (Finance + CompanyModal):**
+- `AdmLancamentosPanel`: hero metrics agora `grid-cols-2 sm:grid-cols-2 lg:grid-cols-4` (igual mas mais responsivo nos gaps). Toolbar com selects `flex-1 min-w-[140px] sm:flex-none`, refresh button com texto oculto em mobile, "Novo Lancamento" full-width em mobile. Form modal interno: grids `grid-cols-1 sm:grid-cols-2`, padding reduzido `p-4 sm:p-6 my-4 sm:my-8`.
+- `CompanyModal`: padding `p-2 sm:p-4`, header/sticky-footer `p-4 sm:p-6`, billing fields `grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3`, botoes Cancelar/Salvar em mobile ficam `flex-1` (largura total). Sem horizontal overflow em viewport 390x844.
+
+**T5 — Observabilidade do "WA flow para de responder":**
+- Baileys v2.1.10 ja tem todas as resilience features (zombie watchdog, stale session force-assert, 7d cache TTL).
+- `channels_routes.py::webhook/message` agora:
+  1. **logger.exception** (com traceback) quando `advance_flow` lanca — antes era `warning` silencioso.
+  2. **logger.warning** + auto-clear quando ticket aponta para `active_flow_id` mas o flow nao existe mais no DB.
+  3. **logger.error** quando ticket tem `active_flow_id` sem `active_flow_node_id` (stuck state — flow crashed mid-execution).
+
+**Testes:**
+- `/app/backend/tests/test_iteration_55.py` — 8/8 passing (cobre T1 GET/PUT, T3 create + update preservando pagos, T5 strings de log presentes).
+- Regressão completa: 59/59 (test_flow_engine, test_bot_pause, test_ticket_auto_close, test_iteration_54_licenses, test_sgp_pix_repair, test_bot_pause_api, test_sgp_gateway_dedup).
+
+**Para producao:** Redeploy. Operador deve:
+1. Configurar mensagem de auto-close em CRM → Configuracoes (card "Ciclo de vida dos atendimentos")
+2. Verificar que Super Admin → Empresas agora mostra 3 cards conforme especificado
+3. Ao salvar empresa com installments+monthly_price, os Lancamentos pendentes aparecem em Financeiro Admin → Lancamentos automaticamente.
+
+
+
 ### 2026-02-15 (G2) — "Aguardando mensagem" persistente: TTL 7d + stale-session re-bundle (v2.1.10) ✅
 
 **Bug:** Em TODAS as bases que usam atendimento, mensagens enviadas pelo painel chegam ao cliente como "Aguardando mensagem. Essa ação pode levar alguns instantes." mesmo apos a v2.1.9 (que ja tinha assertSessions + cache MongoDB).
