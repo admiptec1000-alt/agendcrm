@@ -58,8 +58,8 @@ const BillingReminderPanel = () => {
 
   const addDay = () => {
     const n = parseInt(daysInput, 10);
-    if (Number.isNaN(n) || n < 0 || n > 60) {
-      toast.error('Informe um valor entre 0 e 60');
+    if (Number.isNaN(n) || n < -30 || n > 60) {
+      toast.error('Informe um valor entre -30 (dias apos) e 60 (dias antes)');
       return;
     }
     if (form.days_before_due_list.includes(n)) {
@@ -74,6 +74,12 @@ const BillingReminderPanel = () => {
   const removeDay = (n) => {
     const next = form.days_before_due_list.filter(d => d !== n);
     setForm({ ...form, days_before_due_list: next.length ? next : [10] });
+  };
+
+  const chipLabel = (d) => {
+    if (d === 0) return 'no vencimento';
+    if (d > 0) return `${d}d antes`;
+    return `${Math.abs(d)}d apos`;
   };
 
   const save = async () => {
@@ -152,15 +158,19 @@ const BillingReminderPanel = () => {
               {form.days_before_due_list.map(d => (
                 <span
                   key={d}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700"
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                    d > 0 ? 'bg-indigo-100 text-indigo-700' :
+                    d === 0 ? 'bg-amber-100 text-amber-700' :
+                    'bg-rose-100 text-rose-700'
+                  }`}
                   data-testid={`billing-reminder-day-chip-${d}`}
                 >
-                  {d}d antes
+                  {chipLabel(d)}
                   <button
                     type="button"
                     onClick={() => removeDay(d)}
                     disabled={!form.enabled}
-                    className="hover:text-indigo-900 disabled:opacity-50"
+                    className="hover:opacity-70 disabled:opacity-50"
                     aria-label={`Remover ${d} dias`}
                   >
                     x
@@ -171,20 +181,20 @@ const BillingReminderPanel = () => {
             <div className="flex items-center gap-2">
               <input
                 type="number"
-                min={0}
+                min={-30}
                 max={60}
                 value={daysInput}
                 onChange={(e) => setDaysInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addDay(); } }}
-                placeholder="ex: 3"
-                className="input-field w-24"
+                placeholder="ex: 3 ou -1"
+                className="input-field w-28"
                 data-testid="billing-reminder-day-input"
                 disabled={!form.enabled}
               />
               <button
                 type="button"
                 onClick={addDay}
-                disabled={!form.enabled || !daysInput}
+                disabled={!form.enabled || daysInput === ''}
                 data-testid="billing-reminder-add-day"
                 className="btn-secondary text-sm px-3 py-1.5"
               >
@@ -192,7 +202,8 @@ const BillingReminderPanel = () => {
               </button>
             </div>
             <p className="text-[11px] text-slate-500 mt-1">
-              Sera enviado 1 lembrete para cada valor. Ex: 10, 3, 1 = 3 lembretes por parcela.
+              Positivo = antes do vencimento. <strong>0</strong> = no dia. <strong>Negativo</strong> = apos vencimento (cobranca atrasada). Ex: 10, 3, 1, 0, -1, -3.
+              O sistema envia apenas 1 lembrete por dia (o mais proximo de hoje).
             </p>
           </div>
           <div>

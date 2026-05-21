@@ -414,9 +414,9 @@ async def update_billing_reminder_settings(
     if raw_list is None and data.days_before_due is not None:
         raw_list = [data.days_before_due]
     raw_list = raw_list or [10]
-    # Sanitize, dedupe, clip to [0..60], sort descending so the FURTHEST
-    # reminder fires first.
-    days_list = sorted({max(0, min(60, int(x))) for x in raw_list}, reverse=True)
+    # Sanitize, dedupe, clip to [-30..60] (negativos = pos-vencimento),
+    # sort descending so the FURTHEST reminder fires first.
+    days_list = sorted({max(-30, min(60, int(x))) for x in raw_list}, reverse=True)
     if not days_list:
         days_list = [10]
     channel = (data.channel or "whatsapp").lower()
@@ -513,11 +513,10 @@ async def resend_transaction_reminder(
     error = None
     if sa_conn_id and phone and text:
         try:
-            sent = await _send_billing_reminder(sa_conn_id, phone, text)
-            if not sent:
-                error = "send_failed"
+            sent, error = await _send_billing_reminder(sa_conn_id, phone, text)
         except Exception as e:
-            error = str(e)[:300]
+            sent = False
+            error = f"exception: {str(e)[:200]}"
     else:
         error = (
             "no_sa_connection" if not sa_conn_id else

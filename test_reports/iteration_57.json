@@ -1,0 +1,71 @@
+{
+  "iteration": 57,
+  "feature": "Bug fix P0 — smart-fallback billing reminders + negative offsets + 0 (no vencimento) + diagnostic errors in history",
+  "summary": "Validated SMART FALLBACK (1 reminder per tick, closest-to-today offset) — fixes the prod P0 of multiple simultaneous reminders. Backend: 4/4 pytest iter57 + 3/3 regression iter56 = 7/7 pass. Frontend: BillingReminderPanel under SA → Financeiro Admin → Cobranca subtab — chips for -2 ('2d apos'), 0 ('no vencimento'), 5 ('5d antes') render with correct labels; 99 and -50 are toast-rejected with range message; PUT persists across reload. Settings restored to production-safe baseline (days_before_due_list=[10]).",
+  "test_credentials_present": true,
+  "backend_results": {
+    "pytest_files": [
+      "/app/backend/tests/test_iteration_57.py (4/4 passed)",
+      "/app/backend/tests/test_iteration_56.py (3/3 passed — regression)"
+    ],
+    "junit_xml": "/app/test_reports/pytest/iteration_57.xml",
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "coverage_areas": [
+      "PUT /api/super-admin/billing-reminder-settings accepts [10,3,0,-1,-3] and persists sorted desc",
+      "Out-of-range values clipped to [-30..60] (e.g. -99→-30, 999→60)",
+      "Scheduler smart-fallback: days_list=[10,3,1] + due=today+1 → only offset=1 fires (no spam)",
+      "Scheduler smart-fallback: days_list=[10,3,1] + due=today+3 → only offset=3 fires (regression iter56)",
+      "Negative offsets: days_list=[10,-2] + due=today-2 → 1 entry with days_before_due=-2",
+      "Diagnostic errors: history.error returns readable strings (no_sa_connection / http XXX / timeout_10s / exception:...)",
+      "POST /api/super-admin/finance/transactions/{id}/resend-reminder creates 1 manual_resend history row using representante as {{nome}}"
+    ]
+  },
+  "frontend_results": {
+    "method": "playwright e2e",
+    "route": "SA → sidebar 'Financeiro Admin' (data-testid=sidebar-financial) → subtab 'Cobranca' (data-testid=financial-subtab-cobranca) → BillingReminderPanel",
+    "tests_executed": [
+      "Add -2 → chip 'billing-reminder-day-chip--2' renders with text '2d apos' (rose color)",
+      "Add 0 → chip 'billing-reminder-day-chip-0' renders with text 'no vencimento' (amber)",
+      "Add 5 → chip 'billing-reminder-day-chip-5' renders with text '5d antes' (indigo)",
+      "Add 99 → chip absent + toast 'Informe um valor entre -30 (dias apos) e 60 (dias antes)'",
+      "Add -50 → chip absent + same range toast",
+      "Save → toast 'Configuracao salva.' confirmed",
+      "Reload + revisit subtab → chips [10, 5, 0, -2] all present (persistence OK)",
+      "Cleanup: removed -2, 0, 5 → saved → final state {[10]} verified via GET API"
+    ],
+    "all_passed": true
+  },
+  "code_changes_observed": {
+    "no_modifications_needed": true,
+    "tests_added": []
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "critical_code_review_comments": [
+    "scheduler._process_billing_reminders smart-fallback picks min(O) where O >= days_until_due — confirmed correct logic; spam regression test (iter57 test_02) is the canary.",
+    "BillingReminderPanel.addDay correctly clips to [-30..60] client-side and BillingReminderSettingsIn pydantic validator clips server-side (defense in depth). LGTM.",
+    "chipLabel returns 'no vencimento' for 0, 'Nd antes' for positive, 'Nd apos' for negative — matches spec.",
+    "_send_billing_reminder returns (sent_ok, error_detail) tuple with readable strings (no_sa_connection, http {status}, timeout_10s, exception:{type}). billing_reminder_history.error field populated correctly — verified empirically that SA env has no WA so all entries land as failed with error='no_sa_connection' (expected).",
+    "Idempotency: successfully sent (txn, offset) pairs are not re-fired across ticks (test_iteration_56 test_02 runs scheduler twice; chip count for offset=3 stays bounded). Failed entries ARE retried — intentional resilience documented in code comment."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_57.py",
+    "/app/backend/tests/test_iteration_56.py",
+    "/app/test_reports/pytest/iteration_57.xml"
+  ],
+  "action_items": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (8/8 UI assertions)"},
+  "test_credentials": "Super Admin admin@agentcrm.com / admin123 — /admin-login",
+  "seed_data_creation": "Test companies (TEST_SmartFB_*, TEST_LateFB_*, TEST_Diag_*, TEST_MultiOffset_*, TEST_Resend_*) created and DELETEd via pytest teardown + direct Mongo cleanup of super_admin_transactions + billing_reminder_history.",
+  "production_settings_restored": "GET /api/super-admin/billing-reminder-settings returns {enabled:true, days_before_due_list:[10], lancamento_gen_days:10, channel:'whatsapp'} — production-safe baseline confirmed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Smart-fallback billing reminder bug fix fully validated. UI chip labels in PT-BR ('no vencimento', 'Nd apos', 'Nd antes') match spec. Range -30..60 enforced both client + server. If future tests run iter56/57 pytest, settings will be left at [10] for offset=5d test fixture, then iter57 test_01 mutates them — main agent should reset to [10] after any pytest run if needed."
+}

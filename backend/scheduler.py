@@ -265,19 +265,40 @@ async def _get_sa_system_connection(db):
     )
 
 
-async def _send_billing_reminder(conn_id: str, phone: str, text: str) -> bool:
+async def _send_billing_reminder(conn_id: str, phone: str, text: str):
+    """Send a billing reminder via the Baileys microservice.
+
+    Returns a tuple `(sent_ok: bool, error_detail: Optional[str])`.
+    `error_detail` is a short human-readable string saved into
+    `billing_reminder_history.error` to help operators diagnose failures
+    directly from the History modal (e.g. "http 404 - instance not found",
+    "timeout after 10s", "no message_id returned").
+    """
     if not phone:
-        return False
+        return False, "no_phone"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
                 f"{WA_SERVICE_URL}/instances/{conn_id}/send-text",
                 json={"to": phone, "message": text},
             )
-            return r.status_code < 400
+        if r.status_code >= 400:
+            body_preview = (r.text or "")[:200].replace("\n", " ")
+            return False, f"http {r.status_code} - {body_preview}"
+        # 200 OK but Baileys may have silently dropped the message.
+        try:
+            payload = r.json()
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and not (payload.get("message_id") or payload.get("id")):
+            return False, "no_message_id_in_response"
+        return True, None
+    except httpx.TimeoutException:
+        logger.warning(f"[scheduler] reminder send timeout conn={conn_id}")
+        return False, "timeout_10s"
     except Exception as e:
         logger.warning(f"[scheduler] reminder send failed: {e}")
-        return False
+        return False, f"exception: {str(e)[:200]}"
 
 
 def _render_reminder(template: str, ctx: dict) -> str:
@@ -300,13 +321,15 @@ async def _process_billing_reminders(db):
     days_list = settings.get("days_before_due_list")
     if not isinstance(days_list, list) or not days_list:
         days_list = [int(settings.get("days_before_due") or BILLING_REMINDER_DAYS)]
-    # Normalize: dedupe + clip + sort descending (furthest reminder first).
-    days_list = sorted({max(0, min(60, int(x))) for x in days_list}, reverse=True)
+    # Normalize: dedupe + clip to [-30..60] + sort descending. Negative
+    # offsets fire AFTER the due date (late-payment follow-ups). E.g. -3
+    # means "send 3 days after due".
+    days_list = sorted({max(-30, min(60, int(x))) for x in days_list}, reverse=True)
     # 2026-02-16 (N) — `lancamento_gen_days` controls TXN creation. Decoupled
     # from the reminder offsets — default = max(days_list) for back-compat.
     gen_days = settings.get("lancamento_gen_days")
     if gen_days is None:
-        gen_days = max(days_list)
+        gen_days = max(days_list) if days_list else BILLING_REMINDER_DAYS
     gen_days = max(0, min(180, int(gen_days)))
     # 2026-02-16 (O) — Defaults de multa/juros aplicados nos Lancamentos auto.
     default_lf_enabled = bool(settings.get("default_late_fee_enabled", False))
@@ -320,8 +343,11 @@ async def _process_billing_reminders(db):
     today = datetime.now(timezone.utc).date()
     # Walk parcelas where due is within max(gen_days, max(days_list)). The
     # gen_days controls when we create the row; days_list controls when we
-    # fire reminders. Both events are independent.
-    cutoff = today + timedelta(days=max(gen_days, max(days_list) if days_list else gen_days))
+    # fire reminders. Both events are independent. Only positive offsets
+    # extend the materialization window — negative offsets fire AFTER due
+    # so the row must already exist.
+    max_positive_offset = max([d for d in days_list if d > 0] or [0])
+    cutoff = today + timedelta(days=max(gen_days, max_positive_offset))
     cursor = db.companies.find(
         {
             "monthly_price": {"$gt": 0},
@@ -409,9 +435,21 @@ async def _process_billing_reminders(db):
                 # Skip reminders for already-paid parcelas.
                 if (txn.get("status") or "").lower() == "pago":
                     continue
-                # Decide which offsets fire today for this parcela.
-                # An offset O fires when due - O <= today (i.e. we are within
-                # the O-day window) AND we haven't logged that (txn,O) yet.
+                # Decide which offset fires today for this parcela.
+                # SMART FALLBACK (2026-02-17 — bug fix): instead of firing
+                # every eligible offset on the same tick (which spammed the
+                # client when multiple offsets passed before any was sent),
+                # we pick the SINGLE most-relevant offset for today:
+                #   - Eligible offsets: O where today >= due - O
+                #     i.e. O >= days_until_due (positive O = before due,
+                #     negative O = after due).
+                #   - Exclude (txn, O) pairs already sent in history.
+                #   - Among the rest, pick the SMALLEST O — the one whose
+                #     `fire_on` day is closest to today (or today itself).
+                # This guarantees at most ONE reminder per tick per parcela,
+                # tolerates downtime (always fires the most-recent eligible
+                # offset), and naturally supports day-0 (due) and negative
+                # offsets (late-payment follow-up).
                 already_sent_offsets = set()
                 hist_rows = await db.billing_reminder_history.find(
                     {"transaction_id": txn["id"], "status": "sent",
@@ -422,65 +460,66 @@ async def _process_billing_reminders(db):
                     if h.get("days_before_due") is not None:
                         already_sent_offsets.add(int(h["days_before_due"]))
 
-                for offset in days_list:
-                    fire_on = due - timedelta(days=offset)
-                    if today < fire_on:
-                        continue
-                    if offset in already_sent_offsets:
-                        continue
-                    # Fire this reminder.
-                    template = global_default_msg
-                    nome = (c.get("representante") or c.get("name") or "")
-                    ctx = {
-                        "nome": nome,
-                        "empresa": c.get("name") or "",
-                        "valor": f"{price:.2f}".replace(".", ","),
-                        "vencimento": due.strftime("%d/%m/%Y"),
-                        "parcela": f"{i + 1}/{installments}",
-                    }
-                    text = _render_reminder(template, ctx)
-                    phone = c.get("phone") or ""
-                    wants_whatsapp = channel in ("whatsapp", "both")
-                    sent_ok = False
-                    error = None
-                    if wants_whatsapp and sa_conn_id and phone and text:
-                        try:
-                            sent_ok = await _send_billing_reminder(sa_conn_id, phone, text)
-                            if not sent_ok:
-                                error = "send_failed"
-                        except Exception as e:
-                            error = str(e)[:300]
+                days_until_due = (due - today).days
+                eligible = [
+                    o for o in days_list
+                    if o >= days_until_due and o not in already_sent_offsets
+                ]
+                if not eligible:
+                    continue
+                offset = min(eligible)  # closest to today (smallest O)
+                # Fire this single reminder.
+                template = global_default_msg
+                nome = (c.get("representante") or c.get("name") or "")
+                ctx = {
+                    "nome": nome,
+                    "empresa": c.get("name") or "",
+                    "valor": f"{price:.2f}".replace(".", ","),
+                    "vencimento": due.strftime("%d/%m/%Y"),
+                    "parcela": f"{i + 1}/{installments}",
+                }
+                text = _render_reminder(template, ctx)
+                phone = c.get("phone") or ""
+                wants_whatsapp = channel in ("whatsapp", "both")
+                sent_ok = False
+                error = None
+                if wants_whatsapp and sa_conn_id and phone and text:
+                    try:
+                        sent_ok, error = await _send_billing_reminder(sa_conn_id, phone, text)
+                    except Exception as e:
+                        sent_ok = False
+                        error = f"exception: {str(e)[:200]}"
+                else:
+                    if not wants_whatsapp:
+                        error = "channel_disabled"
+                    elif not sa_conn_id:
+                        error = "no_sa_connection"
+                    elif not phone:
+                        error = "no_phone"
                     else:
-                        if not wants_whatsapp:
-                            error = "channel_disabled"
-                        elif not sa_conn_id:
-                            error = "no_sa_connection"
-                        elif not phone:
-                            error = "no_phone"
-                        else:
-                            error = "no_text"
-                    await db.billing_reminder_history.insert_one({
-                        "id": str(__import__('uuid').uuid4()),
-                        "company_id": c["id"],
-                        "transaction_id": txn["id"],
-                        "phone": phone,
-                        "text": text,
-                        "kind": "auto",
-                        "status": "sent" if sent_ok else "failed",
-                        "error": error,
-                        "days_before_due": offset,
-                        "sent_at": datetime.now(timezone.utc).isoformat(),
-                    })
-                    if sent_ok:
-                        logger.info(
-                            f"[scheduler] billing-reminder sent company={c['id']} "
-                            f"txn={txn['id']} offset={offset}d"
-                        )
-                    else:
-                        logger.warning(
-                            f"[scheduler] billing-reminder NOT sent company={c['id']} "
-                            f"txn={txn['id']} offset={offset}d error={error}"
-                        )
+                        error = "no_text"
+                await db.billing_reminder_history.insert_one({
+                    "id": str(__import__('uuid').uuid4()),
+                    "company_id": c["id"],
+                    "transaction_id": txn["id"],
+                    "phone": phone,
+                    "text": text,
+                    "kind": "auto",
+                    "status": "sent" if sent_ok else "failed",
+                    "error": error,
+                    "days_before_due": offset,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                })
+                if sent_ok:
+                    logger.info(
+                        f"[scheduler] billing-reminder sent company={c['id']} "
+                        f"txn={txn['id']} offset={offset}d"
+                    )
+                else:
+                    logger.warning(
+                        f"[scheduler] billing-reminder NOT sent company={c['id']} "
+                        f"txn={txn['id']} offset={offset}d error={error}"
+                    )
         except Exception as e:
             logger.warning(
                 f"[scheduler] billing-reminder error company={c.get('id')}: {e}"

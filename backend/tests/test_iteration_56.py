@@ -106,11 +106,11 @@ def test_02_scheduler_multi_offset_with_representante(super_headers):
 
         asyncio.get_event_loop().run_until_complete(run())
 
-        # History: 2 offsets should have FIRED (10d + 3d). 1d not yet
-        # (today < due-1). They will be `failed` because no SA WA connection
-        # exists in test env — but each (offset, txn) tuple appears once for
-        # SENT logs. Failed retries are intentional. Filter by status=failed.
-        # Since failed retries happen every tick, count by distinct offset.
+        # SMART FALLBACK (2026-02-17): only ONE offset fires per tick — the
+        # one closest to today. With days_list=[10,3,1] and days_until_due=3,
+        # eligible = {10, 3} (O >= 3); min = 3. So offset 3 fires; 10 and 1
+        # do NOT. Failed retries are intentional, so multiple history rows
+        # for offset=3 may exist (one per tick).
         history = requests.get(
             f"{API}/super-admin/billing-reminder-history",
             headers=super_headers,
@@ -120,8 +120,8 @@ def test_02_scheduler_multi_offset_with_representante(super_headers):
         assert history.status_code == 200
         rows = history.json()
         offsets_seen = {r.get("days_before_due") for r in rows}
-        assert 10 in offsets_seen, f"offset 10d expected to fire — seen {offsets_seen}"
-        assert 3 in offsets_seen, f"offset 3d expected to fire — seen {offsets_seen}"
+        assert 3 in offsets_seen, f"offset 3d (closest) expected to fire — seen {offsets_seen}"
+        assert 10 not in offsets_seen, f"offset 10d should be skipped (3d closer) — seen {offsets_seen}"
         assert 1 not in offsets_seen, f"offset 1d should NOT fire yet — seen {offsets_seen}"
         # Text uses representante
         assert any("Maria Silva" in (r.get("text") or "") for r in rows)
