@@ -10,6 +10,47 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-16 (Q) — Auto-detection de socket Baileys zumbi + force-reconnect ✅
+
+**Pedido do usuario (recorrente):** "WhatsApp travou o fluxo, nao responde mais, precisa desconectar/reconectar manualmente". Empresa WEB (prod) afetada.
+
+**RCA aprofundada:**
+- Watchdog do Baileys (v2.1.10) so reconecta quando `ws.readyState != 1`. Em casos de socket "zumbi" (websocket aberto mas com state corrompido de E2E), `readyState=1` mas sends sao silenciosamente perdidos.
+- Watchdog soft-liveness so atua apos 5min de inatividade — se mensagens continuam chegando mas o bot nao responde, watchdog nunca dispara.
+- `_send_whatsapp` no Python: catch generico que retornava None sem detalhe nem contagem de falhas. Operador so percebia depois que clientes reclamavam.
+
+**Implementacao:**
+
+**Backend (`flow_engine.py`):**
+- `_send_whatsapp` reescrito com:
+  - Log detalhado de `http_status + body_preview` em falhas.
+  - Caso 200 OK mas sem `message_id` → conta como falha (Baileys aceitou mas nao entregou).
+  - Catch separado para `TimeoutException` (logado como `timeout`).
+- Novos helpers:
+  - `_bump_send_failure(db, conn_id, wa_url, reason)`: incrementa contador per-conexao (`send_failures_count`) e persiste `last_send_failure_at` + `last_send_failure_reason`. Apos `MAX_CONSECUTIVE_FAILURES=3` (consecutivas), dispara `POST /instances/{id}/restart` no Baileys e reseta o contador.
+  - `_reset_send_failure(db, conn_id)`: zera o contador em cada send bem-sucedido.
+
+**Backend (`channels_routes.py`):**
+- Novo endpoint `POST /api/channels/connections/{conn_id}/force-reconnect`: recovery hatch manual. Reseta o contador + dispara `/restart` no Baileys. Util para botao "Forcar reconexao" na UI.
+
+**Baileys microservice (`whatsapp-service/index.js` → v2.1.11):**
+- Novo endpoint `POST /instances/:id/restart`: fecha o websocket + recria via `createConnection` reusando o auth on-disk (sem precisar re-scanear QR). Diferente de `/disconnect` que apaga o auth folder.
+- Feature flag `soft_restart: true` em `/version`.
+
+**Validacao e2e:**
+- Backend startup OK (48/48 testes passando).
+- Baileys local v2.1.11: `POST /instances/<id>/restart` retorna `{status:"restarted"}`.
+- Frontend pode chamar `POST /api/channels/connections/{id}/force-reconnect` (404 no preview porque `WA_SERVICE_URL` aponta para o Baileys de **producao** que ainda esta em v2.1.10 — funcionara apos redeploy do Render).
+
+**Para producao:**
+1. **Redeploy do whatsapp-service no Render** (Baileys v2.1.11 com `/restart`). Sem redeploy, o auto-fix nao funciona porque o endpoint nao existe.
+2. **Redeploy do backend FastAPI** para liberar o force-reconnect endpoint + auto-detection.
+3. Apos: quando um socket entrar em estado zumbi e 3 sends consecutivos falharem, o backend ja vai forcar restart automaticamente. Operador nao precisa mais intervir.
+
+**TODO frontend:** Adicionar banner "Conexao instavel - Reconectar" na pagina de Conexoes quando `send_failures_count > 0` e CTA chamando o novo endpoint. (Nao bloqueante — o auto-fix ja resolve sem intervencao humana.)
+
+
+
 ### 2026-02-16 (P) — Periodo presets no Lancamentos + Cobranca como aba do Financeiro + tabs mobile ✅
 
 **Pedido do usuario:**

@@ -419,6 +419,45 @@ async def disconnect_channel(
     return await db.channel_connections.find_one({"id": conn_id}, {"_id": 0})
 
 
+@router.post("/connections/{conn_id}/force-reconnect")
+async def force_reconnect_channel(
+    conn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """2026-02-16 (Q) — Manual recovery hatch for stale Baileys sockets.
+    Forces the microservice to recycle the socket without dropping the
+    on-disk auth (so QR doesn't need to be re-scanned). Resets the
+    consecutive failure counter from the auto-detection (flow_engine).
+
+    Triggered by the frontend banner when a connection is flagged as
+    unhealthy by the auto-detection in `flow_engine._bump_send_failure`.
+    """
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    error = None
+    if conn["type"] == "whatsapp":
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/restart")
+                if r.status_code >= 400:
+                    error = f"baileys_status_{r.status_code}"
+        except Exception as e:
+            error = str(e)[:200]
+            logger.error(f"Force reconnect error: {e}")
+    await db.channel_connections.update_one(
+        {"id": conn_id},
+        {"$set": {
+            "send_failures_count": 0,
+            "last_manual_reconnect_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    if error:
+        raise HTTPException(502, f"Falha ao forcar reconexao: {error}")
+    return {"ok": True}
+
+
 # === WHATSAPP CONTACTS IMPORT ===
 class ImportWaContactsRequest(BaseModel):
     mode: str = "all"  # all | with_name | without_name

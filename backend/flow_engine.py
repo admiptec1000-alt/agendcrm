@@ -267,29 +267,129 @@ async def _send_whatsapp_interactive(ticket: dict, payload: dict):
         return False
 
 
-async def _send_whatsapp(ticket: dict, text: str) -> Optional[str]:
+async def _send_whatsapp(ticket: dict, text: str, db=None) -> Optional[str]:
     """Send a WhatsApp message via the local microservice and return the
     Baileys-issued `message_id` (or None on failure). The caller MUST stamp
     that id on the persisted message so the inbound `messages.upsert` echo
     (fromMe=true) gets deduplicated by `channels_routes` — otherwise every
-    bot message would appear twice in the operator UI."""
+    bot message would appear twice in the operator UI.
+
+    2026-02-16 (Q) — Track consecutive failures per connection. When the
+    counter reaches MAX_CONSECUTIVE_FAILURES, automatically trigger a force
+    reconnect on the Baileys side. Solves the recurring "WA flow stops
+    responding" issue where the Baileys socket is silently dead (ws.readyState
+    OPEN but sends are no-op). Caller passes `db` for the counter persistence
+    — keeping it optional preserves back-compat for any place that still
+    invokes without db.
+    """
+    wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+    connection_id = ticket.get("connection_id")
+    target = ticket.get("lid_jid") if ticket.get("pending_lid_resolution") else ticket.get("customer_phone")
+    if not (connection_id and target):
+        return None
     try:
-        wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
-        target = ticket.get("lid_jid") if ticket.get("pending_lid_resolution") else ticket.get("customer_phone")
-        if not (ticket.get("connection_id") and target):
-            return None
         async with httpx.AsyncClient(timeout=15.0) as cli:
             r = await cli.post(
-                f"{wa_url}/instances/{ticket['connection_id']}/send",
+                f"{wa_url}/instances/{connection_id}/send",
                 json={"phone": target, "message": text},
             )
             if r.status_code != 200:
+                # Log richer detail so we can correlate prod failures.
+                body_preview = (r.text or "")[:300]
+                logger.warning(
+                    f"[flow_engine] send failed conn={connection_id} "
+                    f"phone={target} http={r.status_code} body={body_preview!r}"
+                )
+                await _bump_send_failure(db, connection_id, wa_url, f"http_{r.status_code}: {body_preview[:120]}")
                 return None
             payload = r.json() if r.content else {}
-            return payload.get("message_id")
-    except Exception as e:
-        logger.warning(f"[flow_engine] send failed: {e}")
+            mid = payload.get("message_id")
+            if not mid:
+                # 200 OK but no message_id — Baileys accepted but didn't
+                # actually deliver. Counts as failure for the watchdog.
+                logger.warning(
+                    f"[flow_engine] send: conn={connection_id} 200 OK but no message_id "
+                    f"(payload={str(payload)[:200]!r}) — counting as failure"
+                )
+                await _bump_send_failure(db, connection_id, wa_url, "no_message_id")
+                return None
+            # Success — reset failure counter.
+            await _reset_send_failure(db, connection_id)
+            return mid
+    except httpx.TimeoutException:
+        logger.warning(f"[flow_engine] send TIMED OUT conn={connection_id} phone={target}")
+        await _bump_send_failure(db, connection_id, wa_url, "timeout")
         return None
+    except Exception as e:
+        logger.warning(f"[flow_engine] send exception conn={connection_id}: {e}")
+        await _bump_send_failure(db, connection_id, wa_url, f"exc:{str(e)[:120]}")
+        return None
+
+
+MAX_CONSECUTIVE_FAILURES = 3
+
+
+async def _bump_send_failure(db, connection_id: str, wa_url: str, reason: str):
+    """Increment the consecutive failure counter for a connection. When it
+    crosses the threshold, attempt an automatic force-reconnect on the
+    Baileys microservice (no operator intervention required). 2026-02-16 (Q).
+    """
+    if not db or not connection_id:
+        return
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        now_iso = _dt.now(_tz.utc).isoformat()
+        res = await db.channel_connections.find_one_and_update(
+            {"id": connection_id},
+            {
+                "$inc": {"send_failures_count": 1},
+                "$set": {
+                    "last_send_failure_at": now_iso,
+                    "last_send_failure_reason": reason[:200],
+                },
+            },
+            return_document=True,
+        )
+        count = (res or {}).get("send_failures_count", 0) if res else 0
+        # NB: motor's find_one_and_update without ReturnDocument.AFTER returns
+        # the doc BEFORE update — so to know the new count we re-read.
+        fresh = await db.channel_connections.find_one(
+            {"id": connection_id}, {"_id": 0, "send_failures_count": 1}
+        )
+        count = (fresh or {}).get("send_failures_count", 0)
+        if count >= MAX_CONSECUTIVE_FAILURES:
+            logger.error(
+                f"[flow_engine] connection {connection_id} hit {count} consecutive "
+                f"send failures (last={reason!r}) — triggering auto force-reconnect"
+            )
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as cli:
+                    await cli.post(f"{wa_url}/instances/{connection_id}/restart")
+                # Reset so we don't keep hammering Baileys on every send.
+                await db.channel_connections.update_one(
+                    {"id": connection_id},
+                    {"$set": {
+                        "send_failures_count": 0,
+                        "last_auto_reconnect_at": now_iso,
+                    }},
+                )
+            except Exception as e:
+                logger.error(f"[flow_engine] auto force-reconnect failed: {e}")
+    except Exception as e:
+        logger.warning(f"[flow_engine] _bump_send_failure error: {e}")
+
+
+async def _reset_send_failure(db, connection_id: str):
+    """Clear the consecutive failure counter on success. 2026-02-16 (Q)."""
+    if not db or not connection_id:
+        return
+    try:
+        await db.channel_connections.update_one(
+            {"id": connection_id},
+            {"$set": {"send_failures_count": 0}},
+        )
+    except Exception:
+        pass
 
 
 async def _persist_outgoing(db, ticket_id: str, text: str, flow_id: str,
@@ -715,7 +815,7 @@ async def advance_flow(
         sent.append(text)
         if dry_run:
             return
-        wa_msg_id = await _send_whatsapp(ticket, text)
+        wa_msg_id = await _send_whatsapp(ticket, text, db=db)
         await _persist_outgoing(db, ticket["id"], text, flow_id,
                                 wa_message_id=wa_msg_id)
 

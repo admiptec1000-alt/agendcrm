@@ -1202,6 +1202,35 @@ app.post('/instances/:id/disconnect', async (req, res) => {
   }
 });
 
+// 2026-02-16 (Q) — Soft restart: close the WebSocket and recreate the socket
+// from the SAME on-disk auth (multi-file auth state). Unlike /disconnect,
+// this DOES NOT delete the auth folder, so the user does NOT need to
+// re-scan the QR. Used by:
+//   - Backend's auto-detection of zombie sockets after N consecutive send
+//     failures (flow_engine._bump_send_failure).
+//   - Manual button "Forcar reconexao" in the operator UI.
+app.post('/instances/:id/restart', async (req, res) => {
+  const id = req.params.id;
+  const instance = connections[id];
+  if (instance && instance.sock) {
+    try {
+      // Best-effort close — ignore errors; we just want to drop the socket.
+      try { instance.sock.ws?.close?.(); } catch (_) {}
+      try { instance.sock.end?.(new Error('manual_restart')); } catch (_) {}
+    } catch (_) {}
+  }
+  // Wipe the in-memory entry but keep AUTH_DIR/<id> intact.
+  delete connections[id];
+  try {
+    // createConnection is the same helper used by the /connect endpoint —
+    // it reads the persisted auth and re-creates the Baileys socket.
+    await createConnection(id);
+    return res.json({ status: 'restarted' });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/instances', (req, res) => {
   const list = Object.values(connections).map(c => ({
     id: c.id, status: c.status, connected: c.status === 'connected',
@@ -1214,7 +1243,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.10',
+    version: 'v2.1.11',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1227,8 +1256,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.10',
-    built_at: '2026-02-15',
+    version: 'v2.1.11',
+    built_at: '2026-02-16',
     features: {
       sent_message_store: true,       // anti blank message fix
       multi_message_types: true,      // captions, buttons, lists
@@ -1238,6 +1267,7 @@ app.get('/version', (req, res) => {
       notify_and_append: true,        // both upsert types
       long_ts_coercion: true,         // Long -> Number
       jid_normalization: true,        // @s.whatsapp.net vs @lid
+      soft_restart: true,             // /restart endpoint (2026-02-16 Q)
       crash_guard: true,
       conflict_backoff: true,
       lid_senderpn_resolver: true,
