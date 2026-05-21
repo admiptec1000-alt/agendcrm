@@ -10,6 +10,47 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-16 (O) — Multa/juros default global + valor recebido na baixa ✅
+
+**Pedido do usuario:**
+1. Verificar onde esta o parametro `lancamento_gen_days` → **localizado em `SA → Conexoes → Notificacoes de Cobranca` → card "Geracao automatica do Lancamento"** (BillingReminderPanel.js, endpoint `/api/super-admin/billing-reminder-settings`, campo `lancamento_gen_days`).
+2. Adicionar **multa + juros padrao** no mesmo painel de Configuracoes.
+3. Adicionar campo **"Valor recebido"** na forma de pagamento.
+
+**Backend:**
+- `BillingReminderSettingsIn` ganhou:
+  - `default_late_fee_enabled: bool`
+  - `default_late_fee_multa_pct: float` (0-100)
+  - `default_late_fee_juros_dia_pct: float` (0-100)
+- `scheduler._process_billing_reminders` aplica esses defaults no `late_fee` da txn quando cria Lancamento auto (e `enabled=True`). Operador continua podendo sobrescrever por parcela no form de edicao.
+- `AdmTxnUpdate` ganhou `valor_recebido: Optional[float]`.
+- `POST /finance/transactions/{id}/pay` agora aceita `valor_recebido` no body (alem do `payment_method`). Persistido como auditoria.
+
+**Frontend:**
+- `BillingReminderPanel.js`: novo card **"Multa e juros por atraso"** com toggle master + 2 inputs (multa % + juros/dia %). Inputs desabilitados quando toggle off.
+- `AdmLancamentosPanel.js`:
+  - Novo `PayTxnModal` (modal de baixa). Antes a baixa era direta (clica no metodo → pago). Agora abre modal mostrando:
+    - Resumo: Valor original, Multa+Juros (se atrasado), Total devido.
+    - Input "Valor recebido (R$)" — pre-preenchido com total devido.
+    - 3 botoes coloridos para escolher metodo (Pix/Boleto/Dinheiro).
+    - Botoes Cancelar + Confirmar baixa.
+  - PaymentCell agora mostra "recebido: R$ XXX" abaixo do badge de metodo quando ha `valor_recebido` salvo (auditoria visivel direto na lista desktop).
+  - Cards mobile + toolbar Pix/Boleto/Dinheiro tambem usam o novo modal.
+
+**Validacao e2e:**
+- Settings `default_late_fee_enabled=true, multa=2%, juros=0.1%/d` → empresa cadastrada → txn herda `late_fee={enabled:true, multa_pct:2, juros_dia_pct:0.1}`. 
+- POST `/pay` com `valor_recebido=110.00` em txn de amount=100 → persistido (`valor_recebido: 110.0`).
+- Frontend: panel de Notificacoes de Cobranca renderiza card "Multa e juros por atraso" com toggle + inputs. Click em "Pagar Pix" abre modal "Dar baixa" com input valor=199.9 (default), 3 botoes coloridos para metodo, e "Confirmar baixa".
+
+**Regressao:** 23/23 (iter55+iter56+ticket_auto_close+bot_pause).
+
+**Para producao:** Redeploy. Apos:
+1. SA → Conexoes → Notificacoes de Cobranca → ativar "Multa e juros por atraso" + preencher os 2 percentuais.
+2. Todo novo Lancamento auto-gerado pelo scheduler vai herdar esses defaults.
+3. Ao dar baixa em qualquer parcela (botoes Pix/Boleto/Dinheiro), abre o modal com "Valor recebido" editavel.
+
+
+
 ### 2026-02-16 (N) — Parametro `lancamento_gen_days` (gera financeiro X dias antes) + sync no save ✅
 
 **Pedido do usuario:** Criar parametro que define quantos dias antes do vencimento o Lancamento eh gerado automaticamente. Antes era hardcoded em 10. Ao cadastrar a empresa com data de 1o vencimento dentro do intervalo, ja lancar imediatamente no financeiro.

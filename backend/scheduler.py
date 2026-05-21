@@ -308,6 +308,10 @@ async def _process_billing_reminders(db):
     if gen_days is None:
         gen_days = max(days_list)
     gen_days = max(0, min(180, int(gen_days)))
+    # 2026-02-16 (O) — Defaults de multa/juros aplicados nos Lancamentos auto.
+    default_lf_enabled = bool(settings.get("default_late_fee_enabled", False))
+    default_lf_multa = float(settings.get("default_late_fee_multa_pct") or 0)
+    default_lf_juros = float(settings.get("default_late_fee_juros_dia_pct") or 0)
     global_default_msg = settings.get("default_message") or (
         "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
         "vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame."
@@ -390,6 +394,13 @@ async def _process_billing_reminders(db):
                         "recurrence_interval": cycle,
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
+                    # 2026-02-16 (O) — Inject default late_fee if enabled.
+                    if default_lf_enabled and (default_lf_multa > 0 or default_lf_juros > 0):
+                        txn["late_fee"] = {
+                            "enabled": True,
+                            "multa_pct": default_lf_multa,
+                            "juros_dia_pct": default_lf_juros,
+                        }
                     await db.super_admin_transactions.insert_one(txn)
                     logger.info(
                         f"[scheduler] billing-reminder: created Lancamento "

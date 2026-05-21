@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Bell, MessageSquare, Calendar as CalendarIcon } from 'lucide-react';
+import { Loader2, Bell, MessageSquare, Calendar as CalendarIcon, Percent } from 'lucide-react';
 import api from '../services/api';
 
 /**
@@ -22,6 +22,9 @@ const BillingReminderPanel = () => {
     enabled: true,
     days_before_due_list: [10],
     lancamento_gen_days: 10,
+    default_late_fee_enabled: false,
+    default_late_fee_multa_pct: 0,
+    default_late_fee_juros_dia_pct: 0,
     channel: 'whatsapp',
     default_message: '',
   });
@@ -41,6 +44,9 @@ const BillingReminderPanel = () => {
           enabled: !!r.data?.enabled,
           days_before_due_list: list.map(Number),
           lancamento_gen_days: Number(r.data?.lancamento_gen_days ?? 10),
+          default_late_fee_enabled: !!r.data?.default_late_fee_enabled,
+          default_late_fee_multa_pct: Number(r.data?.default_late_fee_multa_pct ?? 0),
+          default_late_fee_juros_dia_pct: Number(r.data?.default_late_fee_juros_dia_pct ?? 0),
           channel: r.data?.channel || 'whatsapp',
           default_message: r.data?.default_message || '',
         });
@@ -77,6 +83,9 @@ const BillingReminderPanel = () => {
         enabled: form.enabled,
         days_before_due_list: form.days_before_due_list,
         lancamento_gen_days: Math.max(0, Math.min(180, parseInt(form.lancamento_gen_days, 10) || 0)),
+        default_late_fee_enabled: !!form.default_late_fee_enabled,
+        default_late_fee_multa_pct: Math.max(0, Math.min(100, parseFloat(form.default_late_fee_multa_pct) || 0)),
+        default_late_fee_juros_dia_pct: Math.max(0, Math.min(100, parseFloat(form.default_late_fee_juros_dia_pct) || 0)),
         channel: form.channel,
         default_message: form.default_message,
       });
@@ -243,6 +252,65 @@ const BillingReminderPanel = () => {
           Recomendado: 10. Permitido: 0 a 180. Independente dos lembretes (acima),
           esse parametro controla apenas quando a parcela aparece no Financeiro Admin.
         </p>
+      </div>
+
+      {/* Multa + Juros padrao — 2026-02-16 (O). Aplicados em cada Lancamento
+          auto gerado pelo scheduler. Operador pode sobrescrever por parcela
+          no form de edicao. */}
+      <div className="card max-w-2xl">
+        <div className="flex items-center justify-between gap-4 mb-2">
+          <div className="flex items-center gap-2">
+            <Percent className="w-5 h-5 text-slate-500" />
+            <h3 className="font-semibold text-slate-900">Multa e juros por atraso</h3>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              checked={form.default_late_fee_enabled}
+              onChange={(e) => setForm({ ...form, default_late_fee_enabled: e.target.checked })}
+              className="sr-only peer"
+              data-testid="billing-late-fee-enabled"
+            />
+            <div className="w-11 h-6 bg-slate-200 rounded-full peer peer-checked:bg-indigo-600 transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform peer-checked:after:translate-x-5"></div>
+          </label>
+        </div>
+        <p className="text-xs text-slate-500 mb-3">
+          Quando ativo, todo novo Lancamento de licenca gerado automaticamente
+          recebe estes parametros. Voce ainda pode sobrescrever por parcela no
+          form de edicao do lancamento.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Multa unica (%)</label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.01}
+              value={form.default_late_fee_multa_pct}
+              onChange={(e) => setForm({ ...form, default_late_fee_multa_pct: e.target.value })}
+              disabled={!form.enabled || !form.default_late_fee_enabled}
+              className="input-field text-sm w-full"
+              data-testid="billing-late-fee-multa"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">Aplicada uma vez sobre o valor original.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Juros ao dia (%)</label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.01}
+              value={form.default_late_fee_juros_dia_pct}
+              onChange={(e) => setForm({ ...form, default_late_fee_juros_dia_pct: e.target.value })}
+              disabled={!form.enabled || !form.default_late_fee_enabled}
+              className="input-field text-sm w-full"
+              data-testid="billing-late-fee-juros"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">Acumula por cada dia em atraso.</p>
+          </div>
+        </div>
       </div>
 
       {/* Default message */}

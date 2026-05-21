@@ -149,12 +149,20 @@ export const AdmLancamentosPanel = () => {
     }
   };
 
-  // Pay with a specific method (Pix/Boleto/Dinheiro). Shows a 5s "Desfazer"
-  // toast — clicking it reverts the txn to status=pendente. The user
-  // explicitly asked for direct action with undo (2026-02-15 (E)).
-  const handlePayWithMethod = async (id, method) => {
+  // 2026-02-16 (O) — Antes de dar baixa, abre o modal de pagamento que
+  // permite editar o `valor_recebido` (default = total devido incluindo
+  // multa/juros, fallback no amount original) e escolher o metodo.
+  const [payModalTxn, setPayModalTxn] = useState(null);
+
+  // Pay with a specific method (Pix/Boleto/Dinheiro). Aceita valor_recebido
+  // opcional vindo do modal. Mantem o toast "Desfazer" de 5s.
+  const handlePayWithMethod = async (id, method, valor_recebido = null) => {
     try {
-      await api.post(`/super-admin/finance/transactions/${id}/pay`, { payment_method: method });
+      const body = { payment_method: method };
+      if (valor_recebido !== null && valor_recebido !== undefined && valor_recebido !== '') {
+        body.valor_recebido = Number(valor_recebido);
+      }
+      await api.post(`/super-admin/finance/transactions/${id}/pay`, body);
       load();
       toast.success(`Baixa em ${labelForMethod(method)}`, {
         action: {
@@ -174,6 +182,11 @@ export const AdmLancamentosPanel = () => {
     } catch (e) {
       toast.error('Falha ao dar baixa');
     }
+  };
+
+  // Abre o modal de pagamento (uso geral: tabela desktop e cards mobile).
+  const openPayModal = (txn, prefMethod = null) => {
+    setPayModalTxn({ txn, method: prefMethod || txn.payment_method || 'pix' });
   };
 
   return (
@@ -315,7 +328,7 @@ export const AdmLancamentosPanel = () => {
                     <td className="px-3 py-2 text-center">
                       <PaymentCell
                         t={t}
-                        onPay={handlePayWithMethod}
+                        onPay={(id, method) => openPayModal(items.find(x => x.id === id), method)}
                       />
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -410,7 +423,7 @@ export const AdmLancamentosPanel = () => {
                         {PAYMENT_METHODS.map(pm => (
                           <button
                             key={pm.value}
-                            onClick={() => handlePayWithMethod(t.id, pm.value)}
+                            onClick={() => openPayModal(t, pm.value)}
                             className="flex-1 text-[11px] py-1.5 rounded border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 font-medium"
                             data-testid={`adm-pay-${pm.value}-${t.id}`}
                           >
@@ -438,6 +451,17 @@ export const AdmLancamentosPanel = () => {
       </div>
 
       {showForm && <AdmTxnFormModal initial={editingTxn} onClose={() => { setShowForm(false); setEditingTxn(null); }} onSaved={() => { setShowForm(false); setEditingTxn(null); load(); }} />}
+      {payModalTxn && (
+        <PayTxnModal
+          txn={payModalTxn.txn}
+          method={payModalTxn.method}
+          onClose={() => setPayModalTxn(null)}
+          onConfirm={async (method, valor_recebido) => {
+            await handlePayWithMethod(payModalTxn.txn.id, method, valor_recebido);
+            setPayModalTxn(null);
+          }}
+        />
+      )}
       {historyTxn && (
         <ReminderHistoryModal
           txn={historyTxn}
@@ -458,9 +482,16 @@ export const AdmLancamentosPanel = () => {
 const PaymentCell = ({ t, onPay }) => {
   if (t.status === 'pago') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-medium" data-testid={`adm-paid-${t.id}`}>
-        <CheckCircle2 className="w-3 h-3" /> {labelForMethod(t.payment_method)}
-      </span>
+      <div className="inline-flex flex-col items-center gap-0.5">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-medium" data-testid={`adm-paid-${t.id}`}>
+          <CheckCircle2 className="w-3 h-3" /> {labelForMethod(t.payment_method)}
+        </span>
+        {t.valor_recebido !== undefined && t.valor_recebido !== null && (
+          <span className="text-[10px] font-mono text-slate-500" data-testid={`adm-paid-valor-${t.id}`}>
+            recebido: {fmt(t.valor_recebido)}
+          </span>
+        )}
+      </div>
     );
   }
   return (
@@ -872,6 +903,118 @@ const Field = ({ label, children, className = '' }) => (
 );
 
 export default AdmLancamentosPanel;
+
+// 2026-02-16 (O) — PayTxnModal: confirma baixa com possibilidade de editar
+// valor recebido (default = total devido com multa/juros, fallback = amount)
+// e trocar metodo de pagamento. UX: 3 botoes coloridos para Pix/Boleto/Dinheiro
+// + campo valor + Confirmar.
+const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
+  const totalDevido = txn?.late_fee_computed?.total ?? txn?.amount ?? 0;
+  const [method, setMethod] = useState(initialMethod || 'pix');
+  const [valor, setValor] = useState(String(totalDevido));
+  const [confirming, setConfirming] = useState(false);
+
+  const handleConfirm = async () => {
+    setConfirming(true);
+    try {
+      await onConfirm(method, valor);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-md my-4 sm:my-8"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="pay-txn-modal"
+      >
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-200">
+          <div className="min-w-0">
+            <h3 className="text-base font-bold text-slate-900">Dar baixa</h3>
+            <p className="text-xs text-slate-500 mt-0.5 truncate">{txn?.description || '—'}</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 sm:p-5 space-y-4">
+          <div className="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
+            <div className="flex justify-between">
+              <span className="text-slate-500">Valor original</span>
+              <span className="font-mono font-medium">{fmt(txn?.amount)}</span>
+            </div>
+            {txn?.late_fee_computed?.days_overdue > 0 && (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Multa + Juros ({txn.late_fee_computed.days_overdue}d)</span>
+                  <span className="font-mono font-medium text-amber-700">+ {fmt(totalDevido - (txn?.amount || 0))}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-200">
+                  <span className="text-slate-600 font-semibold">Total devido</span>
+                  <span className="font-mono font-bold text-rose-700">{fmt(totalDevido)}</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Valor recebido (R$)</label>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+              data-testid="pay-modal-valor-recebido"
+              className="input-field text-base font-semibold"
+              autoFocus
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Permite registrar valor diferente do devido (desconto, multa parcial, etc).
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Forma de pagamento</label>
+            <div className="grid grid-cols-3 gap-2">
+              {PAYMENT_METHODS.map(pm => (
+                <button
+                  key={pm.value}
+                  type="button"
+                  onClick={() => setMethod(pm.value)}
+                  data-testid={`pay-modal-method-${pm.value}`}
+                  className={`px-3 py-2.5 rounded-lg text-sm font-medium border transition-all ${
+                    method === pm.value
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-white text-slate-600 border-slate-300 hover:border-emerald-400'
+                  }`}
+                >
+                  {pm.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 p-4 sm:p-5 border-t border-slate-200">
+          <button onClick={onClose} className="btn-secondary">Cancelar</button>
+          <button
+            onClick={handleConfirm}
+            disabled={confirming}
+            data-testid="pay-modal-confirm"
+            className="btn-primary"
+          >
+            {confirming ? 'Salvando...' : 'Confirmar baixa'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // 2026-02-16 (L) — Modal mostrando o historico de lembretes enviados para
 // um Lancamento (auto-gerados + reenvios manuais). Permite reenviar pelo

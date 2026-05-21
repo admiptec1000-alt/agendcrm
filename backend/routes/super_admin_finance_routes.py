@@ -401,6 +401,7 @@ class AdmTxnUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     late_fee: Optional[_LateFeeIn] = None
+    valor_recebido: Optional[float] = None  # 2026-02-16 (O)
     kind: Optional[str] = None
     company_id: Optional[str] = None
     external_client_name: Optional[str] = None
@@ -562,16 +563,26 @@ async def adm_mark_paid(
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
-    """Marca o lancamento como pago. Aceita opcional `payment_method`
-    no body — quando enviado, atualiza o metodo (Pix/Boleto/Dinheiro)
-    como parte do mesmo update. UI usa isso pra dar baixa direto da
-    lista clicando no metodo desejado (2026-02-15 (E))."""
+    """Marca o lancamento como pago. Body opcional:
+       - `payment_method`: Pix/Boleto/Dinheiro (atualiza junto com a baixa).
+       - `valor_recebido`: valor efetivamente recebido (2026-02-16 (O)).
+         Permite registrar diferenca em relacao ao valor original (multa
+         cobrada parcialmente, desconto concedido, etc.). Sempre salvo
+         como auditoria; quando ausente eh inferido como o `amount` do
+         proprio lancamento.
+    """
     update = {
         "status": "pago",
         "paid_at": datetime.now(timezone.utc).isoformat(),
     }
-    if isinstance(payload, dict) and payload.get("payment_method"):
-        update["payment_method"] = payload["payment_method"]
+    if isinstance(payload, dict):
+        if payload.get("payment_method"):
+            update["payment_method"] = payload["payment_method"]
+        if payload.get("valor_recebido") is not None:
+            try:
+                update["valor_recebido"] = float(payload["valor_recebido"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "valor_recebido invalido")
     r = await db.super_admin_transactions.update_one(
         {"id": txn_id}, {"$set": update}
     )

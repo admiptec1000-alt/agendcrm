@@ -359,6 +359,12 @@ class BillingReminderSettingsIn(BaseModel):
     # lembretes acima. Default 10. Permite, por exemplo, criar a parcela
     # com 30 dias de antecedencia mas so disparar lembretes [10, 3, 1].
     lancamento_gen_days: Optional[int] = None
+    # 2026-02-16 (O) — Multa e juros padroes aplicados automaticamente a
+    # cada Lancamento de Licenca gerado pelo scheduler. Operador pode
+    # sobrescrever por parcela no form de edicao.
+    default_late_fee_enabled: Optional[bool] = None
+    default_late_fee_multa_pct: Optional[float] = None     # multa unica %
+    default_late_fee_juros_dia_pct: Optional[float] = None  # juros ao dia %
     channel: str = "whatsapp"  # whatsapp | email | both
     default_message: Optional[str] = None
 
@@ -385,6 +391,10 @@ async def get_billing_reminder_settings(
         "days_before_due_list": [int(d) for d in days_list],
         "days_before_due": int(days_list[0]),  # back-compat
         "lancamento_gen_days": int(gen_days),
+        # 2026-02-16 (O) — defaults para multa/juros nos Lancamentos auto.
+        "default_late_fee_enabled": bool(doc.get("default_late_fee_enabled", False)),
+        "default_late_fee_multa_pct": float(doc.get("default_late_fee_multa_pct") or 0),
+        "default_late_fee_juros_dia_pct": float(doc.get("default_late_fee_juros_dia_pct") or 0),
         "channel": doc.get("channel", "whatsapp"),
         "default_message": doc.get("default_message") or (
             "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
@@ -418,12 +428,18 @@ async def update_billing_reminder_settings(
     if gen_days is None:
         gen_days = 10
     gen_days = max(0, min(180, int(gen_days)))
+    # 2026-02-16 (O) — Multa/juros defaults aplicados em cada Lancamento auto.
+    lf_multa = max(0.0, min(100.0, float(data.default_late_fee_multa_pct or 0)))
+    lf_juros = max(0.0, min(100.0, float(data.default_late_fee_juros_dia_pct or 0)))
     update = {
         "key": "billing_reminder",
         "enabled": bool(data.enabled),
         "days_before_due_list": days_list,
         "days_before_due": days_list[0],  # back-compat
         "lancamento_gen_days": gen_days,
+        "default_late_fee_enabled": bool(data.default_late_fee_enabled),
+        "default_late_fee_multa_pct": lf_multa,
+        "default_late_fee_juros_dia_pct": lf_juros,
         "channel": channel,
         "default_message": (data.default_message or "")[:2000] or None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
