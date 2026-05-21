@@ -10,6 +10,46 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (R) — Fix P0: lembretes de cobranca disparando todos juntos + suporte a 0 e dias negativos ✅
+
+**Bug reportado:** Em prod, mensagens de lembrete chegavam ao cliente de forma SIMULTANEA quando havia varios offsets configurados (ex: [10, 3, 1] disparava as 3 numa unica tick). Operador tambem pediu suporte a dia 0 (no vencimento) e a dias APOS vencimento (negativos) para automatizar follow-ups de inadimplencia.
+
+**Root cause:** O loop em `scheduler.py::_process_billing_reminders` avaliava `today >= due - offset` para cada offset e disparava TODOS os elegiveis no mesmo tick. Quando o TXN era materializado tarde (gen_days < max_offset) OU o scheduler ficou offline alguns dias, multiplos offsets passavam o teste de uma so vez e o cliente recebia 3 msgs.
+
+**Fix (SMART FALLBACK — escolha do usuario 1b):**
+
+**Backend (`scheduler.py`):**
+- Logica reescrita: a cada tick, calcula `days_until_due = (due - today).days`, filtra offsets `O >= days_until_due` e exclui os ja `status=sent` no historico. Entre os elegiveis, escolhe `min(O)` — o offset mais PROXIMO de hoje.
+- Garante **1 reminder por tick por parcela**. Resiliente a downtime (sempre envia o mais recente elegivel).
+- Clip de offsets ampliado de `[0..60]` para `[-30..60]`. Negativos => disparam APOS vencimento. Ex: O=-2 envia 2 dias apos due.
+- `_send_billing_reminder` agora retorna `(sent_ok, error_detail)`. `error_detail` eh string legivel salva em `billing_reminder_history.error` (`http 404 - ...`, `timeout_10s`, `no_message_id_in_response`, `exception: ...`). Operador ve o motivo real direto no modal Historico.
+
+**Backend (`super_admin_routes.py`):**
+- `BillingReminderSettingsIn`: clip ampliado para `[-30..60]`. Resend endpoint atualizado para unpack da nova tupla.
+
+**Frontend (`BillingReminderPanel.js`):**
+- Input min=-30, max=60, placeholder "ex: 3 ou -1".
+- Chip helper `chipLabel(d)`: 0 => "no vencimento" (amber), positivo => "Nd antes" (indigo), negativo => "Nd apos" (rose).
+- Hint: "Positivo = antes / 0 = no dia / Negativo = apos (cobranca atrasada). O sistema envia apenas 1 lembrete por dia (o mais proximo de hoje)."
+
+**Testes:**
+- `tests/test_iteration_57.py` (4/4): aceite de negativos+clip, smart-fallback `[10,3,1]+due=today+1 → so offset=1`, negativo `[-2]+due=today-2 → fire -2`, diagnostic error.
+- `tests/test_iteration_56.py` test_02 ATUALIZADO para o novo comportamento (so offset=3 fire quando due=today+3 com lista [10,3,1]).
+- Regressao total: 16/16 (iter55+56+57).
+
+**E2E (testing_agent_v3_fork):**
+- Backend: 7/7 pytest iter56+57.
+- Frontend: chips de -2/0/5 renderizam com label e cor corretos. Out-of-range (99, -50) bloqueado via toast. Save persiste apos reload. Settings finalizada limpa em `[10]`.
+
+**Para producao:**
+1. Redeploy do backend (FastAPI) — single source of truth da nova logica do scheduler.
+2. Redeploy do frontend para liberar o input com negativos no painel de Cobranca.
+3. Em SA -> Financeiro Admin -> Cobranca: revisar a lista (`Dias antes do vencimento`). Para automatizar cobranca de inadimplencia, adicione valores negativos (ex: -1, -3, -7). Para reforco no dia, adicione 0.
+4. O sistema continua enviando lembretes uma so vez por dia por parcela (smart fallback) — sem risco de spam mesmo apos outage.
+
+
+
+
 ### 2026-02-16 (Q) — Auto-detection de socket Baileys zumbi + force-reconnect ✅
 
 **Pedido do usuario (recorrente):** "WhatsApp travou o fluxo, nao responde mais, precisa desconectar/reconectar manualmente". Empresa WEB (prod) afetada.
