@@ -122,19 +122,77 @@ async def _process_ticket_auto_close(db):
     operator-side activity, because those are by-design parked waiting for
     a human reply and shouldn't auto-close just from the bot's last
     outbound."""
+    import httpx
     now = datetime.now(timezone.utc)
+    wa_service_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
     # Pull only companies with the setting enabled. Cheap enough to do per
     # tick — most tenants have it off.
     cursor = db.companies.find(
         {"ticket_auto_close_hours": {"$gt": 0}},
-        {"_id": 0, "id": 1, "ticket_auto_close_hours": 1},
+        {"_id": 0, "id": 1, "name": 1, "ticket_auto_close_hours": 1, "ticket_auto_close_message": 1},
     )
     async for c in cursor:
         hours = int(c.get("ticket_auto_close_hours") or 0)
         if hours <= 0:
             continue
         cutoff = (now - timedelta(hours=hours)).isoformat()
-        # We update directly with a filter — Mongo handles the batch.
+        message_template = c.get("ticket_auto_close_message") or ""
+        # Fetch the tickets we're about to close so we can send the
+        # goodbye message via the WhatsApp service. Without this, the
+        # mass-update wouldn't tell us which contacts to ping.
+        # 2026-02-15 (H) — per-company auto-close message.
+        to_close_cursor = db.tickets.find(
+            {
+                "company_id": c["id"],
+                "status": {"$in": ["aberto", "em_andamento"]},
+                "updated_at": {"$lt": cutoff},
+            },
+            {"_id": 0, "id": 1, "contact_id": 1, "channel_id": 1},
+        )
+        tickets_to_close = await to_close_cursor.to_list(500)
+        if not tickets_to_close:
+            continue
+        # Send the goodbye message (best-effort) BEFORE closing the
+        # ticket — message_history append depends on the ticket still
+        # being open. Failures here are logged but never abort the close.
+        if message_template.strip():
+            for t in tickets_to_close:
+                try:
+                    contact = await db.contacts.find_one(
+                        {"id": t.get("contact_id")},
+                        {"_id": 0, "phone": 1, "name": 1},
+                    )
+                    channel = await db.channel_connections.find_one(
+                        {"id": t.get("channel_id")},
+                        {"_id": 0, "id": 1},
+                    )
+                    if not (contact and channel and contact.get("phone")):
+                        continue
+                    msg = message_template.replace("{nome}", contact.get("name") or "").replace(
+                        "{empresa}", c.get("name") or ""
+                    )
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        await client.post(
+                            f"{wa_service_url}/instances/{channel['id']}/send-text",
+                            json={"to": contact["phone"], "message": msg},
+                        )
+                    # Persist in ticket message history.
+                    await db.tickets.update_one(
+                        {"id": t["id"]},
+                        {"$push": {"messages": {
+                            "from": "bot",
+                            "text": msg,
+                            "type": "text",
+                            "timestamp": now.isoformat(),
+                            "system": True,
+                            "reason": "auto_close",
+                        }}},
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[scheduler] auto-close goodbye failed ticket={t.get('id')}: {e}"
+                    )
+        # Now mark them all closed in one shot.
         result = await db.tickets.update_many(
             {
                 "company_id": c["id"],

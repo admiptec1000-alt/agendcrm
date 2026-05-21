@@ -1316,6 +1316,7 @@ async def update_company_bot_settings(
 class TicketLifecycleSettingsUpdate(BaseModel):
     sgp_gateway_auto_close: Optional[bool] = None
     ticket_auto_close_hours: Optional[int] = None
+    ticket_auto_close_message: Optional[str] = None
 
 
 @router.get("/company/ticket-settings")
@@ -1325,11 +1326,12 @@ async def get_company_ticket_settings(
 ):
     comp = await db.companies.find_one(
         {"id": user["company_id"]},
-        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1},
+        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1, "ticket_auto_close_message": 1},
     ) or {}
     return {
         "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
         "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
+        "ticket_auto_close_message": comp.get("ticket_auto_close_message") or "",
     }
 
 
@@ -1350,13 +1352,16 @@ async def update_company_ticket_settings(
         if hours < 0 or hours > 24 * 30:  # cap at 30 days
             raise HTTPException(400, "ticket_auto_close_hours fora do intervalo permitido (0-720)")
         update["ticket_auto_close_hours"] = hours
+    if data.ticket_auto_close_message is not None:
+        # Trim e cap em 1000 chars pra evitar payload abusivo.
+        update["ticket_auto_close_message"] = (data.ticket_auto_close_message or "")[:1000]
     await db.companies.update_one(
         {"id": user["company_id"]},
         {"$set": update},
     )
     comp = await db.companies.find_one(
         {"id": user["company_id"]},
-        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1},
+        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1, "ticket_auto_close_message": 1},
     ) or {}
     return {
         "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
