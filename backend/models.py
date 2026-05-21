@@ -169,6 +169,12 @@ class CompanyCreate(BaseModel):
     # AgentCRM apenas pra controle de licenca/cobranca. Quando != Padrao,
     # a UI desabilita campos especificos do tenant nativo.
     database_type: Optional[str] = "Padrao"
+    # 2026-02-16 (J) — Recurring billing reminder config.
+    # `first_due_date` (ISO date) defines when parcela 1 expires; subsequent
+    # parcelas are spaced by `billing_cycle`. The scheduler creates each
+    # Lancamento + reminder 10 days before due_date.
+    first_due_date: Optional[str] = None
+    billing_reminder_message: Optional[str] = None
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -189,6 +195,8 @@ class CompanyUpdate(BaseModel):
     max_connections: Optional[int] = None
     max_users: Optional[int] = None
     database_type: Optional[str] = None
+    first_due_date: Optional[str] = None
+    billing_reminder_message: Optional[str] = None
 
 class CompanyResponse(BaseModel):
     id: str

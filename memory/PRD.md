@@ -7,7 +7,64 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Backend: FastAPI + MongoDB (motor)
 - Frontend: React 19 + Tailwind, PWA dinâmico
 - Microserviço: Node.js + Baileys (WhatsApp) com disco persistente no Render (`AUTH_DIR`)
-- Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages
+- Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
+
+
+### 2026-02-16 (J) — Cobranca recorrente lazy (10d antes) + SA Atendimento/Conexao ✅
+
+**Pedido do usuario:** mudar a forma de gerar Lancamentos financeiros — em vez de criar todas as parcelas de uma vez ao salvar a empresa, gerar **1 parcela por vez, 10 dias antes do vencimento**, e disparar um lembrete via WhatsApp. Para isso, **liberar Atendimento + Conexao no Super Admin**.
+
+**Decisoes finais do usuario:**
+- 1b: Campo novo "Data do 1o vencimento" na empresa (nao a partir do save).
+- 2b: Mensagem do lembrete customizavel por empresa com `{{nome}}`/`{{empresa}}`/`{{valor}}`/`{{vencimento}}`/`{{parcela}}`.
+- 3c: Se a empresa nao tem `phone`, cria o Lancamento mas pula o reminder (loga info).
+- 4a: Apaga todos os pendentes auto-gerados antigos no save e re-cria no novo modelo.
+- 5: Adicionar menus de Atendimentos e Conexoes no sidebar do SA.
+
+**Implementacao:**
+
+1. **SA system company** (`server.py`):
+   - Novo `_ensure_super_admin_system_company` na startup. Cria company `id="_super_admin_system_"` com flag `is_super_admin_system=true` (idempotente).
+
+2. **auth.py:** apos carregar SA user, injeta `user.company_id = "_super_admin_system_"`. Permite que as rotas tenant existentes (channels, tickets, atendimentos) funcionem sem refactor.
+
+3. **`models.py CompanyCreate/Update`:** novos campos:
+   - `first_due_date: Optional[str]` (ISO date)
+   - `billing_reminder_message: Optional[str]`
+
+4. **`routes/super_admin_routes.py`:**
+   - `create_company`: NAO chama mais `_generate_adm_txns_for_company`. Salva apenas os campos `first_due_date` e `billing_reminder_message`.
+   - `update_company`: quando `monthly_price` / `installments` / `billing_cycle` / `first_due_date` muda, faz `delete_many` em `super_admin_transactions` com `auto_company_billing=true` e `status=pendente`. PAGOS sao preservados.
+
+5. **`scheduler.py::_process_billing_reminders`** (NOVO):
+   - Itera companies com `monthly_price > 0`, `installments > 0`, `first_due_date` setado.
+   - Calcula a proxima parcela ainda nao gerada (consultando `super_admin_transactions` por `recurrence_index`).
+   - Se `due_date <= today + 10d`: cria 1 Lancamento (kind=licenca, status=pendente, auto_company_billing=true) + envia reminder WA.
+   - Apenas 1 parcela por tick por empresa (evita burst em migracao).
+   - Reminder usa a 1a conexao `status=connected` da SA system company. Sem conexao → loga warning, txn ainda eh criada.
+   - Tick adicionado em `tick()` apos auto-close.
+
+6. **Frontend `SuperAdmin/Dashboard.js`:**
+   - Sidebar ganhou `sa-atendimentos` (Headphones) e `sa-conexoes` (LinkIcon).
+   - Renderiza `<AtendimentosPage />` e `<ConexoesPage />` (re-exportado de `Company/Dashboard.js`).
+   - CompanyModal: novo bloco indigo "Lembrete de cobranca (WhatsApp)" com input date `first_due_date` + textarea `billing_reminder_message` + hint das 5 variaveis.
+
+**Testes:**
+- 9/9 em `tests/test_iteration_55.py`:
+  - test_01: company create NAO gera txns eager (lazy).
+  - test_02: update billing wipes pending auto (sem crash).
+  - **TestBillingReminderScheduler.test_scheduler_generates_one_txn_within_window:** cria company com `first_due_date` em 5 dias, roda `_process_billing_reminders` 2x, valida 1 unico txn criado (idempotencia + janela de 10d).
+- Regressao total: 68/68 (flow_engine, bot_pause, ticket_auto_close, licenses iter54, sgp_pix_repair, iter55, bot_pause_api, sgp_gateway_dedup).
+
+**E2E manual (curl):**
+- SA agora ve `company_id=_super_admin_system_` em `/api/auth/me`.
+- `GET /api/channels/connections` como SA retorna `[]` (esperado, sem instancia ainda).
+- POST company com `first_due_date=today+5` → 0 txns. Apos scheduler tick → 1 txn (parcela 1/3 due em 5d). Segundo tick → ainda 1 (idempotente). Mudando `first_due_date` para +30d → 0 txns (wipe + fora da janela). Tick → continua 0.
+
+**Para producao:** Redeploy. Apos:
+1. Acessar SA → Conexoes → adicionar 1 instancia WA, escanear QR.
+2. Em cada empresa, abrir o cadastro e setar "Data do 1o vencimento" + opcionalmente customizar a mensagem.
+3. O scheduler roda a cada 60s. Empresa com 1a parcela em <= 10 dias ja recebera o Lancamento + lembrete na proxima tick apos o save.
 
 
 ### 2026-02-15 (I) — 5 tarefas em lote: auto-close msg + 3 cards SA + auto AdmTxn + mobile + flow obs ✅

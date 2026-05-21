@@ -451,23 +451,20 @@ async def create_company(
     if billing_source:
         await _generate_invoices_for_company(db, company_id, billing_source)
 
-    # Auto-create Admin Lancamentos (recurring billing rows) from the company's
-    # own billing fields. 2026-02-15 (I) — automates what was previously a
-    # manual Lancamento entry per parcela.
-    try:
-        await _generate_adm_txns_for_company(
-            db,
-            company_id=company_id,
-            company_name=data.name,
-            monthly_price=float(data.monthly_price or 0),
-            billing_cycle=data.billing_cycle or "monthly",
-            installments=int(data.installments or 0),
-        )
-    except Exception as _e:  # never block company creation on billing seed
-        import logging
-        logging.getLogger(__name__).warning(
-            f"[super_admin] adm_txn auto-gen failed company={company_id}: {_e}"
-        )
+    # 2026-02-16 (J) — Removed eager auto-AdmTxn generation. The scheduler
+    # now creates each Lancamento individually, 10 days before its due
+    # date, and dispatches a WhatsApp reminder. See
+    # scheduler._process_billing_reminders.
+    # Persist the billing config fields if provided.
+    extra_billing_set = {}
+    if data.first_due_date is not None:
+        extra_billing_set["first_due_date"] = data.first_due_date
+    if data.billing_reminder_message is not None:
+        extra_billing_set["billing_reminder_message"] = (data.billing_reminder_message or "")[:2000]
+    if extra_billing_set:
+        await db.companies.update_one({"id": company_id}, {"$set": extra_billing_set})
+        for k, v in extra_billing_set.items():
+            company[k] = v
 
     # Create admin user for this company
     admin_user = {
@@ -559,30 +556,25 @@ async def update_company(
     if update_data:
         await db.companies.update_one({"id": company_id}, {"$set": update_data})
 
-    # If recurring billing fields changed, regenerate the auto Lancamentos.
-    # Only PENDING auto-generated rows are wiped; PAID history is preserved.
+    # 2026-02-16 (J) — When recurring billing fields change, wipe pending
+    # auto-generated Lancamentos so the scheduler can re-create them under
+    # the new monthly_price / installments / first_due_date. PAID rows are
+    # preserved for audit.
     billing_changed = any(
-        k in update_data for k in ("monthly_price", "installments", "billing_cycle")
+        k in update_data
+        for k in ("monthly_price", "installments", "billing_cycle", "first_due_date")
     )
     if billing_changed:
         try:
-            refreshed = await db.companies.find_one(
-                {"id": company_id},
-                {"_id": 0, "name": 1, "monthly_price": 1, "billing_cycle": 1, "installments": 1},
-            ) or {}
-            await _generate_adm_txns_for_company(
-                db,
-                company_id=company_id,
-                company_name=refreshed.get("name") or company.get("name") or "",
-                monthly_price=float(refreshed.get("monthly_price") or 0),
-                billing_cycle=refreshed.get("billing_cycle") or "monthly",
-                installments=int(refreshed.get("installments") or 0),
-                reset_pending=True,
-            )
+            await db.super_admin_transactions.delete_many({
+                "company_id": company_id,
+                "auto_company_billing": True,
+                "status": "pendente",
+            })
         except Exception as _e:
             import logging
             logging.getLogger(__name__).warning(
-                f"[super_admin] adm_txn refresh failed company={company_id}: {_e}"
+                f"[super_admin] adm_txn wipe failed company={company_id}: {_e}"
             )
 
     # Sync subdomain with booking_pages

@@ -7145,3 +7145,8 @@ const OnboardingWizard = ({ onClose }) => {
 };
 
 export default CompanyDashboard;
+// 2026-02-16 (J) — expose ConexoesPage so the SA Dashboard can render it
+// inline (SA user has company_id auto-injected to the SA system company,
+// so the same UI works for managing the SA's own WhatsApp connection
+// used for billing reminders).
+export { ConexoesPage };

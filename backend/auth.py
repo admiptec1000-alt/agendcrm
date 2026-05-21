@@ -73,6 +73,12 @@ async def get_current_user(
             detail="User not found"
         )
 
+    # Inject SA system company_id so SA users can use tenant-scoped routes
+    # (channels, tickets, atendimentos). Created on server startup; see
+    # server.py::_ensure_super_admin_system_company. 2026-02-16 (J).
+    if user_type == "super_admin" and not user.get("company_id"):
+        user["company_id"] = "_super_admin_system_"
+
     # Surface the JWT impersonation claim onto the loaded user record so
     # downstream endpoints (e.g. /auth/me) can echo it to the frontend.
     # Without this, the claim from POST /super-admin/companies/{id}/impersonate

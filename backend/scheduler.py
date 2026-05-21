@@ -224,6 +224,183 @@ async def _process_ticket_auto_close(db):
             )
 
 
+# === Billing reminder generator (2026-02-16 J) ====================================
+# For each company with monthly_price > 0 and installments > 0 and a
+# first_due_date set, this task walks parcela 0..N-1, finds the NEXT one
+# that has no auto-generated row yet, and — when the due_date is within 10
+# days — creates the Lancamento (super_admin_transactions, kind=licenca,
+# auto_company_billing=True) AND fires a WhatsApp reminder via the Super
+# Admin's system connection.
+BILLING_REMINDER_DAYS = int(os.environ.get("BILLING_REMINDER_DAYS", "10"))
+SA_SYSTEM_COMPANY_ID = "_super_admin_system_"
+
+
+def _compute_due_date(first_due_iso: str, cycle: str, index: int):
+    base = datetime.fromisoformat(first_due_iso).date()
+    if cycle == "yearly":
+        try:
+            return base.replace(year=base.year + index)
+        except ValueError:
+            return base.replace(year=base.year + index, day=28)
+    if cycle == "one_time":
+        return base if index == 0 else None
+    # monthly
+    month = ((base.month - 1) + index) % 12 + 1
+    year = base.year + ((base.month - 1) + index) // 12
+    try:
+        return base.replace(year=year, month=month)
+    except ValueError:
+        return base.replace(year=year, month=month, day=28)
+
+
+async def _get_sa_system_connection(db):
+    """Find the first active WhatsApp connection owned by the SA system
+    company. Returns the connection doc or None."""
+    return await db.channel_connections.find_one(
+        {
+            "company_id": SA_SYSTEM_COMPANY_ID,
+            "status": "connected",
+        },
+        {"_id": 0, "id": 1, "company_id": 1},
+    )
+
+
+async def _send_billing_reminder(conn_id: str, phone: str, text: str) -> bool:
+    if not phone:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                f"{WA_SERVICE_URL}/instances/{conn_id}/send-text",
+                json={"to": phone, "message": text},
+            )
+            return r.status_code < 400
+    except Exception as e:
+        logger.warning(f"[scheduler] reminder send failed: {e}")
+        return False
+
+
+def _render_reminder(template: str, ctx: dict) -> str:
+    if not template:
+        return ""
+    out = template
+    for key, val in ctx.items():
+        sval = "" if val is None else str(val)
+        out = out.replace("{{" + key + "}}", sval).replace("{" + key + "}", sval)
+    return out
+
+
+async def _process_billing_reminders(db):
+    today = datetime.now(timezone.utc).date()
+    cutoff = today + timedelta(days=BILLING_REMINDER_DAYS)
+    cursor = db.companies.find(
+        {
+            "monthly_price": {"$gt": 0},
+            "installments": {"$gt": 0},
+            "first_due_date": {"$ne": None},
+            "is_super_admin_system": {"$ne": True},
+            "status": {"$ne": "blocked"},
+        },
+        {
+            "_id": 0, "id": 1, "name": 1, "phone": 1,
+            "monthly_price": 1, "billing_cycle": 1, "installments": 1,
+            "first_due_date": 1, "billing_reminder_message": 1,
+        },
+    )
+    sa_conn = await _get_sa_system_connection(db)
+    sa_conn_id = sa_conn.get("id") if sa_conn else None
+    async for c in cursor:
+        try:
+            first_due = c.get("first_due_date") or ""
+            if not first_due:
+                continue
+            price = float(c.get("monthly_price") or 0)
+            installments = int(c.get("installments") or 0)
+            cycle = (c.get("billing_cycle") or "monthly").lower()
+            if price <= 0 or installments <= 0:
+                continue
+            # Find existing auto txns for this company to know which
+            # parcela indices are already covered (pending OR paid).
+            existing = await db.super_admin_transactions.find(
+                {"company_id": c["id"], "auto_company_billing": True},
+                {"_id": 0, "recurrence_index": 1},
+            ).to_list(installments + 5)
+            done_indices = {int(x.get("recurrence_index") or 0) for x in existing}
+            # Walk parcelas in order; only ever create the next one.
+            for i in range(installments):
+                if i in done_indices:
+                    continue
+                due = _compute_due_date(first_due, cycle, i)
+                if not due:
+                    break
+                # Check if this parcela's due is within the reminder window.
+                if due > cutoff:
+                    break  # too early; later parcelas only further out
+                # Create the Lancamento (pendente).
+                desc_suffix = f" - parcela {i + 1}/{installments}" if installments > 1 else ""
+                txn_doc = {
+                    "id": str(__import__('uuid').uuid4()),
+                    "direction": "entrada",
+                    "status": "pendente",
+                    "amount": price,
+                    "payment_method": "outros",
+                    "category": "outros",
+                    "description": f"Mensalidade {c.get('name') or ''}{desc_suffix}",
+                    "date": due.isoformat(),
+                    "due_date": due.isoformat(),
+                    "kind": "licenca",
+                    "company_id": c["id"],
+                    "auto_company_billing": True,
+                    "recurrence_index": i,
+                    "recurrence_total": installments,
+                    "recurrence_interval": cycle,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await db.super_admin_transactions.insert_one(txn_doc)
+                logger.info(
+                    f"[scheduler] billing-reminder: created Lancamento "
+                    f"company={c['id']} parcela={i+1}/{installments} due={due.isoformat()}"
+                )
+                # Send the WA reminder (best-effort).
+                template = c.get("billing_reminder_message") or (
+                    "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
+                    "vence em {{vencimento}}. Em caso de duvida nos chame."
+                )
+                ctx = {
+                    "nome": c.get("name") or "",
+                    "empresa": c.get("name") or "",
+                    "valor": f"{price:.2f}".replace(".", ","),
+                    "vencimento": due.strftime("%d/%m/%Y"),
+                    "parcela": f"{i + 1}/{installments}",
+                }
+                text = _render_reminder(template, ctx)
+                phone = c.get("phone") or ""
+                if sa_conn_id and phone and text:
+                    sent = await _send_billing_reminder(sa_conn_id, phone, text)
+                    if not sent:
+                        logger.warning(
+                            f"[scheduler] billing-reminder send NOT confirmed "
+                            f"company={c['id']} phone={phone[:6]}... — txn was still created"
+                        )
+                elif not sa_conn_id:
+                    logger.warning(
+                        f"[scheduler] billing-reminder: no SA system connection — "
+                        f"company={c['id']} txn created without reminder"
+                    )
+                elif not phone:
+                    logger.info(
+                        f"[scheduler] billing-reminder: company={c['id']} has no phone; "
+                        f"txn created without reminder (user option 3c)"
+                    )
+                # Only create ONE parcela per tick per company to avoid
+                # bursting reminders when migrating an old company.
+                break
+        except Exception as e:
+            logger.warning(
+                f"[scheduler] billing-reminder error company={c.get('id')}: {e}"
+            )
+
+
 async def tick():
     db = await get_database()
     base_url = os.environ.get("FRONTEND_PUBLIC_URL", "")
@@ -243,6 +420,10 @@ async def tick():
         await _process_ticket_auto_close(db)
     except Exception as e:
         logger.error(f"[scheduler] ticket auto-close error: {e}")
+    try:
+        await _process_billing_reminders(db)
+    except Exception as e:
+        logger.error(f"[scheduler] billing reminders error: {e}")
 
 
 async def start_scheduler_loop():

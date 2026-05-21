@@ -20,6 +20,10 @@ import { AdmLancamentosPanel } from './AdmLancamentosPanel';
 import { LicensesPanel } from './LicensesPanel';
 import { LicenseAssignmentPanel } from './LicenseAssignmentPanel';
 import { EditableComboBox } from '../../components/EditableComboBox';
+// 2026-02-16 (J) — SA owns its own WA connection (system company id is
+// auto-injected by auth.py). Reuse the tenant ConexoesPage + AtendimentosPage.
+import { ConexoesPage } from '../Company/Dashboard';
+import AtendimentosPage from '../CRM/AtendimentosPage';
 
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
@@ -113,6 +117,10 @@ const SuperAdminDashboard = () => {
     { key: 'licenses', label: 'Licencas', icon: Package },
     { key: 'partners', label: 'Parceiros', icon: HandCoins },
     { key: 'financial', label: 'Financeiro Admin', icon: Receipt },
+    // 2026-02-16 (J) — Atendimento + Conexao para o SA (usados para
+    // enviar lembretes de cobranca via WhatsApp).
+    { key: 'sa-atendimentos', label: 'Atendimentos', icon: Headphones },
+    { key: 'sa-conexoes', label: 'Conexoes', icon: LinkIcon },
     { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'my-panel', label: 'Meu Painel', icon: ShieldCheck },
     { key: 'sgp-repair', label: 'Reparo SGP', icon: Wrench },
@@ -293,6 +301,16 @@ const SuperAdminDashboard = () => {
           {activeTab === 'financial' && <FinancialTab companies={companies} />}
           {activeTab === 'indoor' && <IndoorTab companies={companies} />}
           {activeTab === 'my-panel' && <MyOperationalPanelTab onOpen={openOperationalPanel} onGoToSettings={() => setActiveTab('settings')} />}
+          {activeTab === 'sa-atendimentos' && (
+            <div data-testid="sa-atendimentos-panel" className="-mx-4 lg:-mx-8 -my-4 lg:-my-8 h-[calc(100vh-72px)]">
+              <AtendimentosPage />
+            </div>
+          )}
+          {activeTab === 'sa-conexoes' && (
+            <div data-testid="sa-conexoes-panel">
+              <ConexoesPage />
+            </div>
+          )}
           {activeTab === 'sgp-repair' && <SgpRepairTab companies={companies} />}
           {activeTab === 'settings' && <SettingsTab companies={companies} />}
         </div>
@@ -2239,6 +2257,9 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     billing_cycle: company?.billing_cycle || 'monthly',
     installments: company?.installments ?? 1,
     grace_days: company?.grace_days ?? 5,
+    // 2026-02-16 (J) — Recurring billing reminder fields.
+    first_due_date: company?.first_due_date || '',
+    billing_reminder_message: company?.billing_reminder_message || '',
   });
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
@@ -2295,6 +2316,8 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         billing_cycle: form.billing_cycle || null,
         installments: form.installments === '' ? null : Number(form.installments),
         grace_days: form.grace_days === '' ? null : Number(form.grace_days),
+        first_due_date: form.first_due_date || null,
+        billing_reminder_message: form.billing_reminder_message || null,
       };
       if (isEditing) {
         await superAdminAPI.updateCompany(company.id, {
@@ -2592,6 +2615,49 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
                 <input type="number" min="0" value={form.grace_days}
                   onChange={e => setForm({...form, grace_days: e.target.value})}
                   className="input-field text-sm" data-testid="company-grace-days" />
+              </div>
+            </div>
+
+            {/* 2026-02-16 (J) — Lembrete recorrente: 1a parcela + mensagem custom.
+                Scheduler cria cada Lancamento 10 dias antes do vencimento e
+                envia este texto via WhatsApp da conexao do Super Admin. */}
+            <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-indigo-600" />
+                <p className="text-sm font-semibold text-indigo-900">Lembrete de cobranca (WhatsApp)</p>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                O sistema cria automaticamente cada parcela <strong>10 dias antes</strong> do vencimento
+                e envia um lembrete pelo WhatsApp da conexao do Super Admin (configure em <em>Conexoes</em>).
+              </p>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Data do 1o vencimento</label>
+                <input
+                  type="date"
+                  value={form.first_due_date || ''}
+                  onChange={e => setForm({...form, first_due_date: e.target.value})}
+                  className="input-field text-sm w-full sm:w-56"
+                  data-testid="company-first-due-date"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Mensagem do lembrete</label>
+                <textarea
+                  rows={3}
+                  maxLength={2000}
+                  value={form.billing_reminder_message || ''}
+                  onChange={e => setForm({...form, billing_reminder_message: e.target.value})}
+                  placeholder={'Ola {{nome}}! Sua mensalidade de R$ {{valor}} vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame.'}
+                  className="input-field text-sm w-full font-mono"
+                  data-testid="company-billing-reminder-message"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Variaveis: <code className="px-1 bg-slate-100 rounded">{'{{nome}}'}</code>,
+                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{empresa}}'}</code>,
+                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{valor}}'}</code>,
+                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{vencimento}}'}</code>,
+                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{parcela}}'}</code>.
+                </p>
               </div>
             </div>
           </div>

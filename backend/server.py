@@ -428,6 +428,44 @@ async def backfill_ticket_client_links(db):
         logger.info(f"Backfilled client_id on {linked} tickets")
 
 
+SA_SYSTEM_COMPANY_ID = "_super_admin_system_"
+
+
+async def _ensure_super_admin_system_company(db):
+    """Idempotently create a pseudo-tenant company that owns the Super
+    Admin's operational data (WhatsApp connections, atendimentos used to
+    send billing reminders to client companies). 2026-02-16 (J).
+
+    All Super Admin users have their `user.company_id` re-mapped to this
+    id in `auth.get_current_user`, so the existing tenant routes work
+    uniformly without role-aware branching.
+    """
+    existing = await db.companies.find_one(
+        {"id": SA_SYSTEM_COMPANY_ID}, {"_id": 0, "id": 1}
+    )
+    if existing:
+        return
+    from datetime import datetime, timezone
+    await db.companies.insert_one({
+        "id": SA_SYSTEM_COMPANY_ID,
+        "name": "Super Admin (Sistema)",
+        "cnpj": "",
+        "email": "system@noreply-agentcrm.com",
+        "phone": "",
+        "status": "active",
+        "plan_type": "both",
+        "business_type_id": None,
+        "is_super_admin_system": True,
+        "features": [],
+        "mobile_bottom_nav": [],
+        "subdomain": "_super_admin_system_",
+        "max_connections": None,
+        "max_users": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    logger.info(f"Seeded Super Admin system company id={SA_SYSTEM_COMPANY_ID}")
+
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting AgentCRM & Booking System...")
@@ -438,6 +476,7 @@ async def startup_event():
     await backfill_ticket_numbers(db)
     await backfill_feature_keys(db)
     await backfill_ticket_client_links(db)
+    await _ensure_super_admin_system_company(db)
     init_object_storage()
     await ensure_wa_cache_indexes(db)
     # Start WhatsApp keep-alive background loop (Render free tier wake-up)
