@@ -4,8 +4,24 @@ import api from '../../services/api';
 import {
   Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
   CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent, Building, Pencil,
-  Send, History,
+  Send, History, ChevronDown, ChevronUp, Calendar as CalendarIcon,
 } from 'lucide-react';
+
+// Returns YYYY-MM for today (used as default month filter). 2026-02-16 (M).
+const _currentMonth = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+// Returns [start, end) date strings (YYYY-MM-DD) for a given YYYY-MM month.
+const _monthRange = (yyyymm) => {
+  if (!yyyymm) return ['', ''];
+  const [y, m] = yyyymm.split('-').map(Number);
+  const start = `${y}-${String(m).padStart(2, '0')}-01`;
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  const end = `${ny}-${String(nm).padStart(2, '0')}-01`;
+  return [start, end];
+};
 
 const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
 
@@ -30,13 +46,46 @@ const labelForMethod = (m) => (PAYMENT_METHODS.find(x => x.value === m)?.label |
  */
 export const AdmLancamentosPanel = () => {
   const [items, setItems] = useState([]);
+  const [companies, setCompanies] = useState([]);  // {id, name} list, 2026-02-16 (M)
   const [summary, setSummary] = useState(null);
-  const [filters, setFilters] = useState({ direction: '', status: '', kind: '' });
+  // 2026-02-16 (M) — defaults: direction=entrada, status=pendente (Em aberto),
+  // month = current. "Todas direcoes" foi removida do menu (so Entrada/Saida).
+  const [filters, setFilters] = useState({
+    direction: 'entrada',
+    status: 'pendente',
+    kind: '',
+    month: _currentMonth(),
+  });
   const [showForm, setShowForm] = useState(false);
   const [editingTxn, setEditingTxn] = useState(null);
   // 2026-02-16 (L) — historico de lembretes por txn (modal).
   const [historyTxn, setHistoryTxn] = useState(null);
   const [resending, setResending] = useState(null);
+  // 2026-02-16 (M) — controle de expansao por linha (mobile/desktop).
+  const [expandedIds, setExpandedIds] = useState(new Set());
+  const toggleExpand = (id) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Lookup: company_id -> { name, representante } so we can show the real
+  // company name as the primary column instead of an opaque id slice.
+  const companyMap = React.useMemo(() => {
+    const m = {};
+    for (const c of companies) m[c.id] = c;
+    return m;
+  }, [companies]);
+  const empresaName = useCallback((t) => {
+    if (t.external_client_name) return t.external_client_name;
+    if (t.company_id && companyMap[t.company_id]) {
+      return companyMap[t.company_id].name || t.company_id.slice(0, 8);
+    }
+    if (t.company_id) return t.company_id.slice(0, 8);
+    return '—';
+  }, [companyMap]);
 
   const resendReminder = async (txnId) => {
     setResending(txnId);
@@ -54,9 +103,19 @@ export const AdmLancamentosPanel = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      const [startDate, endDate] = _monthRange(filters.month);
+      const params = {
+        direction: filters.direction || undefined,
+        status: filters.status || undefined,
+        kind: filters.kind || undefined,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+      };
       const [tx, sm] = await Promise.all([
-        api.get('/super-admin/finance/transactions', { params: filters }),
-        api.get('/super-admin/finance/summary'),
+        api.get('/super-admin/finance/transactions', { params }),
+        api.get('/super-admin/finance/summary', {
+          params: { start_date: startDate || undefined, end_date: endDate || undefined },
+        }),
       ]);
       setItems(tx.data || []);
       setSummary(sm.data || null);
@@ -67,6 +126,18 @@ export const AdmLancamentosPanel = () => {
     }
   }, [filters]);
   useEffect(() => { load(); }, [load]);
+
+  // Load company list once for the empresa-name lookup. We rely on the SA
+  // companies endpoint which is paginated; pull a big page (sufficient
+  // for any realistic SaaS tenant count).
+  useEffect(() => {
+    api.get('/super-admin/companies', { params: { limit: 1000 } })
+      .then(r => {
+        const list = Array.isArray(r.data) ? r.data : (r.data?.items || r.data?.companies || []);
+        setCompanies(list);
+      })
+      .catch(() => setCompanies([]));
+  }, []);
 
   const handleDelete = async (id) => {
     if (!window.confirm('Excluir este lancamento? A acao nao pode ser desfeita.')) return;
@@ -107,30 +178,42 @@ export const AdmLancamentosPanel = () => {
 
   return (
     <div className="space-y-4" data-testid="adm-lancamentos-panel">
-      {/* Hero metrics */}
+      {/* Hero metrics — 2026-02-16 (M) — totais agora refletem o filtro
+          aplicado (mes corrente por default). Substituido "Liquido" por
+          "Em aberto" para deixar mais explicito o pipeline financeiro. */}
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
         <MetricCard label="Entradas pagas" value={fmt(summary?.bruto)} icon={TrendingUp} color="emerald" />
+        <MetricCard label="Em aberto" value={fmt(summary?.pendente_entrada)} icon={Clock} color="amber" />
         <MetricCard label="Saidas pagas" value={fmt(summary?.saidas)} icon={TrendingDown} color="rose" />
         <MetricCard label="Liquido" value={fmt(summary?.liquido)} icon={CheckCircle2} color={(summary?.liquido || 0) >= 0 ? 'emerald' : 'rose'} />
-        <MetricCard label="Pendente (entradas)" value={fmt(summary?.pendente_entrada)} icon={Clock} color="amber" />
       </div>
 
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-stretch sm:items-center gap-2">
+      {/* Toolbar — 2026-02-16 (M) — filtro de mes inline, defaults setados,
+          "Todas direcoes" removido (so Entrada/Saida). */}
+      <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap items-stretch sm:items-center gap-2">
+        <div className="flex items-center gap-1.5 text-slate-600 px-1">
+          <CalendarIcon className="w-4 h-4" />
+          <input
+            type="month"
+            value={filters.month}
+            onChange={(e) => setFilters({ ...filters, month: e.target.value || _currentMonth() })}
+            className="px-2 py-1.5 border border-slate-300 rounded text-sm font-mono"
+            data-testid="adm-filter-month"
+          />
+        </div>
         <select
           value={filters.direction}
           onChange={(e) => setFilters({ ...filters, direction: e.target.value })}
-          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[140px] sm:flex-none"
+          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[120px] sm:flex-none"
           data-testid="adm-filter-direction"
         >
-          <option value="">Todas direcoes</option>
           <option value="entrada">Entradas</option>
           <option value="saida">Saidas</option>
         </select>
         <select
           value={filters.status}
           onChange={(e) => setFilters({ ...filters, status: e.target.value })}
-          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[140px] sm:flex-none"
+          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[120px] sm:flex-none"
           data-testid="adm-filter-status"
         >
           <option value="">Todos pagamentos</option>
@@ -140,7 +223,7 @@ export const AdmLancamentosPanel = () => {
         <select
           value={filters.kind}
           onChange={(e) => setFilters({ ...filters, kind: e.target.value })}
-          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[140px] sm:flex-none"
+          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[120px] sm:flex-none"
           data-testid="adm-filter-kind"
         >
           <option value="">Todos tipos</option>
@@ -159,16 +242,18 @@ export const AdmLancamentosPanel = () => {
         </button>
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      {/* === DESKTOP TABLE (sm and up) ===========================
+          2026-02-16 (M) — Cliente/Empresa virou a 1a coluna; restante
+          das infos ainda visivel em desktop. */}
+      <div className="hidden sm:block bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider">
               <tr>
+                <th className="px-3 py-2 text-left">Cliente / Empresa</th>
                 <th className="px-3 py-2 text-left">Data</th>
                 <th className="px-3 py-2 text-left">Tipo</th>
                 <th className="px-3 py-2 text-left">Descricao</th>
-                <th className="px-3 py-2 text-left">Categoria</th>
                 <th className="px-3 py-2 text-right">Valor</th>
                 <th className="px-3 py-2 text-center">Pagamento</th>
                 <th className="px-3 py-2"></th>
@@ -183,7 +268,15 @@ export const AdmLancamentosPanel = () => {
                 const overdue = t.late_fee_computed && t.late_fee_computed.days_overdue > 0;
                 return (
                   <tr key={t.id} data-testid={`adm-txn-row-${t.id}`} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 text-slate-700 font-mono text-xs">{(t.due_date || t.date || '').slice(0,10)}</td>
+                    <td className="px-3 py-2">
+                      <div className="font-semibold text-slate-900">{empresaName(t)}</div>
+                      {t.license_connections !== undefined && t.license_connections !== null && (
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {t.license_connections}c · {t.license_users || 0}u
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-slate-700 font-mono text-xs whitespace-nowrap">{(t.due_date || t.date || '').slice(0,10)}</td>
                     <td className="px-3 py-2">
                       {t.kind === 'licenca' ? (
                         <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded font-medium">
@@ -194,18 +287,7 @@ export const AdmLancamentosPanel = () => {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <div className="font-medium text-slate-800">{t.description}</div>
-                      {(t.company_id || t.external_client_name) && (
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          Cliente: {t.external_client_name || t.company_id?.slice(0, 8)}
-                          {t.license_connections !== undefined && t.license_connections !== null && (
-                            <> · {t.license_connections}c</>
-                          )}
-                          {t.license_users !== undefined && t.license_users !== null && (
-                            <> · {t.license_users}u</>
-                          )}
-                        </div>
-                      )}
+                      <div className="text-slate-700 line-clamp-1">{t.description}</div>
                       <div className="flex items-center gap-2 mt-0.5">
                         {t.recurrence_group_id && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded font-medium">
@@ -219,86 +301,32 @@ export const AdmLancamentosPanel = () => {
                         )}
                         {overdue && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-rose-50 text-rose-700 rounded font-medium">
-                            <AlertTriangle className="w-3 h-3" /> +{t.late_fee_computed.days_overdue}d · {fmt(t.late_fee_computed.total)}
+                            <AlertTriangle className="w-3 h-3" /> +{t.late_fee_computed.days_overdue}d
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2 text-slate-500">{t.category || '—'}</td>
-                    <td className={`px-3 py-2 text-right font-semibold ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
                       {isOut ? '−' : '+'} {fmt(t.amount)}
                       {overdue && (
-                        <div className="text-[10px] text-slate-500 font-normal">Devido: {fmt(t.late_fee_computed.valor_devido)}</div>
+                        <div className="text-[10px] text-slate-500 font-normal">Devido: {fmt(t.late_fee_computed.total)}</div>
                       )}
                     </td>
-                    {/* Pagamento unificado — quando 'Aberto' o operador clica
-                        em Pix/Boleto/Dinheiro pra dar baixa direto. Quando ja
-                        pago, mostra o metodo com check verde. 2026-02-15 (E). */}
                     <td className="px-3 py-2 text-center">
-                      {t.status === 'pago' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-medium" data-testid={`adm-paid-${t.id}`}>
-                          <CheckCircle2 className="w-3 h-3" /> {labelForMethod(t.payment_method)}
-                        </span>
-                      ) : (
-                        <div className="inline-flex items-center gap-1" data-testid={`adm-open-${t.id}`}>
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-semibold uppercase">
-                            <Clock className="w-3 h-3" /> Aberto
-                          </span>
-                          {PAYMENT_METHODS.map(pm => (
-                            <button
-                              key={pm.value}
-                              onClick={() => handlePayWithMethod(t.id, pm.value)}
-                              className="text-[10px] px-1.5 py-0.5 rounded border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 transition-colors"
-                              title={`Baixar como ${pm.label}`}
-                              data-testid={`adm-pay-${pm.value}-${t.id}`}
-                            >
-                              {pm.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      <PaymentCell
+                        t={t}
+                        onPay={handlePayWithMethod}
+                      />
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <div className="inline-flex items-center gap-1">
-                        {/* 2026-02-16 (L) — apenas para Licenca pendente. */}
-                        {t.kind === 'licenca' && t.status !== 'pago' && t.company_id && (
-                          <>
-                            <button
-                              onClick={() => resendReminder(t.id)}
-                              disabled={resending === t.id}
-                              className="p-1.5 hover:bg-emerald-50 rounded text-emerald-600 disabled:opacity-50"
-                              title="Reenviar lembrete de cobranca"
-                              data-testid={`adm-resend-${t.id}`}
-                            >
-                              <Send className={`w-4 h-4 ${resending === t.id ? 'animate-pulse' : ''}`} />
-                            </button>
-                            <button
-                              onClick={() => setHistoryTxn(t)}
-                              className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
-                              title="Historico de lembretes"
-                              data-testid={`adm-history-${t.id}`}
-                            >
-                              <History className="w-4 h-4" />
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => { setEditingTxn(t); setShowForm(true); }}
-                          className="p-1.5 hover:bg-indigo-50 rounded text-indigo-600"
-                          title="Editar"
-                          data-testid={`adm-edit-${t.id}`}
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(t.id)}
-                          className="p-1.5 hover:bg-rose-50 rounded text-rose-500"
-                          title="Excluir"
-                          data-testid={`adm-delete-${t.id}`}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                      <RowActions
+                        t={t}
+                        resending={resending}
+                        onResend={resendReminder}
+                        onHistory={setHistoryTxn}
+                        onEdit={(tx) => { setEditingTxn(tx); setShowForm(true); }}
+                        onDelete={handleDelete}
+                      />
                     </td>
                   </tr>
                 );
@@ -306,6 +334,107 @@ export const AdmLancamentosPanel = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* === MOBILE CARD LIST (below sm) =========================
+          2026-02-16 (M) — Apenas Empresa/Valor/Pagamento visiveis. Restante
+          em card expansivel via chevron. */}
+      <div className="sm:hidden space-y-2">
+        {items.length === 0 && (
+          <div className="bg-white rounded-xl border border-slate-200 py-10 text-center text-sm text-slate-400">
+            Nenhum lancamento encontrado.
+          </div>
+        )}
+        {items.map(t => {
+          const isOut = t.direction === 'saida';
+          const overdue = t.late_fee_computed && t.late_fee_computed.days_overdue > 0;
+          const expanded = expandedIds.has(t.id);
+          return (
+            <div
+              key={t.id}
+              className="bg-white rounded-xl border border-slate-200 overflow-hidden"
+              data-testid={`adm-txn-card-${t.id}`}
+            >
+              <button
+                onClick={() => toggleExpand(t.id)}
+                className="w-full p-3 flex items-center gap-3 text-left active:bg-slate-50"
+                data-testid={`adm-txn-card-toggle-${t.id}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-slate-900 truncate">{empresaName(t)}</div>
+                  <div className={`text-sm font-bold mt-0.5 ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {isOut ? '−' : '+'} {fmt(t.amount)}
+                    {overdue && (
+                      <span className="ml-2 text-[10px] font-normal text-slate-500">→ {fmt(t.late_fee_computed.total)}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1.5">
+                  <MobilePaymentBadge t={t} />
+                  <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                </div>
+              </button>
+              {expanded && (
+                <div className="border-t border-slate-100 p-3 bg-slate-50/40 space-y-2 text-xs" data-testid={`adm-txn-card-expanded-${t.id}`}>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Data</div>
+                      <div className="text-slate-700 font-mono">{(t.due_date || t.date || '').slice(0,10)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Tipo</div>
+                      <div>
+                        {t.kind === 'licenca' ? (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded font-medium">
+                            <Building className="w-3 h-3" /> Licenca
+                          </span>
+                        ) : (
+                          <span className="inline-block text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-medium">Diversos</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Descricao</div>
+                    <div className="text-slate-700">{t.description}</div>
+                  </div>
+                  {overdue && (
+                    <div className="flex items-center gap-1 text-rose-700 text-[11px] font-medium">
+                      <AlertTriangle className="w-3 h-3" /> Atrasado {t.late_fee_computed.days_overdue}d · Devido {fmt(t.late_fee_computed.total)}
+                    </div>
+                  )}
+                  {/* Mobile actions row — paga/edit/delete/lembrete */}
+                  <div className="pt-1 border-t border-slate-200">
+                    {t.status !== 'pago' && (
+                      <div className="flex gap-1.5 mb-2">
+                        {PAYMENT_METHODS.map(pm => (
+                          <button
+                            key={pm.value}
+                            onClick={() => handlePayWithMethod(t.id, pm.value)}
+                            className="flex-1 text-[11px] py-1.5 rounded border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 font-medium"
+                            data-testid={`adm-pay-${pm.value}-${t.id}`}
+                          >
+                            Pagar {pm.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-end">
+                      <RowActions
+                        t={t}
+                        resending={resending}
+                        onResend={resendReminder}
+                        onHistory={setHistoryTxn}
+                        onEdit={(tx) => { setEditingTxn(tx); setShowForm(true); }}
+                        onDelete={handleDelete}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {showForm && <AdmTxnFormModal initial={editingTxn} onClose={() => { setShowForm(false); setEditingTxn(null); }} onSaved={() => { setShowForm(false); setEditingTxn(null); load(); }} />}
@@ -319,6 +448,101 @@ export const AdmLancamentosPanel = () => {
     </div>
   );
 };
+
+
+// 2026-02-16 (M) — Helpers compartilhados pela tabela desktop e cards mobile.
+
+// PaymentCell — exibe metodo de baixa OU os 3 botoes Pix/Boleto/Dinheiro
+// quando ainda esta em aberto. Usado apenas em desktop (mobile tem botoes
+// inline no expand).
+const PaymentCell = ({ t, onPay }) => {
+  if (t.status === 'pago') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-medium" data-testid={`adm-paid-${t.id}`}>
+        <CheckCircle2 className="w-3 h-3" /> {labelForMethod(t.payment_method)}
+      </span>
+    );
+  }
+  return (
+    <div className="inline-flex items-center gap-1" data-testid={`adm-open-${t.id}`}>
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-semibold uppercase">
+        <Clock className="w-3 h-3" /> Aberto
+      </span>
+      {PAYMENT_METHODS.map(pm => (
+        <button
+          key={pm.value}
+          onClick={() => onPay(t.id, pm.value)}
+          className="text-[10px] px-1.5 py-0.5 rounded border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 transition-colors"
+          title={`Baixar como ${pm.label}`}
+          data-testid={`adm-pay-${pm.value}-${t.id}`}
+        >
+          {pm.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+// MobilePaymentBadge — versao compacta sem botoes. Os botoes sao mostrados
+// dentro do card expandido.
+const MobilePaymentBadge = ({ t }) => {
+  if (t.status === 'pago') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-[10px] font-semibold">
+        <CheckCircle2 className="w-3 h-3" /> {labelForMethod(t.payment_method)}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-semibold uppercase">
+      <Clock className="w-3 h-3" /> Aberto
+    </span>
+  );
+};
+
+// RowActions — botoes de Send/History (apenas Licenca pendente) + Edit + Delete.
+const RowActions = ({ t, resending, onResend, onHistory, onEdit, onDelete }) => (
+  <div className="inline-flex items-center gap-1">
+    {t.kind === 'licenca' && t.status !== 'pago' && t.company_id && (
+      <>
+        <button
+          onClick={() => onResend(t.id)}
+          disabled={resending === t.id}
+          className="p-1.5 hover:bg-emerald-50 rounded text-emerald-600 disabled:opacity-50"
+          title="Reenviar lembrete de cobranca"
+          data-testid={`adm-resend-${t.id}`}
+        >
+          <Send className={`w-4 h-4 ${resending === t.id ? 'animate-pulse' : ''}`} />
+        </button>
+        <button
+          onClick={() => onHistory(t)}
+          className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
+          title="Historico de lembretes"
+          data-testid={`adm-history-${t.id}`}
+        >
+          <History className="w-4 h-4" />
+        </button>
+      </>
+    )}
+    <button
+      onClick={() => onEdit(t)}
+      className="p-1.5 hover:bg-indigo-50 rounded text-indigo-600"
+      title="Editar"
+      data-testid={`adm-edit-${t.id}`}
+    >
+      <Pencil className="w-4 h-4" />
+    </button>
+    <button
+      onClick={() => onDelete(t.id)}
+      className="p-1.5 hover:bg-rose-50 rounded text-rose-500"
+      title="Excluir"
+      data-testid={`adm-delete-${t.id}`}
+    >
+      <Trash2 className="w-4 h-4" />
+    </button>
+  </div>
+);
+
 
 const MetricCard = ({ label, value, icon: Icon, color }) => {
   const colors = {

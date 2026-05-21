@@ -10,6 +10,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-16 (M) — Financeiro Admin: cards expansiveis mobile + defaults + Cliente como 1a coluna ✅
+
+**Pedido do usuario:**
+- Mobile: somente Empresa, Valor e Pagamento visiveis; restante em **card expansivel**.
+- Desktop: modernizar, mantendo Valor cobrado + Valor atualizado.
+- Cards de totais refletindo valores reais; pre-selecionar **Em aberto** + **Entrada**.
+- Remover opcao "Todas direcoes" da dropdown.
+- Adicionar filtro de **data** com mes atual pre-selecionado.
+- Coluna **Cliente/Empresa** como 1a coluna.
+
+**AdmLancamentosPanel rewrite (2026-02-16 M):**
+- Filtros default: `direction=entrada`, `status=pendente`, `month=YYYY-MM (atual)`. Dropdown "direcao" agora so tem `Entradas/Saidas` (removido "Todas direcoes").
+- Novo filtro de mes (input `type="month"`) integrado a toolbar. Backend ja suporta `start_date`/`end_date` no endpoint `/finance/transactions` e `/finance/summary` — agora frontend deriva `[startISO, endISO)` a partir do YYYY-MM e envia ambos.
+- 4 cards de totais reordenados: **Entradas pagas, Em aberto, Saidas, Liquido**. Todos respeitam o filtro de mes ativo (chamam summary com `start_date/end_date`).
+- Nova coluna **Cliente/Empresa** (1a no desktop, titulo do card no mobile). Lookup feito via `/super-admin/companies?limit=1000` (state `companies` + `companyMap`). Fallback: `external_client_name` ou primeiros 8 chars do `company_id` quando empresa nao existe mais.
+- **Desktop (`hidden sm:block`):** tabela `Cliente/Empresa | Data | Tipo | Descricao | Valor | Pagamento | Acoes`. Sub-componentes `PaymentCell` (Aberto + 3 botoes) e `RowActions` (Send/History/Edit/Delete) extraidos para reuso.
+- **Mobile (`sm:hidden`):** lista de cards. Cabecalho clicavel mostra **Empresa + Valor + badge Aberto/Pago + chevron**. Tap expande para revelar Data, Tipo, Descricao, atrasado (se aplicavel), botoes "Pagar Pix/Boleto/Dinheiro" full-width, e `RowActions`.
+- Idle state empty: card com mensagem "Nenhum lancamento encontrado" em ambos layouts.
+
+**Validacao:**
+- Desktop screenshot: 4 cards corretos, dropdown direction so com 2 opcoes (Entradas/Saidas), month default=`2026-05`, status default=`Em aberto`, primeira coluna="Cliente / Empresa".
+- Mobile (414x896): 18 cards listados, expand do 1o card mostra detalhes + botoes de pagamento + acoes (Reenviar/Historico/Editar/Excluir).
+- Regressao: 12/12 testes iter55+iter56 passando.
+
+**Para producao:** Redeploy. UX:
+1. Ao abrir o Financeiro Admin, o operador ja ve apenas as contas **a receber do mes corrente** (filtro pre-aplicado).
+2. Pode trocar o mes pelo input no canto esquerdo da toolbar.
+3. No mobile, lista enxuta — basta tocar para abrir detalhes/pagar.
+
+
+
 ### 2026-02-16 (L) — Multi-offset reminders + history + resend + representante ✅
 
 **Pedido do usuario:**
