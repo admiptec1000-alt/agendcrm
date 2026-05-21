@@ -53,6 +53,11 @@ const FEATURE_META = {
   usuarios:           { icon: 'UserCog',          label: 'Usuarios', group: 'Administracao' },
   filas_chatbot:      { icon: 'Bot',              label: 'Filas', group: 'CRM' },
   conexoes:           { icon: 'Link',             label: 'Conexoes', group: 'Config Empresa', order: 10 },
+  // 2026-02-16 (K) — Sub-itens de Conexoes (cada um liberado por feature_key).
+  conexoes_canais:        { icon: 'Link',          label: 'Canais', group: 'Config Empresa', order: 11, parent: 'conexoes' },
+  conexoes_templates:     { icon: 'MessageSquare', label: 'Mensagens Modelo', group: 'Config Empresa', order: 12, parent: 'conexoes' },
+  conexoes_notificacoes:  { icon: 'Bell',          label: 'Configuracao de Notificacao', group: 'Config Empresa', order: 13, parent: 'conexoes' },
+  conexoes_cobranca:      { icon: 'Receipt',       label: 'Notificacoes de Cobranca', group: 'Config Empresa', order: 14, parent: 'conexoes' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
   agenda:             { icon: 'CalendarCheck',    label: 'Agenda', group: 'Operacional' },
@@ -673,6 +678,11 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'parceiros': return <PartnerPage />;
     case 'agente_ia': return <AIPage />;
     case 'conexoes': return <ConexoesPage />;
+    // 2026-02-16 (K) — Sub-menus de Conexoes.
+    case 'conexoes_canais': return <ConexoesPage initialTab="conexoes" hideTabs />;
+    case 'conexoes_templates': return <ConexoesPage initialTab="templates" hideTabs />;
+    case 'conexoes_notificacoes': return <ConexoesPage initialTab="notificacoes" hideTabs />;
+    case 'conexoes_cobranca': return <TenantBillingReminderInfoPanel />;
     case 'filas_chatbot': return <QueuesPage />;
     case 'calendario': return <CalendarPageFull />;
     case 'agenda': return <AgendaPage />;
@@ -3393,7 +3403,7 @@ const PROCESS_TYPES = [
 
 const VARIABLES = ['{nome}', '{servico}', '{data}', '{hora}', '{profissional}', '{empresa}', '{valor}', '{link_confirmar}', '{link_cancelar}', '{link_avaliacao}', '{link_agendar}', '{ultimo_atendimento}', '{dias_sem_voltar}', '{ultimo_servico}', '{aniversario}'];
 
-const ConexoesPage = ({ initialTab = 'conexoes' }) => {
+const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
   const [tab, setTab] = useState(initialTab);
   const [connections, setConnections] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -3526,7 +3536,7 @@ const ConexoesPage = ({ initialTab = 'conexoes' }) => {
         )}
       </div>
 
-      <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1 mb-6 w-fit overflow-x-auto">
+      <div className={`flex items-center gap-2 bg-slate-100 rounded-lg p-1 mb-6 w-fit overflow-x-auto ${hideTabs ? 'hidden' : ''}`}>
         <button onClick={() => setTab('conexoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='conexoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-conexoes">Canais</button>
         <button onClick={() => setTab('templates')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='templates'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-templates">Mensagens Modelo</button>
         <button onClick={() => setTab('notificacoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='notificacoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-notificacoes">Configuracao de Notificacao</button>
@@ -7150,3 +7160,18 @@ export default CompanyDashboard;
 // so the same UI works for managing the SA's own WhatsApp connection
 // used for billing reminders).
 export { ConexoesPage };
+
+// 2026-02-16 (K) — Tenant-side info panel for "Notificacoes de Cobranca".
+// The global config is owned by the Super Admin; tenants only see a
+// read-only explanation since they cannot edit the platform-wide schedule.
+const TenantBillingReminderInfoPanel = () => (
+  <div className="animate-fade-in max-w-2xl" data-testid="tenant-billing-reminder-info">
+    <div className="card text-center py-12">
+      <p className="text-slate-600">
+        Os lembretes de cobranca recorrentes desta plataforma sao configurados
+        centralmente pelo Super Admin. Acesse pelo painel do Super Admin em
+        <em> Conexoes → Notificacoes de Cobranca</em>.
+      </p>
+    </div>
+  </div>
+);

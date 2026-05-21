@@ -13,7 +13,7 @@ import {
   Columns3, Calendar, CalendarCheck, CalendarDays, Tag, Zap,
   Megaphone, UserCog, Shield, FileText, LifeBuoy, Puzzle,
   PlugZap, FolderOpen, CreditCard, Clock, PieChart, LayoutDashboard,
-  MessageSquare, UserCheck
+  MessageSquare, UserCheck, Bell
 } from 'lucide-react';
 import SgpRepairTab from './SgpRepairTab';
 import { AdmLancamentosPanel } from './AdmLancamentosPanel';
@@ -24,6 +24,7 @@ import { EditableComboBox } from '../../components/EditableComboBox';
 // auto-injected by auth.py). Reuse the tenant ConexoesPage + AtendimentosPage.
 import { ConexoesPage } from '../Company/Dashboard';
 import AtendimentosPage from '../CRM/AtendimentosPage';
+import BillingReminderPanel from '../../components/BillingReminderPanel';
 
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
@@ -120,7 +121,17 @@ const SuperAdminDashboard = () => {
     // 2026-02-16 (J) — Atendimento + Conexao para o SA (usados para
     // enviar lembretes de cobranca via WhatsApp).
     { key: 'sa-atendimentos', label: 'Atendimentos', icon: Headphones },
-    { key: 'sa-conexoes', label: 'Conexoes', icon: LinkIcon },
+    // 2026-02-16 (K) — Conexoes vira parent expansivel com 4 sub-itens.
+    // Parent nao tem rota propria (collapsible only).
+    {
+      key: 'sa-conexoes', label: 'Conexoes', icon: LinkIcon, isGroup: true,
+      children: [
+        { key: 'sa-conexoes-canais', label: 'Canais', icon: LinkIcon },
+        { key: 'sa-conexoes-templates', label: 'Mensagens Modelo', icon: MessageSquare },
+        { key: 'sa-conexoes-notificacoes', label: 'Configuracao de Notificacao', icon: Bell },
+        { key: 'sa-conexoes-cobranca', label: 'Notificacoes de Cobranca', icon: Receipt },
+      ],
+    },
     { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'my-panel', label: 'Meu Painel', icon: ShieldCheck },
     { key: 'sgp-repair', label: 'Reparo SGP', icon: Wrench },
@@ -144,11 +155,30 @@ const SuperAdminDashboard = () => {
     saFeatures.map(f => [f.feature_key, !!f.enabled])
   );
   const ALWAYS_VISIBLE = new Set(['business-types', 'settings']);
-  const sidebarItems = saFeatures.length > 0
+  // Group children visibility follows the SAME feature-flag rules as parents.
+  const filterChildren = (children) =>
+    (children || []).filter(c =>
+      ALWAYS_VISIBLE.has(c.key) || featureMap[c.key] !== false
+    );
+  const sidebarItems = (saFeatures.length > 0
     ? allSidebarItems.filter(i =>
         ALWAYS_VISIBLE.has(i.key) || featureMap[i.key] !== false
       )
-    : allSidebarItems;
+    : allSidebarItems
+  ).map(i =>
+    i.isGroup ? { ...i, children: filterChildren(i.children) } : i
+  ).filter(i => !i.isGroup || (i.children && i.children.length > 0));
+
+  // Track which collapsible groups are open. Auto-open the group that
+  // contains the currently active tab.
+  const [openGroups, setOpenGroups] = useState({});
+  useEffect(() => {
+    const parent = allSidebarItems.find(it => it.isGroup && (it.children || []).some(c => c.key === activeTab));
+    if (parent && !openGroups[parent.key]) {
+      setOpenGroups(prev => ({ ...prev, [parent.key]: true }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const openOperationalPanel = async () => {
     try {
@@ -194,21 +224,63 @@ const SuperAdminDashboard = () => {
           </button>
         </div>
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {sidebarItems.map(item => (
-            <button
-              key={item.key}
-              onClick={() => { setActiveTab(item.key); setMobileSidebarOpen(false); }}
-              data-testid={`sidebar-${item.key}`}
-              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === item.key
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <item.icon className="w-5 h-5" />
-              {item.label}
-            </button>
-          ))}
+          {sidebarItems.map(item => {
+            if (item.isGroup) {
+              const isOpen = !!openGroups[item.key];
+              const hasActiveChild = (item.children || []).some(c => c.key === activeTab);
+              return (
+                <div key={item.key}>
+                  <button
+                    onClick={() => setOpenGroups(prev => ({ ...prev, [item.key]: !prev[item.key] }))}
+                    data-testid={`sidebar-group-${item.key}`}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                      hasActiveChild
+                        ? 'bg-primary/5 text-primary'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`}
+                  >
+                    <item.icon className="w-5 h-5" />
+                    <span className="flex-1 text-left">{item.label}</span>
+                    <ChevronRight className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                  </button>
+                  {isOpen && (
+                    <div className="ml-3 mt-1 space-y-1 border-l border-slate-200 pl-3">
+                      {(item.children || []).map(child => (
+                        <button
+                          key={child.key}
+                          onClick={() => { setActiveTab(child.key); setMobileSidebarOpen(false); }}
+                          data-testid={`sidebar-${child.key}`}
+                          className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                            activeTab === child.key
+                              ? 'bg-primary/10 text-primary'
+                              : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
+                          }`}
+                        >
+                          <child.icon className="w-4 h-4 shrink-0" />
+                          <span className="truncate">{child.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={item.key}
+                onClick={() => { setActiveTab(item.key); setMobileSidebarOpen(false); }}
+                data-testid={`sidebar-${item.key}`}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  activeTab === item.key
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                <item.icon className="w-5 h-5" />
+                {item.label}
+              </button>
+            );
+          })}
         </nav>
         <div className="p-4 border-t border-slate-200">
           <div className="flex items-center gap-3 mb-3">
@@ -233,7 +305,10 @@ const SuperAdminDashboard = () => {
             <Menu className="w-5 h-5 text-slate-600" />
           </button>
           <h2 className="text-lg font-bold font-heading text-slate-900">
-            {sidebarItems.find(i => i.key === activeTab)?.label || 'Dashboard'}
+            {(() => {
+              const flat = sidebarItems.flatMap(i => i.isGroup ? (i.children || []) : [i]);
+              return flat.find(i => i.key === activeTab)?.label || 'Dashboard';
+            })()}
           </h2>
         </header>
 
@@ -306,9 +381,24 @@ const SuperAdminDashboard = () => {
               <AtendimentosPage />
             </div>
           )}
-          {activeTab === 'sa-conexoes' && (
-            <div data-testid="sa-conexoes-panel">
-              <ConexoesPage />
+          {activeTab === 'sa-conexoes-canais' && (
+            <div data-testid="sa-conexoes-canais-panel">
+              <ConexoesPage initialTab="conexoes" hideTabs />
+            </div>
+          )}
+          {activeTab === 'sa-conexoes-templates' && (
+            <div data-testid="sa-conexoes-templates-panel">
+              <ConexoesPage initialTab="templates" hideTabs />
+            </div>
+          )}
+          {activeTab === 'sa-conexoes-notificacoes' && (
+            <div data-testid="sa-conexoes-notificacoes-panel">
+              <ConexoesPage initialTab="notificacoes" hideTabs />
+            </div>
+          )}
+          {activeTab === 'sa-conexoes-cobranca' && (
+            <div data-testid="sa-conexoes-cobranca-panel">
+              <BillingReminderPanel />
             </div>
           )}
           {activeTab === 'sgp-repair' && <SgpRepairTab companies={companies} />}
@@ -2257,9 +2347,8 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     billing_cycle: company?.billing_cycle || 'monthly',
     installments: company?.installments ?? 1,
     grace_days: company?.grace_days ?? 5,
-    // 2026-02-16 (J) — Recurring billing reminder fields.
+    // 2026-02-16 (K) — Data do 1o vencimento (mensagem agora eh global).
     first_due_date: company?.first_due_date || '',
-    billing_reminder_message: company?.billing_reminder_message || '',
   });
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
@@ -2317,7 +2406,6 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         installments: form.installments === '' ? null : Number(form.installments),
         grace_days: form.grace_days === '' ? null : Number(form.grace_days),
         first_due_date: form.first_due_date || null,
-        billing_reminder_message: form.billing_reminder_message || null,
       };
       if (isEditing) {
         await superAdminAPI.updateCompany(company.id, {
@@ -2618,47 +2706,22 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               </div>
             </div>
 
-            {/* 2026-02-16 (J) — Lembrete recorrente: 1a parcela + mensagem custom.
-                Scheduler cria cada Lancamento 10 dias antes do vencimento e
-                envia este texto via WhatsApp da conexao do Super Admin. */}
-            <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-indigo-600" />
-                <p className="text-sm font-semibold text-indigo-900">Lembrete de cobranca (WhatsApp)</p>
-              </div>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                O sistema cria automaticamente cada parcela <strong>10 dias antes</strong> do vencimento
-                e envia um lembrete pelo WhatsApp da conexao do Super Admin (configure em <em>Conexoes</em>).
+            {/* 2026-02-16 (K) — data do 1o vencimento mantida em campo simples.
+                A mensagem e o canal de lembrete sao GLOBAIS (gerenciados em
+                Conexoes → Notificacoes de Cobranca). */}
+            <div className="mt-4">
+              <label className="block text-xs font-medium text-slate-600 mb-1">Data do 1o vencimento</label>
+              <input
+                type="date"
+                value={form.first_due_date || ''}
+                onChange={e => setForm({...form, first_due_date: e.target.value})}
+                className="input-field text-sm w-full sm:w-60"
+                data-testid="company-first-due-date"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Base para calcular as parcelas. Os lembretes sao enviados automaticamente
+                segundo a configuracao global em <em>Conexoes → Notificacoes de Cobranca</em>.
               </p>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Data do 1o vencimento</label>
-                <input
-                  type="date"
-                  value={form.first_due_date || ''}
-                  onChange={e => setForm({...form, first_due_date: e.target.value})}
-                  className="input-field text-sm w-full sm:w-56"
-                  data-testid="company-first-due-date"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Mensagem do lembrete</label>
-                <textarea
-                  rows={3}
-                  maxLength={2000}
-                  value={form.billing_reminder_message || ''}
-                  onChange={e => setForm({...form, billing_reminder_message: e.target.value})}
-                  placeholder={'Ola {{nome}}! Sua mensalidade de R$ {{valor}} vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame.'}
-                  className="input-field text-sm w-full font-mono"
-                  data-testid="company-billing-reminder-message"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Variaveis: <code className="px-1 bg-slate-100 rounded">{'{{nome}}'}</code>,
-                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{empresa}}'}</code>,
-                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{valor}}'}</code>,
-                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{vencimento}}'}</code>,
-                  <code className="ml-1 px-1 bg-slate-100 rounded">{'{{parcela}}'}</code>.
-                </p>
-              </div>
             </div>
           </div>
 

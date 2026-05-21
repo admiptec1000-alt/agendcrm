@@ -1126,6 +1126,11 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "filas_chatbot", "label": "Filas & Chatbot", "category": "CRM"},
     {"feature_key": "agente_ia", "label": "Agente de IA", "category": "CRM"},
     {"feature_key": "conexoes", "label": "Conexoes", "category": "CRM"},
+    # 2026-02-16 (K) — Sub-menus de Conexoes liberados individualmente.
+    {"feature_key": "conexoes_canais", "label": "Conexoes - Canais", "category": "CRM"},
+    {"feature_key": "conexoes_templates", "label": "Conexoes - Mensagens Modelo", "category": "CRM"},
+    {"feature_key": "conexoes_notificacoes", "label": "Conexoes - Configuracao de Notificacao", "category": "CRM"},
+    {"feature_key": "conexoes_cobranca", "label": "Conexoes - Notificacoes de Cobranca", "category": "CRM"},
     {"feature_key": "sgp_gateway", "label": "SGP Gateway", "category": "CRM"},
     {"feature_key": "integrações", "label": "API e Integracoes", "category": "CRM"},
     {"feature_key": "calendario", "label": "Calendario", "category": "Operacional"},
@@ -1167,6 +1172,14 @@ SUPER_ADMIN_FEATURES = [
     {"feature_key": "my-panel", "label": "Meu Painel", "category": "Super Admin"},
     {"feature_key": "sgp-repair", "label": "Reparo SGP", "category": "Super Admin"},
     {"feature_key": "settings", "label": "Configuracoes", "category": "Super Admin"},
+    # 2026-02-16 (J) — SA owns Atendimentos + Conexoes (system company).
+    {"feature_key": "sa-atendimentos", "label": "Atendimentos (SA)", "category": "Super Admin"},
+    {"feature_key": "sa-conexoes", "label": "Conexoes (SA)", "category": "Super Admin"},
+    # 2026-02-16 (K) — Sub-menus de Conexoes liberados individualmente.
+    {"feature_key": "sa-conexoes-canais", "label": "Conexoes/Canais (SA)", "category": "Super Admin"},
+    {"feature_key": "sa-conexoes-templates", "label": "Conexoes/Mensagens Modelo (SA)", "category": "Super Admin"},
+    {"feature_key": "sa-conexoes-notificacoes", "label": "Conexoes/Notificacao (SA)", "category": "Super Admin"},
+    {"feature_key": "sa-conexoes-cobranca", "label": "Conexoes/Notificacoes Cobranca (SA)", "category": "Super Admin"},
 ]
 
 @router.get("/all-features")

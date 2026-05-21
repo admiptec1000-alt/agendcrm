@@ -10,7 +10,40 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
-### 2026-02-16 (J) — Cobranca recorrente lazy (10d antes) + SA Atendimento/Conexao ✅
+### 2026-02-16 (K) — Conexoes virou parent expansivel + Notificacoes de Cobranca global ✅
+
+**Pedido do usuario:** Remover as 3 abas internas da pagina Conexoes (tanto SA quanto tenant), transformar em sub-itens da sidebar. Criar uma 4a sub-aba "Notificacoes de Cobranca" para configurar globalmente o lembrete (dias antes do vencimento + mensagem + canal). Remover o bloco de lembrete que estava dentro do cadastro da Empresa.
+
+**Decisoes:** 1a (parent expansivel), 2a (config global), 3a (dias unico global), 4 (nomes confirmados), 5c (parent sem rota propria).
+
+**Backend:**
+- `scheduling_routes.py`: 4 novas feature_keys tenant (`conexoes_canais`, `conexoes_templates`, `conexoes_notificacoes`, `conexoes_cobranca`) + 4 SA (`sa-conexoes-*`).
+- `super_admin_routes.py`: novos endpoints `GET/PUT /api/super-admin/billing-reminder-settings` (storage: `system_settings` doc com `key="billing_reminder"`). Campos: `enabled`, `days_before_due` (0-60), `channel` (whatsapp/email/both), `default_message`.
+- `scheduler.py::_process_billing_reminders`: agora le `system_settings.billing_reminder` em cada tick. Respeita `enabled=false`, usa `days_before_due` configurado, `default_message` global, `channel` (envia WA somente quando `whatsapp` ou `both`).
+- `models.py`: removido `billing_reminder_message` de CompanyCreate/Update (so `first_due_date` ficou).
+
+**Frontend:**
+- **NOVO** `/app/frontend/src/components/BillingReminderPanel.js`: card master toggle + (dias + canal) + textarea mensagem global, com data-testids para todos os controles.
+- `SuperAdmin/Dashboard.js`:
+  - Sidebar item "Conexoes" virou `isGroup` com `children` (4 sub-itens). Render com chevron expansivel; estado `openGroups`; auto-abre o group quando filho esta ativo.
+  - Header label agora resolve via flatMap (parent ou filho).
+  - 4 novos `activeTab` cases: `sa-conexoes-canais/templates/notificacoes/cobranca`. Os 3 primeiros renderizam `<ConexoesPage initialTab=X hideTabs />`; o ultimo renderiza `<BillingReminderPanel />`.
+  - **CompanyModal:** removido o bloco indigo "Lembrete de cobranca (WhatsApp)". Sobrou apenas o input `first_due_date` simples com texto explicativo apontando para Conexoes → Notificacoes de Cobranca.
+- `Company/Dashboard.js`:
+  - `ConexoesPage` aceita prop `hideTabs` (oculta o tab strip interno).
+  - 4 novos FEATURE_META: `conexoes_canais/templates/notificacoes/cobranca` (parent='conexoes').
+  - 4 novos `renderPage` cases que delegam para `<ConexoesPage hideTabs />` com tab correto, exceto cobranca que mostra `<TenantBillingReminderInfoPanel />` (read-only, apontando para o SA).
+
+**Testes:**
+- Regressao: 68/68 testes passando.
+- E2E manual: GET/PUT `/billing-reminder-settings` funcionando. Sidebar mostra 4 sub-itens sob Conexoes. Painel renderiza, salva (persistencia confirmada via GET subsequente).
+
+**Para producao:** Redeploy. Apos:
+1. Como SA, ir em Tipos de Negocio → ativar as 4 features (`conexoes_canais`, `conexoes_templates`, `conexoes_notificacoes`, `conexoes_cobranca`) nos BTs que desejam exibir cada sub-aba.
+2. Acessar SA → Conexoes → Notificacoes de Cobranca: configurar dias antes (default 10) + mensagem global.
+3. As empresas existentes continuam funcionando — a unica diferenca eh que a mensagem custom por empresa foi descontinuada (todas usam a global agora).
+
+
 
 **Pedido do usuario:** mudar a forma de gerar Lancamentos financeiros — em vez de criar todas as parcelas de uma vez ao salvar a empresa, gerar **1 parcela por vez, 10 dias antes do vencimento**, e disparar um lembrete via WhatsApp. Para isso, **liberar Atendimento + Conexao no Super Admin**.
 

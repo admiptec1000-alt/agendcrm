@@ -346,6 +346,58 @@ async def extend_wa_sent_cache_ttl(
         "new_expires_at": cutoff.isoformat(),
     }
 
+class BillingReminderSettingsIn(BaseModel):
+    enabled: bool = True
+    days_before_due: int = 10
+    channel: str = "whatsapp"  # whatsapp | email | both
+    default_message: Optional[str] = None
+
+
+@router.get("/billing-reminder-settings")
+async def get_billing_reminder_settings(
+    _: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Global Notificacao de Cobranca config. 2026-02-16 (K). Single doc
+    stored in `system_settings` with key='billing_reminder'."""
+    doc = await db.system_settings.find_one(
+        {"key": "billing_reminder"}, {"_id": 0}
+    ) or {}
+    return {
+        "enabled": bool(doc.get("enabled", True)),
+        "days_before_due": int(doc.get("days_before_due", 10)),
+        "channel": doc.get("channel", "whatsapp"),
+        "default_message": doc.get("default_message") or (
+            "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
+            "vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame."
+        ),
+    }
+
+
+@router.put("/billing-reminder-settings")
+async def update_billing_reminder_settings(
+    data: BillingReminderSettingsIn,
+    _: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    days = max(0, min(60, int(data.days_before_due or 0)))
+    channel = (data.channel or "whatsapp").lower()
+    if channel not in ("whatsapp", "email", "both"):
+        raise HTTPException(400, "channel deve ser whatsapp, email ou both")
+    update = {
+        "key": "billing_reminder",
+        "enabled": bool(data.enabled),
+        "days_before_due": days,
+        "channel": channel,
+        "default_message": (data.default_message or "")[:2000] or None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.system_settings.update_one(
+        {"key": "billing_reminder"}, {"$set": update}, upsert=True,
+    )
+    return {"ok": True, **{k: v for k, v in update.items() if k != "key"}}
+
+
 @router.post("/companies")
 async def create_company(
     data: CompanyCreate,
@@ -451,16 +503,12 @@ async def create_company(
     if billing_source:
         await _generate_invoices_for_company(db, company_id, billing_source)
 
-    # 2026-02-16 (J) — Removed eager auto-AdmTxn generation. The scheduler
-    # now creates each Lancamento individually, 10 days before its due
-    # date, and dispatches a WhatsApp reminder. See
-    # scheduler._process_billing_reminders.
-    # Persist the billing config fields if provided.
+    # 2026-02-16 (K) — Reminder message is now GLOBAL (see
+    # /api/super-admin/billing-reminder-settings). Only first_due_date is
+    # persisted per-company.
     extra_billing_set = {}
     if data.first_due_date is not None:
         extra_billing_set["first_due_date"] = data.first_due_date
-    if data.billing_reminder_message is not None:
-        extra_billing_set["billing_reminder_message"] = (data.billing_reminder_message or "")[:2000]
     if extra_billing_set:
         await db.companies.update_one({"id": company_id}, {"$set": extra_billing_set})
         for k, v in extra_billing_set.items():

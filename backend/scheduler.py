@@ -291,8 +291,20 @@ def _render_reminder(template: str, ctx: dict) -> str:
 
 
 async def _process_billing_reminders(db):
+    # Global config (2026-02-16 K) — operator can override via SA UI.
+    settings = await db.system_settings.find_one(
+        {"key": "billing_reminder"}, {"_id": 0}
+    ) or {}
+    if settings.get("enabled") is False:
+        return
+    days_before = int(settings.get("days_before_due") or BILLING_REMINDER_DAYS)
+    global_default_msg = settings.get("default_message") or (
+        "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
+        "vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame."
+    )
+    channel = (settings.get("channel") or "whatsapp").lower()
     today = datetime.now(timezone.utc).date()
-    cutoff = today + timedelta(days=BILLING_REMINDER_DAYS)
+    cutoff = today + timedelta(days=days_before)
     cursor = db.companies.find(
         {
             "monthly_price": {"$gt": 0},
@@ -361,11 +373,9 @@ async def _process_billing_reminders(db):
                     f"[scheduler] billing-reminder: created Lancamento "
                     f"company={c['id']} parcela={i+1}/{installments} due={due.isoformat()}"
                 )
-                # Send the WA reminder (best-effort).
-                template = c.get("billing_reminder_message") or (
-                    "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
-                    "vence em {{vencimento}}. Em caso de duvida nos chame."
-                )
+                # Send the reminder (best-effort). Template = GLOBAL default
+                # configured by SA in Notificacoes de Cobranca (2026-02-16 K).
+                template = global_default_msg
                 ctx = {
                     "nome": c.get("name") or "",
                     "empresa": c.get("name") or "",
@@ -375,19 +385,20 @@ async def _process_billing_reminders(db):
                 }
                 text = _render_reminder(template, ctx)
                 phone = c.get("phone") or ""
-                if sa_conn_id and phone and text:
+                wants_whatsapp = channel in ("whatsapp", "both")
+                if wants_whatsapp and sa_conn_id and phone and text:
                     sent = await _send_billing_reminder(sa_conn_id, phone, text)
                     if not sent:
                         logger.warning(
                             f"[scheduler] billing-reminder send NOT confirmed "
                             f"company={c['id']} phone={phone[:6]}... — txn was still created"
                         )
-                elif not sa_conn_id:
+                elif wants_whatsapp and not sa_conn_id:
                     logger.warning(
                         f"[scheduler] billing-reminder: no SA system connection — "
                         f"company={c['id']} txn created without reminder"
                     )
-                elif not phone:
+                elif wants_whatsapp and not phone:
                     logger.info(
                         f"[scheduler] billing-reminder: company={c['id']} has no phone; "
                         f"txn created without reminder (user option 3c)"
