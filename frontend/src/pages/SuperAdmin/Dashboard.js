@@ -1117,18 +1117,33 @@ const KPI = ({ label, value, icon: Icon, color, testid }) => (
 // ─── FINANCIAL TAB (invoices + suspension control) ──────────────────────────
 const FinancialTab = ({ companies }) => {
   const [subTab, setSubTab] = useState('lancamentos');
-  // 2026-02-15 (F): "Faturas" e "Despesas" removidas — todos os lancamentos
-  // (faturas E despesas) ficam centralizados na aba Lancamentos com filtro
-  // de Direcao (entrada/saida).
+  // 2026-02-16 (P): nova aba "Cobranca" (ex-Notificacoes de Cobranca) e
+  // layout responsivo. No mobile vira select para nao quebrar; em desktop
+  // mantem a barra de tabs.
   const tabs = [
     { key: 'summary', label: 'Resumo' },
     { key: 'lancamentos', label: 'Lancamentos' },
+    { key: 'cobranca', label: 'Cobranca' },
     { key: 'commissions', label: 'Comissoes' },
     { key: 'external', label: 'Clientes Externos' },
   ];
   return (
     <div className="space-y-4" data-testid="financial-tab">
-      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
+      {/* Mobile: select dropdown (single line, room for label). */}
+      <div className="sm:hidden">
+        <select
+          value={subTab}
+          onChange={(e) => setSubTab(e.target.value)}
+          className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm font-medium bg-white"
+          data-testid="financial-subtab-mobile"
+        >
+          {tabs.map(t => (
+            <option key={t.key} value={t.key}>{t.label}</option>
+          ))}
+        </select>
+      </div>
+      {/* Desktop: tab strip horizontal. */}
+      <div className="hidden sm:flex gap-1 border-b border-slate-200 overflow-x-auto">
         {tabs.map(t => (
           <button
             key={t.key}
@@ -1143,6 +1158,7 @@ const FinancialTab = ({ companies }) => {
       </div>
       {subTab === 'summary' && <FinancialSummaryPanel />}
       {subTab === 'lancamentos' && <AdmLancamentosPanel />}
+      {subTab === 'cobranca' && <BillingReminderPanel />}
       {subTab === 'invoices' && <InvoicesPanel companies={companies} />}
       {subTab === 'expenses' && <ExpensesPanel />}
       {subTab === 'commissions' && <CommissionsPanel />}

@@ -10,10 +10,38 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-16 (P) — Periodo presets no Lancamentos + Cobranca como aba do Financeiro + tabs mobile ✅
+
+**Pedido do usuario:**
+1. Adicionar **presets de periodo** no filtro (semana, este mes, ult. 3 meses).
+2. Mover **multa/juros** para uma aba do Financeiro Admin (em vez de Notificacoes de Cobranca).
+3. Melhorar **abas do Financeiro no mobile**.
+
+**Frontend:**
+- `AdmLancamentosPanel.js`:
+  - Substituido o input de mes pelo dropdown **"Periodo"** com 4 opcoes: `Esta semana`, `Este mes` (default), `Ult. 3 meses`, `Mes especifico`. Quando o usuario escolhe "Mes especifico", reaparece o input `type=month`.
+  - Helper `_periodRange(preset, customMonth)` calcula `[start, end)` corretamente para cada caso (domingo a sabado para semana, primeiro do mes corrente para "este mes", D-2 meses para "ult. 3 meses").
+- `SuperAdmin/Dashboard.js (FinancialTab)`:
+  - Nova aba **"Cobranca"** entre `Lancamentos` e `Comissoes`, renderizando o `BillingReminderPanel` (mesmo componente que estava em Conexoes → Notificacoes de Cobranca, agora disponivel em ambos lugares).
+  - **Mobile (`sm:hidden`):** o tab strip horizontal foi substituido por um **`<select>` dropdown** com largura total e padding generoso, evitando quebra de linha em telas pequenas.
+  - **Desktop (`hidden sm:flex`):** mantem a barra de tabs horizontal.
+
+**Validacao:**
+- Desktop: 5 tabs visiveis (Resumo, Lancamentos, Cobranca, Comissoes, Clientes Externos). Click em "Cobranca" renderiza o BillingReminderPanel (com multa/juros default + dias antes + lembretes).
+- Filtro de periodo desktop: default=`this_month`, 4 opcoes corretas, "Mes especifico" expande input mes.
+- Mobile (414px): select dropdown com as 5 opcoes, switch para "cobranca" renderiza painel completo verticalmente. Sem horizontal overflow.
+
+**Para producao:** Redeploy. Apos:
+- Financeiro Admin → Cobranca: novo local para configurar dias antes, multa, juros, mensagem padrao.
+- Financeiro Admin → Lancamentos: usar o dropdown "Periodo" para alternar rapido entre semana/mes/3 meses.
+- A configuracao **continua acessivel** tambem em SA → Conexoes → Notificacoes de Cobranca (mesmo dado).
+
+
+
 ### 2026-02-16 (O) — Multa/juros default global + valor recebido na baixa ✅
 
 **Pedido do usuario:**
-1. Verificar onde esta o parametro `lancamento_gen_days` → **localizado em `SA → Conexoes → Notificacoes de Cobranca` → card "Geracao automatica do Lancamento"** (BillingReminderPanel.js, endpoint `/api/super-admin/billing-reminder-settings`, campo `lancamento_gen_days`).
+1. Verificar onde esta o parametro `lancamento_gen_days`.
 2. Adicionar **multa + juros padrao** no mesmo painel de Configuracoes.
 3. Adicionar campo **"Valor recebido"** na forma de pagamento.
 

@@ -23,6 +23,37 @@ const _monthRange = (yyyymm) => {
   return [start, end];
 };
 
+// 2026-02-16 (P) — Presets de periodo. Devolve [startISO, endISO) prontos
+// para enviar ao backend.
+const _isoDate = (d) => d.toISOString().slice(0, 10);
+const PERIOD_PRESETS = [
+  { key: 'this_week', label: 'Esta semana' },
+  { key: 'this_month', label: 'Este mes' },
+  { key: 'last_3_months', label: 'Ult. 3 meses' },
+  { key: 'custom', label: 'Mes especifico' },
+];
+const _periodRange = (preset, customMonth) => {
+  const today = new Date();
+  if (preset === 'this_week') {
+    const dow = today.getDay(); // 0=Sun
+    const start = new Date(today);
+    start.setDate(today.getDate() - dow);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 7);
+    return [_isoDate(start), _isoDate(end)];
+  }
+  if (preset === 'this_month') {
+    return _monthRange(_currentMonth());
+  }
+  if (preset === 'last_3_months') {
+    const start = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+    const end = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    return [_isoDate(start), _isoDate(end)];
+  }
+  // custom — mes especifico via input type=month
+  return _monthRange(customMonth || _currentMonth());
+};
+
 const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
 
 // Pagamento unificado: o operador escolhe Pix/Boleto/Dinheiro pra dar baixa
@@ -48,12 +79,13 @@ export const AdmLancamentosPanel = () => {
   const [items, setItems] = useState([]);
   const [companies, setCompanies] = useState([]);  // {id, name} list, 2026-02-16 (M)
   const [summary, setSummary] = useState(null);
-  // 2026-02-16 (M) — defaults: direction=entrada, status=pendente (Em aberto),
-  // month = current. "Todas direcoes" foi removida do menu (so Entrada/Saida).
+  // 2026-02-16 (M+P) — defaults: direction=entrada, status=pendente,
+  // period=this_month (com fallback custom para mes especifico).
   const [filters, setFilters] = useState({
     direction: 'entrada',
     status: 'pendente',
     kind: '',
+    period: 'this_month',
     month: _currentMonth(),
   });
   const [showForm, setShowForm] = useState(false);
@@ -103,7 +135,7 @@ export const AdmLancamentosPanel = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [startDate, endDate] = _monthRange(filters.month);
+      const [startDate, endDate] = _periodRange(filters.period, filters.month);
       const params = {
         direction: filters.direction || undefined,
         status: filters.status || undefined,
@@ -201,11 +233,23 @@ export const AdmLancamentosPanel = () => {
         <MetricCard label="Liquido" value={fmt(summary?.liquido)} icon={CheckCircle2} color={(summary?.liquido || 0) >= 0 ? 'emerald' : 'rose'} />
       </div>
 
-      {/* Toolbar — 2026-02-16 (M) — filtro de mes inline, defaults setados,
-          "Todas direcoes" removido (so Entrada/Saida). */}
+      {/* Toolbar — 2026-02-16 (M+P) — preset de periodo + filtro de mes
+          condicional, defaults setados, "Todas direcoes" removido. */}
       <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap items-stretch sm:items-center gap-2">
         <div className="flex items-center gap-1.5 text-slate-600 px-1">
-          <CalendarIcon className="w-4 h-4" />
+          <CalendarIcon className="w-4 h-4 shrink-0" />
+          <select
+            value={filters.period}
+            onChange={(e) => setFilters({ ...filters, period: e.target.value })}
+            className="px-2 py-1.5 border border-slate-300 rounded text-sm"
+            data-testid="adm-filter-period"
+          >
+            {PERIOD_PRESETS.map(p => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </select>
+        </div>
+        {filters.period === 'custom' && (
           <input
             type="month"
             value={filters.month}
@@ -213,7 +257,7 @@ export const AdmLancamentosPanel = () => {
             className="px-2 py-1.5 border border-slate-300 rounded text-sm font-mono"
             data-testid="adm-filter-month"
           />
-        </div>
+        )}
         <select
           value={filters.direction}
           onChange={(e) => setFilters({ ...filters, direction: e.target.value })}
