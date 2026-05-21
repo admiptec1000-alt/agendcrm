@@ -26,6 +26,9 @@ class _FakeCursor:
                 yield d
         return gen()
 
+    async def to_list(self, length=None):
+        return list(self.docs) if length is None else list(self.docs)[:length]
+
 
 class _Coll:
     def __init__(self, docs=None):
@@ -33,11 +36,15 @@ class _Coll:
         self.updates = []  # records each update_many call
 
     def find(self, q, proj=None):
-        # Trivial filter implementation: just supports the `ticket_auto_close_hours > 0`
+        # Filter supporting $gt, $lt, $in operators.
         def match(d):
             for k, v in q.items():
-                if isinstance(v, dict) and "$gt" in v:
-                    if not (d.get(k) is not None and d.get(k) > v["$gt"]):
+                if isinstance(v, dict):
+                    if "$gt" in v and not (d.get(k) is not None and d.get(k) > v["$gt"]):
+                        return False
+                    if "$lt" in v and not (d.get(k) is not None and d.get(k) < v["$lt"]):
+                        return False
+                    if "$in" in v and d.get(k) not in v["$in"]:
                         return False
                 elif d.get(k) != v:
                     return False

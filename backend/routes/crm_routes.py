@@ -1366,6 +1366,7 @@ async def update_company_ticket_settings(
     return {
         "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
         "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
+        "ticket_auto_close_message": comp.get("ticket_auto_close_message") or "",
     }
 
 

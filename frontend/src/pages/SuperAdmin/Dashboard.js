@@ -391,11 +391,15 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
   });
 
   // Totais — recalculam sempre com base no filtro aplicado.
+  // 2026-02-15 (I) — substituidos os 4 cards por 3: EMPRESAS, TOTAL CONEXOES (X/Y),
+  // TOTAL USUARIOS (X/Y). Empresas legadas sem limite (max=null) sao contabilizadas
+  // apenas no `used` (nao inflam o total).
   const totals = {
     count: filtered.length,
-    licenses: filtered.reduce((s, c) => s + (Number(c.max_connections || 0) + Number(c.max_users || 0)), 0),
     used_connections: filtered.reduce((s, c) => s + Number(c.used_connections || 0), 0),
+    total_connections: filtered.reduce((s, c) => s + Number(c.max_connections || 0), 0),
     used_users: filtered.reduce((s, c) => s + Number(c.used_users || 0), 0),
+    total_users: filtered.reduce((s, c) => s + Number(c.max_users || 0), 0),
   };
 
   return (
@@ -438,12 +442,21 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
         </button>
       </div>
 
-      {/* Totais — recalculam com o filtro */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4" data-testid="companies-totals">
+      {/* Totais — recalculam com o filtro. 2026-02-15 (I): 3 cards conforme solicitado. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4" data-testid="companies-totals">
         <TotalCard label="Empresas" value={totals.count} accent="indigo" />
-        <TotalCard label="Total Licencas" value={totals.licenses} accent="emerald" />
-        <TotalCard label="Conexoes em uso" value={totals.used_connections} accent="amber" />
-        <TotalCard label="Usuarios em uso" value={totals.used_users} accent="rose" />
+        <TotalCard
+          label="Total Conexoes"
+          value={`${totals.used_connections} / ${totals.total_connections}`}
+          accent="amber"
+          testid="total-connections"
+        />
+        <TotalCard
+          label="Total Usuarios"
+          value={`${totals.used_users} / ${totals.total_users}`}
+          accent="rose"
+          testid="total-users"
+        />
       </div>
 
       <div className="card">
@@ -2354,16 +2367,16 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
   const superAdminFeatures = allFeatures.filter(f => f.category === 'Super Admin');
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
-          <h2 className="text-xl font-bold font-heading text-slate-900">
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[96vh] sm:max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
+          <h2 className="text-lg sm:text-xl font-bold font-heading text-slate-900">
             {isEditing ? 'Editar Empresa' : 'Nova Empresa'}
           </h2>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
           {/* BD (Base de Dados) — 2026-02-15 (F). Auto-cadastravel via
               datalist: o operador seleciona uma BD existente OU digita uma
               nova (ex: SGP, Vox). Quando != "Padrao", a empresa eh
@@ -2551,7 +2564,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               onChange={(licenses) => setForm({...form, licenses})}
               companyId={isEditing ? company?.id : null}
             />
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mt-4">
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Mensalidade (R$)</label>
                 <input type="number" step="0.01" value={form.monthly_price}
@@ -2618,9 +2631,9 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-slate-200 sticky bottom-0 bg-white">
-          <button onClick={onClose} className="btn-secondary">Cancelar</button>
-          <button onClick={handleSave} disabled={saving} data-testid="save-company-btn" className="btn-primary">
+        <div className="flex items-center justify-end gap-2 sm:gap-3 p-4 sm:p-6 border-t border-slate-200 sticky bottom-0 bg-white">
+          <button onClick={onClose} className="btn-secondary flex-1 sm:flex-none">Cancelar</button>
+          <button onClick={handleSave} disabled={saving} data-testid="save-company-btn" className="btn-primary flex-1 sm:flex-none">
             {saving ? 'Salvando...' : isEditing ? 'Salvar Alteracoes' : 'Criar Empresa'}
           </button>
         </div>
@@ -3036,7 +3049,7 @@ const StatusBadge = ({ status }) => (
 );
 
 // Compact totals card used at top of the Empresas list. 2026-02-15 (F).
-const TotalCard = ({ label, value, accent }) => {
+const TotalCard = ({ label, value, accent, testid }) => {
   const accentMap = {
     indigo: 'bg-indigo-50 text-indigo-700 border-indigo-100',
     emerald: 'bg-emerald-50 text-emerald-700 border-emerald-100',
@@ -3044,7 +3057,10 @@ const TotalCard = ({ label, value, accent }) => {
     rose: 'bg-rose-50 text-rose-700 border-rose-100',
   };
   return (
-    <div className={`rounded-xl border px-3 py-2 ${accentMap[accent] || accentMap.indigo}`}>
+    <div
+      className={`rounded-xl border px-3 py-2 ${accentMap[accent] || accentMap.indigo}`}
+      data-testid={testid || `total-card-${(label || '').toLowerCase().replace(/\s+/g, '-')}`}
+    >
       <p className="text-[10px] font-bold uppercase tracking-widest opacity-70">{label}</p>
       <p className="text-xl font-bold mt-0.5 font-mono">{value}</p>
     </div>

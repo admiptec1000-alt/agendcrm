@@ -92,7 +92,7 @@ export const AdmLancamentosPanel = () => {
   return (
     <div className="space-y-4" data-testid="adm-lancamentos-panel">
       {/* Hero metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
         <MetricCard label="Entradas pagas" value={fmt(summary?.bruto)} icon={TrendingUp} color="emerald" />
         <MetricCard label="Saidas pagas" value={fmt(summary?.saidas)} icon={TrendingDown} color="rose" />
         <MetricCard label="Liquido" value={fmt(summary?.liquido)} icon={CheckCircle2} color={(summary?.liquido || 0) >= 0 ? 'emerald' : 'rose'} />
@@ -100,11 +100,11 @@ export const AdmLancamentosPanel = () => {
       </div>
 
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-stretch sm:items-center gap-2">
         <select
           value={filters.direction}
           onChange={(e) => setFilters({ ...filters, direction: e.target.value })}
-          className="px-3 py-2 border border-slate-300 rounded text-sm"
+          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[140px] sm:flex-none"
           data-testid="adm-filter-direction"
         >
           <option value="">Todas direcoes</option>
@@ -114,7 +114,7 @@ export const AdmLancamentosPanel = () => {
         <select
           value={filters.status}
           onChange={(e) => setFilters({ ...filters, status: e.target.value })}
-          className="px-3 py-2 border border-slate-300 rounded text-sm"
+          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[140px] sm:flex-none"
           data-testid="adm-filter-status"
         >
           <option value="">Todos pagamentos</option>
@@ -124,19 +124,19 @@ export const AdmLancamentosPanel = () => {
         <select
           value={filters.kind}
           onChange={(e) => setFilters({ ...filters, kind: e.target.value })}
-          className="px-3 py-2 border border-slate-300 rounded text-sm"
+          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[140px] sm:flex-none"
           data-testid="adm-filter-kind"
         >
           <option value="">Todos tipos</option>
           <option value="licenca">Licenca</option>
           <option value="diversos">Diversos</option>
         </select>
-        <button onClick={load} className="px-3 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 flex items-center gap-1" data-testid="adm-refresh-btn">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+        <button onClick={load} className="px-3 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 flex items-center justify-center gap-1" data-testid="adm-refresh-btn">
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> <span className="hidden sm:inline">Atualizar</span>
         </button>
         <button
           onClick={() => setShowForm(true)}
-          className="ml-auto px-4 py-2 bg-primary text-white rounded text-sm font-semibold flex items-center gap-1.5"
+          className="sm:ml-auto w-full sm:w-auto px-4 py-2 bg-primary text-white rounded text-sm font-semibold flex items-center justify-center gap-1.5"
           data-testid="adm-new-txn-btn"
         >
           <Plus className="w-4 h-4" /> Novo Lancamento
@@ -418,11 +418,11 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-2 sm:p-4 overflow-y-auto" onClick={onClose}>
       <form
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 my-8"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-4 sm:p-6 my-4 sm:my-8"
         data-testid="adm-txn-form-modal"
       >
         <div className="flex items-center justify-between mb-4">
@@ -432,7 +432,7 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Tipo do lancamento — Licenca (vincula a empresa cadastrada/externa) OU Diversos. */}
           <Field label="Tipo">
             <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} className="input" data-testid="adm-form-kind">
@@ -546,7 +546,7 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
             <span className="font-semibold text-sm text-slate-700">Lancamento recorrente</span>
           </label>
           {recurrence.enabled && (
-            <div className="grid grid-cols-2 gap-3 mt-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
               <Field label="Periodicidade">
                 <select value={recurrence.interval} onChange={(e) => setRecurrence({ ...recurrence, interval: e.target.value })} className="input" data-testid="adm-form-recurrence-interval">
                   <option value="mensal">Mensal</option>
@@ -570,7 +570,7 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
             <span className="font-semibold text-sm text-slate-700">Cobrar multa e juros apos vencimento</span>
           </label>
           {lateFee.enabled && (
-            <div className="grid grid-cols-2 gap-3 mt-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
               <Field label="Multa unica (%)">
                 <input type="number" step="0.01" min="0" value={lateFee.multa_pct} onChange={(e) => setLateFee({ ...lateFee, multa_pct: e.target.value })} className="input" placeholder="2.0" data-testid="adm-form-multa-pct" />
               </Field>

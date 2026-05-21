@@ -451,6 +451,24 @@ async def create_company(
     if billing_source:
         await _generate_invoices_for_company(db, company_id, billing_source)
 
+    # Auto-create Admin Lancamentos (recurring billing rows) from the company's
+    # own billing fields. 2026-02-15 (I) — automates what was previously a
+    # manual Lancamento entry per parcela.
+    try:
+        await _generate_adm_txns_for_company(
+            db,
+            company_id=company_id,
+            company_name=data.name,
+            monthly_price=float(data.monthly_price or 0),
+            billing_cycle=data.billing_cycle or "monthly",
+            installments=int(data.installments or 0),
+        )
+    except Exception as _e:  # never block company creation on billing seed
+        import logging
+        logging.getLogger(__name__).warning(
+            f"[super_admin] adm_txn auto-gen failed company={company_id}: {_e}"
+        )
+
     # Create admin user for this company
     admin_user = {
         "id": str(uuid.uuid4()),
@@ -540,6 +558,32 @@ async def update_company(
 
     if update_data:
         await db.companies.update_one({"id": company_id}, {"$set": update_data})
+
+    # If recurring billing fields changed, regenerate the auto Lancamentos.
+    # Only PENDING auto-generated rows are wiped; PAID history is preserved.
+    billing_changed = any(
+        k in update_data for k in ("monthly_price", "installments", "billing_cycle")
+    )
+    if billing_changed:
+        try:
+            refreshed = await db.companies.find_one(
+                {"id": company_id},
+                {"_id": 0, "name": 1, "monthly_price": 1, "billing_cycle": 1, "installments": 1},
+            ) or {}
+            await _generate_adm_txns_for_company(
+                db,
+                company_id=company_id,
+                company_name=refreshed.get("name") or company.get("name") or "",
+                monthly_price=float(refreshed.get("monthly_price") or 0),
+                billing_cycle=refreshed.get("billing_cycle") or "monthly",
+                installments=int(refreshed.get("installments") or 0),
+                reset_pending=True,
+            )
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[super_admin] adm_txn refresh failed company={company_id}: {_e}"
+            )
 
     # Sync subdomain with booking_pages
     if data.subdomain is not None:
@@ -962,6 +1006,95 @@ async def _generate_invoices_for_company(db, company_id: str, plan: dict, start_
         })
     if docs:
         await db.invoices.insert_many(docs)
+    return docs
+
+
+async def _generate_adm_txns_for_company(
+    db,
+    company_id: str,
+    company_name: str,
+    monthly_price: float,
+    billing_cycle: str,
+    installments: int,
+    start_date: Optional[str] = None,
+    reset_pending: bool = False,
+) -> list:
+    """Auto-create Admin Lancamentos (super_admin_transactions) records for the
+    recurring billing of a company. Mirrors `_generate_invoices_for_company`
+    but writes into the canonical Lancamentos collection used by the SA
+    Financeiro dashboard.
+
+    Each generated row is tagged with `auto_company_billing=True` so we can
+    re-generate idempotently (operator-edited rows are NOT touched — they
+    lose the tag the moment they're updated manually via the Lancamento
+    edit form).
+
+    Rules:
+      * `installments` rows are created, spaced by `billing_cycle`.
+      * Skips entirely when `monthly_price <= 0` or `installments <= 0`.
+      * When `reset_pending=True`, removes any prior PENDING auto-generated
+        rows for this company before regenerating. PAID rows are NEVER
+        deleted (preserve audit/history).
+    """
+    price = float(monthly_price or 0)
+    n_installments = int(installments or 0)
+    if price <= 0 or n_installments <= 0:
+        return []
+
+    if reset_pending:
+        await db.super_admin_transactions.delete_many({
+            "company_id": company_id,
+            "auto_company_billing": True,
+            "status": "pendente",
+        })
+
+    cycle = (billing_cycle or "monthly").lower()
+    base_dt = datetime.fromisoformat(start_date) if start_date else datetime.now(timezone.utc)
+    recurrence_group = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    docs: list = []
+    for i in range(n_installments):
+        if cycle == "yearly":
+            try:
+                due = base_dt.replace(year=base_dt.year + i)
+            except ValueError:
+                due = base_dt.replace(year=base_dt.year + i, day=28)
+        elif cycle == "one_time":
+            due = base_dt
+            if i > 0:
+                break
+        else:  # monthly (default)
+            month = ((base_dt.month - 1) + i) % 12 + 1
+            year = base_dt.year + ((base_dt.month - 1) + i) // 12
+            try:
+                due = base_dt.replace(year=year, month=month)
+            except ValueError:
+                due = base_dt.replace(year=year, month=month, day=28)
+        due_iso = due.date().isoformat()
+        desc_suffix = f" - parcela {i + 1}/{n_installments}" if n_installments > 1 else ""
+        docs.append({
+            "id": str(uuid.uuid4()),
+            "direction": "entrada",
+            "status": "pendente",
+            "amount": price,
+            "payment_method": "outros",
+            "category": "outros",
+            "description": f"Mensalidade {company_name}{desc_suffix}",
+            "date": due_iso,
+            "due_date": due_iso,
+            "notes": None,
+            "kind": "licenca",
+            "company_id": company_id,
+            "auto_company_billing": True,
+            "recurrence_group_id": recurrence_group,
+            "recurrence_interval": cycle,
+            "recurrence_index": i,
+            "recurrence_total": n_installments,
+            "created_at": now_iso,
+        })
+    if docs:
+        await db.super_admin_transactions.insert_many(docs)
     return docs
 
 

@@ -927,8 +927,39 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
                     )
                     if flow_doc:
                         await advance_flow(db, updated, flow_doc, incoming_text=text, is_initial=False)
+                    else:
+                        # 2026-02-15 (I) — observability: explicit log when the
+                        # ticket points to a flow that no longer exists. The
+                        # flow may have been deleted/renamed by an operator,
+                        # leaving the ticket stuck waiting for a node that
+                        # can't be resolved. Clear the flow_id so next inbound
+                        # falls through to other handlers.
+                        logger.warning(
+                            f"[webhook/message] ticket={ticket['id']} references missing "
+                            f"flow={updated.get('active_flow_id')!r} — clearing flow state"
+                        )
+                        await db.tickets.update_one(
+                            {"id": ticket["id"]},
+                            {"$set": {"active_flow_id": None, "active_flow_node_id": None}},
+                        )
+                elif updated and updated.get("active_flow_id") and not updated.get("active_flow_node_id"):
+                    # 2026-02-15 (I) — stuck state diagnostic: flow id set but
+                    # no pending node. This usually means a previous
+                    # advance_flow crashed mid-execution or an HTTP node hit
+                    # an error and cleared the node. Log loudly so the
+                    # operator can correlate with WA "stops responding" reports.
+                    logger.error(
+                        f"[webhook/message] ticket={ticket['id']} stuck flow state: "
+                        f"active_flow_id={updated.get('active_flow_id')!r} but "
+                        f"active_flow_node_id is None. Customer reply ignored."
+                    )
             except Exception as e:
-                logger.warning(f"[webhook/message] flow advance failed: {e}")
+                # ERROR (not warning) + traceback so this surfaces in
+                # production dashboards. Previously a silent warning made the
+                # "flow stopped" bug invisible until a manual reconnect.
+                logger.exception(
+                    f"[webhook/message] flow advance crashed ticket={ticket.get('id')}: {e}"
+                )
 
     return {"ok": True}
 

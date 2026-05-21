@@ -1,0 +1,76 @@
+{
+  "iteration": 55,
+  "feature": "Auto-close message {nome}/{empresa} + Super Admin 3 totals cards + auto AdmTxn generation + mobile layout + stuck-flow logs",
+  "summary": "Validated T1 (ticket-settings GET/PUT with ticket_auto_close_message), T2 (Super Admin Empresas: exactly 3 cards with correct testids/labels/values), T3 (auto AdmTxn generation on company create/update, paid rows preserved), T4 (mobile layout 390x844 — no body overflow), T5 (stuck-flow warning strings present in channels_routes).",
+  "test_credentials_present": true,
+  "backend_results": {
+    "pytest_file": "/app/backend/tests/test_iteration_55.py",
+    "junit_xml": "/app/test_reports/pytest/iteration_55.xml",
+    "passed": 8,
+    "failed": 0,
+    "total": 8,
+    "coverage_areas": [
+      "T1 GET /api/crm/company/ticket-settings (returns ticket_auto_close_message)",
+      "T1 PUT persists message with {{nome}} / {{empresa}} placeholders + GET-after verifies persistence",
+      "T1 message truncation at 1000 chars",
+      "T1 hours range validation (>720 rejected with 400)",
+      "T3 POST /api/super-admin/companies with monthly_price=99.90, installments=3, billing_cycle=monthly → 3 auto super_admin_transactions (kind=licenca, status=pendente, auto_company_billing=true, due_dates monthly-spaced)",
+      "T3 PUT /api/super-admin/companies/{id} with installments=2 after marking 1 paid → 1 paid preserved + 2 fresh pendentes generated",
+      "T5 channels_routes.py contains the stuck-flow ('stuck flow state') and missing-flow ('references missing') log strings"
+    ]
+  },
+  "frontend_results": {
+    "method": "playwright e2e",
+    "T1_settings_card": {
+      "config_page_loaded": true,
+      "card_visible": true,
+      "testid_ticket_lifecycle_settings_card": true,
+      "testid_ticket_auto_close_message_input": true,
+      "hint_mentions_nome_and_empresa": true,
+      "textarea_disabled_when_hours_0": true,
+      "textarea_enabled_when_hours_48": true,
+      "save_toast_seen": "'Configuracao salva.' toast confirmed in screenshot"
+    },
+    "T2_super_admin_totals": {
+      "cards_count_in_companies_totals": 3,
+      "testid_total_card_empresas": true,
+      "testid_total_connections": true,
+      "testid_total_users": true,
+      "labels_observed": ["EMPRESAS", "TOTAL CONEXOES", "TOTAL USUARIOS"],
+      "values_format": "X / Y (e.g. EMPRESAS=3, TOTAL CONEXOES=14/0, TOTAL USUARIOS=17/0)"
+    },
+    "T4_mobile_390": {
+      "viewport": "390x844",
+      "body_horizontal_overflow": false,
+      "totals_cards_stacked_vertically": true,
+      "table_wraps_inside_overflow_x_auto": true,
+      "note": "AdmLancamentosPanel not opened in mobile because Empresas table tested; main agent should self-verify AdmLancamentos toolbar mobile but the no-body-overflow constraint is satisfied at 390px on the verified screen."
+    }
+  },
+  "code_changes_observed": {
+    "no_modifications_needed": true,
+    "tests_added": ["/app/backend/tests/test_iteration_55.py"]
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "critical_code_review_comments": [
+    "scheduler.py auto-close: best-effort goodbye message — failures are logged warning level only. Acceptable since broken WA send shouldn't keep tickets open forever.",
+    "super_admin_routes.update_company billing_changed regen uses reset_pending=True; if monthly_price was unchanged but installments changes, ALL pending auto rows are wiped & recreated — verified to preserve PAID rows (test passes). LGTM.",
+    "channels_routes.py logs 'stuck flow state' as ERROR and 'references missing' as WARN — good observability split. Also clears the dangling active_flow_id on missing-flow to unstick subsequent inbound."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_55.py",
+    "/app/test_reports/pytest/iteration_55.xml"
+  ],
+  "action_items": [],
+  "updated_files": ["/app/backend/tests/test_iteration_55.py"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% (T1, T2, T4 verified)"},
+  "seed_data_creation": "Test creates 1 TEST_AdmTxnCo_* company per run; teardown_class DELETEs it via /api/super-admin/companies/{id}. If pytest is interrupted mid-test, leftover TEST_AdmTxnCo_* companies may remain — operator can clean via Empresas list.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 5 tasks (T1-T5) verified. AdmLancamentos & CompanyModal mobile interior (T4 second-pass) not deeply explored; main agent confirms toolbar stacks at sm breakpoint via Tailwind classes — observed Empresas page mobile = no horizontal overflow at 390px."
+}

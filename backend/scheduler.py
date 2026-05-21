@@ -168,8 +168,14 @@ async def _process_ticket_auto_close(db):
                     )
                     if not (contact and channel and contact.get("phone")):
                         continue
-                    msg = message_template.replace("{nome}", contact.get("name") or "").replace(
-                        "{empresa}", c.get("name") or ""
+                    contact_name = contact.get("name") or ""
+                    company_name = c.get("name") or ""
+                    msg = (
+                        message_template
+                        .replace("{{nome}}", contact_name)
+                        .replace("{nome}", contact_name)
+                        .replace("{{empresa}}", company_name)
+                        .replace("{empresa}", company_name)
                     )
                     async with httpx.AsyncClient(timeout=10.0) as client:
                         await client.post(
