@@ -174,6 +174,9 @@ class CompanyCreate(BaseModel):
     # reminder message + days_before_due are GLOBAL now (system_settings
     # key=billing_reminder, managed via SA → Conexoes → Notificacoes de Cobranca).
     first_due_date: Optional[str] = None
+    # 2026-02-16 (L) — Nome do representante usado como variavel {{nome}} nas
+    # mensagens de cobranca. Quando vazio, cai no `name` da empresa.
+    representante: Optional[str] = None
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -195,6 +198,7 @@ class CompanyUpdate(BaseModel):
     max_users: Optional[int] = None
     database_type: Optional[str] = None
     first_due_date: Optional[str] = None
+    representante: Optional[str] = None
 
 class CompanyResponse(BaseModel):
     id: str

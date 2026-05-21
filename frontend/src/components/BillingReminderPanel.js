@@ -20,10 +20,11 @@ import api from '../services/api';
 const BillingReminderPanel = () => {
   const [form, setForm] = useState({
     enabled: true,
-    days_before_due: 10,
+    days_before_due_list: [10],
     channel: 'whatsapp',
     default_message: '',
   });
+  const [daysInput, setDaysInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -32,9 +33,12 @@ const BillingReminderPanel = () => {
     api.get('/super-admin/billing-reminder-settings')
       .then(r => {
         if (cancelled) return;
+        const list = Array.isArray(r.data?.days_before_due_list) && r.data.days_before_due_list.length
+          ? r.data.days_before_due_list
+          : [Number(r.data?.days_before_due ?? 10)];
         setForm({
           enabled: !!r.data?.enabled,
-          days_before_due: Number(r.data?.days_before_due ?? 10),
+          days_before_due_list: list.map(Number),
           channel: r.data?.channel || 'whatsapp',
           default_message: r.data?.default_message || '',
         });
@@ -44,12 +48,32 @@ const BillingReminderPanel = () => {
     return () => { cancelled = true; };
   }, []);
 
+  const addDay = () => {
+    const n = parseInt(daysInput, 10);
+    if (Number.isNaN(n) || n < 0 || n > 60) {
+      toast.error('Informe um valor entre 0 e 60');
+      return;
+    }
+    if (form.days_before_due_list.includes(n)) {
+      setDaysInput('');
+      return;
+    }
+    const next = [...form.days_before_due_list, n].sort((a, b) => b - a);
+    setForm({ ...form, days_before_due_list: next });
+    setDaysInput('');
+  };
+
+  const removeDay = (n) => {
+    const next = form.days_before_due_list.filter(d => d !== n);
+    setForm({ ...form, days_before_due_list: next.length ? next : [10] });
+  };
+
   const save = async () => {
     setSaving(true);
     try {
       await api.put('/super-admin/billing-reminder-settings', {
         enabled: form.enabled,
-        days_before_due: Math.max(0, Math.min(60, parseInt(form.days_before_due, 10) || 0)),
+        days_before_due_list: form.days_before_due_list,
         channel: form.channel,
         default_message: form.default_message,
       });
@@ -112,21 +136,51 @@ const BillingReminderPanel = () => {
               <CalendarIcon className="w-4 h-4 text-slate-500" />
               Dias antes do vencimento
             </label>
+            <div className="flex flex-wrap items-center gap-2 mb-2" data-testid="billing-reminder-days-list">
+              {form.days_before_due_list.map(d => (
+                <span
+                  key={d}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700"
+                  data-testid={`billing-reminder-day-chip-${d}`}
+                >
+                  {d}d antes
+                  <button
+                    type="button"
+                    onClick={() => removeDay(d)}
+                    disabled={!form.enabled}
+                    className="hover:text-indigo-900 disabled:opacity-50"
+                    aria-label={`Remover ${d} dias`}
+                  >
+                    x
+                  </button>
+                </span>
+              ))}
+            </div>
             <div className="flex items-center gap-2">
               <input
                 type="number"
                 min={0}
                 max={60}
-                value={form.days_before_due}
-                onChange={(e) => setForm({ ...form, days_before_due: e.target.value })}
-                className="input-field w-28"
-                data-testid="billing-reminder-days"
+                value={daysInput}
+                onChange={(e) => setDaysInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addDay(); } }}
+                placeholder="ex: 3"
+                className="input-field w-24"
+                data-testid="billing-reminder-day-input"
                 disabled={!form.enabled}
               />
-              <span className="text-sm text-slate-600">dias</span>
+              <button
+                type="button"
+                onClick={addDay}
+                disabled={!form.enabled || !daysInput}
+                data-testid="billing-reminder-add-day"
+                className="btn-secondary text-sm px-3 py-1.5"
+              >
+                + Adicionar
+              </button>
             </div>
             <p className="text-[11px] text-slate-500 mt-1">
-              Recomendado: 10. Permitido: 0 a 60.
+              Sera enviado 1 lembrete para cada valor. Ex: 10, 3, 1 = 3 lembretes por parcela.
             </p>
           </div>
           <div>

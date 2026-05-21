@@ -2349,6 +2349,8 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     grace_days: company?.grace_days ?? 5,
     // 2026-02-16 (K) — Data do 1o vencimento (mensagem agora eh global).
     first_due_date: company?.first_due_date || '',
+    // 2026-02-16 (L) — Representante: usado como {{nome}} nas cobrancas.
+    representante: company?.representante || '',
   });
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
@@ -2406,6 +2408,7 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         installments: form.installments === '' ? null : Number(form.installments),
         grace_days: form.grace_days === '' ? null : Number(form.grace_days),
         first_due_date: form.first_due_date || null,
+        representante: form.representante || null,
       };
       if (isEditing) {
         await superAdminAPI.updateCompany(company.id, {
@@ -2706,23 +2709,41 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               </div>
             </div>
 
-            {/* 2026-02-16 (K) — data do 1o vencimento mantida em campo simples.
+            {/* 2026-02-16 (K + L) — data do 1o vencimento + representante.
                 A mensagem e o canal de lembrete sao GLOBAIS (gerenciados em
-                Conexoes → Notificacoes de Cobranca). */}
-            <div className="mt-4">
-              <label className="block text-xs font-medium text-slate-600 mb-1">Data do 1o vencimento</label>
-              <input
-                type="date"
-                value={form.first_due_date || ''}
-                onChange={e => setForm({...form, first_due_date: e.target.value})}
-                className="input-field text-sm w-full sm:w-60"
-                data-testid="company-first-due-date"
-              />
-              <p className="text-[11px] text-slate-500 mt-1">
-                Base para calcular as parcelas. Os lembretes sao enviados automaticamente
-                segundo a configuracao global em <em>Conexoes → Notificacoes de Cobranca</em>.
-              </p>
+                Conexoes → Notificacoes de Cobranca). O representante eh
+                usado como variavel {{nome}} nas cobrancas. */}
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Data do 1o vencimento</label>
+                <input
+                  type="date"
+                  value={form.first_due_date || ''}
+                  onChange={e => setForm({...form, first_due_date: e.target.value})}
+                  className="input-field text-sm w-full"
+                  data-testid="company-first-due-date"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Representante <span className="text-slate-400">(variavel {'{{nome}}'})</span>
+                </label>
+                <input
+                  type="text"
+                  maxLength={120}
+                  value={form.representante || ''}
+                  onChange={e => setForm({...form, representante: e.target.value})}
+                  placeholder="Ex: Joao da Silva"
+                  className="input-field text-sm w-full"
+                  data-testid="company-representante"
+                />
+              </div>
             </div>
+            <p className="text-[11px] text-slate-500 mt-2">
+              Os lembretes sao enviados automaticamente segundo a configuracao global em
+              <em> Conexoes → Notificacoes de Cobranca</em>. Quando o representante for vazio,
+              eh usado o nome da empresa.
+            </p>
           </div>
 
           {/* Status (editing only) */}

@@ -10,6 +10,60 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-16 (L) — Multi-offset reminders + history + resend + representante ✅
+
+**Pedido do usuario:**
+1. Historico de reminders por empresa, com opcao de reenviar do Financeiro.
+2. Multiplos lembretes (ex: 10, 3, 1 dias antes) configuravel em Notificacoes de Cobranca.
+3. Campo `representante` na empresa (usado como variavel `{{nome}}`).
+
+**Backend:**
+- `models.py`: campo `representante` em CompanyCreate/Update.
+- `super_admin_routes.py`:
+  - `BillingReminderSettingsIn` ganhou `days_before_due_list` (mantem singular para back-compat).
+  - `GET/PUT /billing-reminder-settings` retorna lista + singular (= max).
+  - Novo `GET /super-admin/billing-reminder-history?company_id=&transaction_id=` (200 rows).
+  - Novo `POST /super-admin/finance/transactions/{id}/resend-reminder` — refira a mensagem com o template global e os valores da parcela; loga em `billing_reminder_history` com `kind=manual_resend`. Retorna 400 se faltar conexao/telefone (mas ainda loga o failure no historico).
+  - `representante` persistido junto com `first_due_date` no save da empresa.
+- `scheduler.py::_process_billing_reminders`: reescrito para suportar lista de offsets.
+  - Cada parcela pendente pode receber multiplos lembretes (1 por offset).
+  - Janela: `today >= due - offset`. Skip offsets >= max para nao quebrar walk.
+  - Idempotencia por (txn, offset) usando consulta a `billing_reminder_history` com status=sent.
+  - **Failed retries:** offsets que falharam (sem WA, sem telefone, etc) sao reretentados em cada tick — desejado para tolerar outages temporarios.
+  - Template usa `representante` quando setado, fallback para `name` da empresa.
+  - Cada dispatch (sucesso ou falha) eh registrado em `billing_reminder_history` com:
+    `company_id`, `transaction_id`, `phone`, `text`, `kind` (auto|manual_resend), `status` (sent|failed), `error`, `days_before_due`, `sent_at`.
+
+**Frontend:**
+- `BillingReminderPanel.js`:
+  - Substituiu input unico de dias por **lista de chips** (10d antes, 3d antes, ...). Add via input number + botao "+ Adicionar" (Enter tambem funciona). Remove via botao `x` no chip. Min sempre 1 chip ([10] se vazio).
+- `SuperAdmin/Dashboard.js (CompanyModal)`:
+  - Novo campo `representante` ao lado de `first_due_date` (grid 2 col em desktop).
+  - Texto explicativo deixa claro que `{{nome}}` usa o representante.
+- `SuperAdmin/AdmLancamentosPanel.js`:
+  - Cada linha de Lancamento com `kind=licenca` + `status!=pago` ganhou 2 botoes:
+    - **Send (verde)** — reenvio manual instantaneo.
+    - **History (cinza)** — abre modal `ReminderHistoryModal`.
+  - Modal mostra timeline: cada entry com badge (ENTREGUE/FALHOU), tipo (Automatico/Manual), offset (Nd antes), data/hora, preview do texto. Botao "Reenviar agora" no rodape.
+
+**Testes:**
+- `tests/test_iteration_56.py` (3/3 passing): PUT da lista, scheduler multi-offset com representante + idempotencia, resend endpoint logando historico.
+- Regressao total: **71/71** (flow_engine, bot_pause, ticket_auto_close, licenses iter54, sgp_pix_repair, iter55, iter56, bot_pause_api, sgp_gateway_dedup).
+
+**E2E manual:**
+- PUT settings `days_before_due_list=[10,3,1]` → GET retorna mesma lista ordenada desc.
+- Empresa com `first_due_date=today+3`, `representante="João da Silva"`:
+  - Scheduler cria 1 txn + dispara 2 lembretes (offsets 10d e 3d, com `Joao da Silva` no texto). Offset 1d pulado (today < due-1).
+  - Tick repetido NAO duplica reminders (idempotencia em `billing_reminder_history`).
+- POST `/resend-reminder` cria entrada `kind=manual_resend` no historico.
+
+**Para producao:** Redeploy. Apos:
+1. SA → Conexoes → Notificacoes de Cobranca: editar lista (ex: 10, 3, 1 dias antes).
+2. SA → Empresas → editar empresas existentes: preencher campo "Representante".
+3. SA → Financeiro Admin → Lancamentos: cada parcela de licenca pendente tem botoes Send (reenvio) e History (timeline).
+
+
+
 ### 2026-02-16 (K) — Conexoes virou parent expansivel + Notificacoes de Cobranca global ✅
 
 **Pedido do usuario:** Remover as 3 abas internas da pagina Conexoes (tanto SA quanto tenant), transformar em sub-itens da sidebar. Criar uma 4a sub-aba "Notificacoes de Cobranca" para configurar globalmente o lembrete (dias antes do vencimento + mensagem + canal). Remover o bloco de lembrete que estava dentro do cadastro da Empresa.

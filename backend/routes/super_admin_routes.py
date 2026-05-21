@@ -348,7 +348,12 @@ async def extend_wa_sent_cache_ttl(
 
 class BillingReminderSettingsIn(BaseModel):
     enabled: bool = True
-    days_before_due: int = 10
+    # 2026-02-16 (L) — Multiplos lembretes por parcela. Lista de offsets em
+    # dias antes do vencimento. Ex: [10, 3, 1] envia 3 lembretes por parcela.
+    # Mantido `days_before_due` (singular) para back-compat — eh derivado
+    # automaticamente do primeiro item da lista.
+    days_before_due_list: Optional[List[int]] = None
+    days_before_due: Optional[int] = None  # legacy/back-compat
     channel: str = "whatsapp"  # whatsapp | email | both
     default_message: Optional[str] = None
 
@@ -358,14 +363,20 @@ async def get_billing_reminder_settings(
     _: dict = Depends(require_super_admin),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
-    """Global Notificacao de Cobranca config. 2026-02-16 (K). Single doc
+    """Global Notificacao de Cobranca config. 2026-02-16 (K + L). Single doc
     stored in `system_settings` with key='billing_reminder'."""
     doc = await db.system_settings.find_one(
         {"key": "billing_reminder"}, {"_id": 0}
     ) or {}
+    days_list = doc.get("days_before_due_list")
+    if not isinstance(days_list, list) or not days_list:
+        # back-compat: derive from singular if present
+        legacy = int(doc.get("days_before_due", 10))
+        days_list = [legacy]
     return {
         "enabled": bool(doc.get("enabled", True)),
-        "days_before_due": int(doc.get("days_before_due", 10)),
+        "days_before_due_list": [int(d) for d in days_list],
+        "days_before_due": int(days_list[0]),  # back-compat
         "channel": doc.get("channel", "whatsapp"),
         "default_message": doc.get("default_message") or (
             "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
@@ -380,14 +391,24 @@ async def update_billing_reminder_settings(
     _: dict = Depends(require_super_admin),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
-    days = max(0, min(60, int(data.days_before_due or 0)))
+    # Build the days list — prefer the new list field, fall back to singular.
+    raw_list = data.days_before_due_list
+    if raw_list is None and data.days_before_due is not None:
+        raw_list = [data.days_before_due]
+    raw_list = raw_list or [10]
+    # Sanitize, dedupe, clip to [0..60], sort descending so the FURTHEST
+    # reminder fires first.
+    days_list = sorted({max(0, min(60, int(x))) for x in raw_list}, reverse=True)
+    if not days_list:
+        days_list = [10]
     channel = (data.channel or "whatsapp").lower()
     if channel not in ("whatsapp", "email", "both"):
         raise HTTPException(400, "channel deve ser whatsapp, email ou both")
     update = {
         "key": "billing_reminder",
         "enabled": bool(data.enabled),
-        "days_before_due": days,
+        "days_before_due_list": days_list,
+        "days_before_due": days_list[0],  # back-compat
         "channel": channel,
         "default_message": (data.default_message or "")[:2000] or None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -396,6 +417,107 @@ async def update_billing_reminder_settings(
         {"key": "billing_reminder"}, {"$set": update}, upsert=True,
     )
     return {"ok": True, **{k: v for k, v in update.items() if k != "key"}}
+
+
+@router.get("/billing-reminder-history")
+async def list_billing_reminder_history(
+    company_id: Optional[str] = None,
+    transaction_id: Optional[str] = None,
+    limit: int = 200,
+    _: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-02-16 (L) — Reminder dispatch log. Query by company or txn."""
+    q = {}
+    if company_id:
+        q["company_id"] = company_id
+    if transaction_id:
+        q["transaction_id"] = transaction_id
+    rows = await db.billing_reminder_history.find(
+        q, {"_id": 0}
+    ).sort("sent_at", -1).limit(min(1000, max(1, int(limit)))).to_list(1000)
+    return rows
+
+
+@router.post("/finance/transactions/{transaction_id}/resend-reminder")
+async def resend_transaction_reminder(
+    transaction_id: str,
+    _: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Manually re-fire the reminder for a given Lancamento. Uses the
+    current global template + the parcela's stored fields. Logged as
+    `kind='manual_resend'` in `billing_reminder_history`. 2026-02-16 (L)."""
+    from scheduler import _get_sa_system_connection, _send_billing_reminder, _render_reminder
+    txn = await db.super_admin_transactions.find_one(
+        {"id": transaction_id}, {"_id": 0}
+    )
+    if not txn:
+        raise HTTPException(404, "Lancamento nao encontrado")
+    company = None
+    if txn.get("company_id"):
+        company = await db.companies.find_one(
+            {"id": txn["company_id"]}, {"_id": 0, "name": 1, "phone": 1, "representante": 1, "id": 1},
+        )
+    settings = await db.system_settings.find_one(
+        {"key": "billing_reminder"}, {"_id": 0}
+    ) or {}
+    template = settings.get("default_message") or (
+        "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
+        "vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame."
+    )
+    phone = (company or {}).get("phone") or ""
+    nome = (company or {}).get("representante") or (company or {}).get("name") or ""
+    ctx = {
+        "nome": nome,
+        "empresa": (company or {}).get("name") or "",
+        "valor": f"{float(txn.get('amount') or 0):.2f}".replace(".", ","),
+        "vencimento": _fmt_br_date(txn.get("due_date") or txn.get("date") or ""),
+        "parcela": f"{int(txn.get('recurrence_index') or 0) + 1}/{int(txn.get('recurrence_total') or 1)}",
+    }
+    text = _render_reminder(template, ctx)
+    sa_conn = await _get_sa_system_connection(db)
+    sa_conn_id = sa_conn.get("id") if sa_conn else None
+    sent = False
+    error = None
+    if sa_conn_id and phone and text:
+        try:
+            sent = await _send_billing_reminder(sa_conn_id, phone, text)
+            if not sent:
+                error = "send_failed"
+        except Exception as e:
+            error = str(e)[:300]
+    else:
+        error = (
+            "no_sa_connection" if not sa_conn_id else
+            ("no_phone" if not phone else "no_text")
+        )
+    history_doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": txn.get("company_id"),
+        "transaction_id": transaction_id,
+        "phone": phone,
+        "text": text,
+        "kind": "manual_resend",
+        "status": "sent" if sent else "failed",
+        "error": error,
+        "days_before_due": None,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.billing_reminder_history.insert_one(history_doc)
+    history_doc.pop("_id", None)
+    if not sent:
+        raise HTTPException(400, f"Falha ao reenviar: {error or 'unknown'}")
+    return {"ok": True, "history": history_doc}
+
+
+def _fmt_br_date(iso: str) -> str:
+    try:
+        from datetime import datetime as _dt
+        return _dt.fromisoformat(iso).strftime("%d/%m/%Y")
+    except Exception:
+        return iso or ""
+
 
 
 @router.post("/companies")
@@ -509,6 +631,8 @@ async def create_company(
     extra_billing_set = {}
     if data.first_due_date is not None:
         extra_billing_set["first_due_date"] = data.first_due_date
+    if data.representante is not None:
+        extra_billing_set["representante"] = (data.representante or "").strip()[:120]
     if extra_billing_set:
         await db.companies.update_one({"id": company_id}, {"$set": extra_billing_set})
         for k, v in extra_billing_set.items():

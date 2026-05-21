@@ -4,6 +4,7 @@ import api from '../../services/api';
 import {
   Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
   CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent, Building, Pencil,
+  Send, History,
 } from 'lucide-react';
 
 const fmt = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
@@ -33,6 +34,21 @@ export const AdmLancamentosPanel = () => {
   const [filters, setFilters] = useState({ direction: '', status: '', kind: '' });
   const [showForm, setShowForm] = useState(false);
   const [editingTxn, setEditingTxn] = useState(null);
+  // 2026-02-16 (L) — historico de lembretes por txn (modal).
+  const [historyTxn, setHistoryTxn] = useState(null);
+  const [resending, setResending] = useState(null);
+
+  const resendReminder = async (txnId) => {
+    setResending(txnId);
+    try {
+      await api.post(`/super-admin/finance/transactions/${txnId}/resend-reminder`);
+      toast.success('Lembrete reenviado.');
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao reenviar lembrete');
+    } finally {
+      setResending(null);
+    }
+  };
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -244,6 +260,28 @@ export const AdmLancamentosPanel = () => {
                     </td>
                     <td className="px-3 py-2 text-right">
                       <div className="inline-flex items-center gap-1">
+                        {/* 2026-02-16 (L) — apenas para Licenca pendente. */}
+                        {t.kind === 'licenca' && t.status !== 'pago' && t.company_id && (
+                          <>
+                            <button
+                              onClick={() => resendReminder(t.id)}
+                              disabled={resending === t.id}
+                              className="p-1.5 hover:bg-emerald-50 rounded text-emerald-600 disabled:opacity-50"
+                              title="Reenviar lembrete de cobranca"
+                              data-testid={`adm-resend-${t.id}`}
+                            >
+                              <Send className={`w-4 h-4 ${resending === t.id ? 'animate-pulse' : ''}`} />
+                            </button>
+                            <button
+                              onClick={() => setHistoryTxn(t)}
+                              className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
+                              title="Historico de lembretes"
+                              data-testid={`adm-history-${t.id}`}
+                            >
+                              <History className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
                         <button
                           onClick={() => { setEditingTxn(t); setShowForm(true); }}
                           className="p-1.5 hover:bg-indigo-50 rounded text-indigo-600"
@@ -271,6 +309,13 @@ export const AdmLancamentosPanel = () => {
       </div>
 
       {showForm && <AdmTxnFormModal initial={editingTxn} onClose={() => { setShowForm(false); setEditingTxn(null); }} onSaved={() => { setShowForm(false); setEditingTxn(null); load(); }} />}
+      {historyTxn && (
+        <ReminderHistoryModal
+          txn={historyTxn}
+          onClose={() => setHistoryTxn(null)}
+          onResend={async () => { await resendReminder(historyTxn.id); }}
+        />
+      )}
     </div>
   );
 };
@@ -603,3 +648,106 @@ const Field = ({ label, children, className = '' }) => (
 );
 
 export default AdmLancamentosPanel;
+
+// 2026-02-16 (L) — Modal mostrando o historico de lembretes enviados para
+// um Lancamento (auto-gerados + reenvios manuais). Permite reenviar pelo
+// botao do modal tambem. Endpoint: GET /super-admin/billing-reminder-history.
+const ReminderHistoryModal = ({ txn, onClose, onResend }) => {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [resending, setResending] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/super-admin/billing-reminder-history', {
+        params: { transaction_id: txn.id, limit: 100 },
+      });
+      setRows(Array.isArray(r.data) ? r.data : []);
+    } catch (_) {
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [txn.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleResend = async () => {
+    setResending(true);
+    try { await onResend(); await load(); }
+    finally { setResending(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-y-auto" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl my-4 sm:my-8"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="reminder-history-modal"
+      >
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200">
+          <div>
+            <h3 className="text-base sm:text-lg font-bold text-slate-900">Historico de lembretes</h3>
+            <p className="text-xs text-slate-500 mt-0.5 truncate">{txn.description}</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 sm:p-6">
+          {loading ? (
+            <div className="text-center py-8 text-sm text-slate-500">Carregando...</div>
+          ) : rows.length === 0 ? (
+            <div className="text-center py-8 text-sm text-slate-500">
+              Nenhum lembrete registrado ainda para este Lancamento.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+              {rows.map(r => (
+                <div
+                  key={r.id}
+                  className={`rounded-lg border p-3 ${r.status === 'sent' ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'}`}
+                  data-testid={`reminder-history-row-${r.id}`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className={`px-2 py-0.5 rounded font-semibold ${r.status === 'sent' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                        {r.status === 'sent' ? 'ENTREGUE' : 'FALHOU'}
+                      </span>
+                      <span className="text-slate-500">
+                        {r.kind === 'manual_resend' ? 'Manual' : 'Automatico'}
+                        {r.days_before_due !== null && r.days_before_due !== undefined && ` · ${r.days_before_due}d antes`}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400 whitespace-nowrap">
+                      {r.sent_at ? new Date(r.sent_at).toLocaleString('pt-BR') : ''}
+                    </span>
+                  </div>
+                  {r.error && (
+                    <p className="text-[11px] text-rose-700 mb-1">Erro: {r.error}</p>
+                  )}
+                  <p className="text-xs text-slate-700 whitespace-pre-wrap line-clamp-4 font-mono">
+                    {r.text || ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 p-4 sm:p-6 border-t border-slate-200">
+          <button onClick={onClose} className="btn-secondary">Fechar</button>
+          <button
+            onClick={handleResend}
+            disabled={resending}
+            data-testid="reminder-history-resend"
+            className="btn-primary flex items-center gap-1.5"
+          >
+            <Send className={`w-4 h-4 ${resending ? 'animate-pulse' : ''}`} />
+            {resending ? 'Reenviando...' : 'Reenviar agora'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
