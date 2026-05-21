@@ -21,6 +21,7 @@ const BillingReminderPanel = () => {
   const [form, setForm] = useState({
     enabled: true,
     days_before_due_list: [10],
+    lancamento_gen_days: 10,
     channel: 'whatsapp',
     default_message: '',
   });
@@ -39,6 +40,7 @@ const BillingReminderPanel = () => {
         setForm({
           enabled: !!r.data?.enabled,
           days_before_due_list: list.map(Number),
+          lancamento_gen_days: Number(r.data?.lancamento_gen_days ?? 10),
           channel: r.data?.channel || 'whatsapp',
           default_message: r.data?.default_message || '',
         });
@@ -74,6 +76,7 @@ const BillingReminderPanel = () => {
       await api.put('/super-admin/billing-reminder-settings', {
         enabled: form.enabled,
         days_before_due_list: form.days_before_due_list,
+        lancamento_gen_days: Math.max(0, Math.min(180, parseInt(form.lancamento_gen_days, 10) || 0)),
         channel: form.channel,
         default_message: form.default_message,
       });
@@ -210,6 +213,36 @@ const BillingReminderPanel = () => {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Default message */}
+      <div className="card max-w-2xl">
+        <div className="flex items-center gap-2 mb-2">
+          <CalendarIcon className="w-5 h-5 text-slate-500" />
+          <h3 className="font-semibold text-slate-900">Geracao automatica do Lancamento</h3>
+        </div>
+        <p className="text-xs text-slate-500 mb-3">
+          Dias antes do vencimento em que o sistema cria automaticamente o Lancamento
+          financeiro da proxima parcela. Tambem dispara imediatamente ao cadastrar uma
+          empresa cujo 1o vencimento esta dentro desse intervalo.
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={180}
+            value={form.lancamento_gen_days}
+            onChange={(e) => setForm({ ...form, lancamento_gen_days: e.target.value })}
+            className="input-field w-28"
+            data-testid="billing-reminder-gen-days"
+            disabled={!form.enabled}
+          />
+          <span className="text-sm text-slate-600">dias antes do vencimento</span>
+        </div>
+        <p className="text-[11px] text-slate-500 mt-1">
+          Recomendado: 10. Permitido: 0 a 180. Independente dos lembretes (acima),
+          esse parametro controla apenas quando a parcela aparece no Financeiro Admin.
+        </p>
       </div>
 
       {/* Default message */}

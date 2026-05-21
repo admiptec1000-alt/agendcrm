@@ -354,6 +354,11 @@ class BillingReminderSettingsIn(BaseModel):
     # automaticamente do primeiro item da lista.
     days_before_due_list: Optional[List[int]] = None
     days_before_due: Optional[int] = None  # legacy/back-compat
+    # 2026-02-16 (N) — Quantos dias antes do vencimento o sistema MATERIALIZA
+    # o Lancamento (cria a row em super_admin_transactions). Decoupled dos
+    # lembretes acima. Default 10. Permite, por exemplo, criar a parcela
+    # com 30 dias de antecedencia mas so disparar lembretes [10, 3, 1].
+    lancamento_gen_days: Optional[int] = None
     channel: str = "whatsapp"  # whatsapp | email | both
     default_message: Optional[str] = None
 
@@ -363,20 +368,23 @@ async def get_billing_reminder_settings(
     _: dict = Depends(require_super_admin),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
-    """Global Notificacao de Cobranca config. 2026-02-16 (K + L). Single doc
-    stored in `system_settings` with key='billing_reminder'."""
+    """Global Notificacao de Cobranca config. 2026-02-16 (K + L + N). Single
+    doc stored in `system_settings` with key='billing_reminder'."""
     doc = await db.system_settings.find_one(
         {"key": "billing_reminder"}, {"_id": 0}
     ) or {}
     days_list = doc.get("days_before_due_list")
     if not isinstance(days_list, list) or not days_list:
-        # back-compat: derive from singular if present
         legacy = int(doc.get("days_before_due", 10))
         days_list = [legacy]
+    gen_days = doc.get("lancamento_gen_days")
+    if gen_days is None:
+        gen_days = max(days_list)
     return {
         "enabled": bool(doc.get("enabled", True)),
         "days_before_due_list": [int(d) for d in days_list],
         "days_before_due": int(days_list[0]),  # back-compat
+        "lancamento_gen_days": int(gen_days),
         "channel": doc.get("channel", "whatsapp"),
         "default_message": doc.get("default_message") or (
             "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
@@ -404,11 +412,18 @@ async def update_billing_reminder_settings(
     channel = (data.channel or "whatsapp").lower()
     if channel not in ("whatsapp", "email", "both"):
         raise HTTPException(400, "channel deve ser whatsapp, email ou both")
+    # 2026-02-16 (N) — `lancamento_gen_days`: quando criar a row no financeiro.
+    # Default = 10. Clip a [0..180].
+    gen_days = data.lancamento_gen_days
+    if gen_days is None:
+        gen_days = 10
+    gen_days = max(0, min(180, int(gen_days)))
     update = {
         "key": "billing_reminder",
         "enabled": bool(data.enabled),
         "days_before_due_list": days_list,
         "days_before_due": days_list[0],  # back-compat
+        "lancamento_gen_days": gen_days,
         "channel": channel,
         "default_message": (data.default_message or "")[:2000] or None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -638,6 +653,18 @@ async def create_company(
         for k, v in extra_billing_set.items():
             company[k] = v
 
+    # 2026-02-16 (N) — Se a empresa esta cadastrada com first_due_date dentro
+    # da janela de geracao (lancamento_gen_days), ja lanca o proximo vencimento
+    # no financeiro imediatamente em vez de esperar o proximo tick do scheduler.
+    try:
+        from scheduler import _process_billing_reminders
+        await _process_billing_reminders(db)
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"[super_admin] sync billing-reminder failed company={company_id}: {_e}"
+        )
+
     # Create admin user for this company
     admin_user = {
         "id": str(uuid.uuid4()),
@@ -747,6 +774,16 @@ async def update_company(
             import logging
             logging.getLogger(__name__).warning(
                 f"[super_admin] adm_txn wipe failed company={company_id}: {_e}"
+            )
+        # 2026-02-16 (N) — Apos limpar pendentes, ja regera as parcelas
+        # que estao dentro da janela de geracao (lancamento_gen_days).
+        try:
+            from scheduler import _process_billing_reminders
+            await _process_billing_reminders(db)
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[super_admin] sync billing-reminder failed company={company_id}: {_e}"
             )
 
     # Sync subdomain with booking_pages

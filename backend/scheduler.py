@@ -291,7 +291,7 @@ def _render_reminder(template: str, ctx: dict) -> str:
 
 
 async def _process_billing_reminders(db):
-    # Global config (2026-02-16 K + L) — operator can override via SA UI.
+    # Global config (2026-02-16 K + L + N) — operator can override via SA UI.
     settings = await db.system_settings.find_one(
         {"key": "billing_reminder"}, {"_id": 0}
     ) or {}
@@ -302,14 +302,22 @@ async def _process_billing_reminders(db):
         days_list = [int(settings.get("days_before_due") or BILLING_REMINDER_DAYS)]
     # Normalize: dedupe + clip + sort descending (furthest reminder first).
     days_list = sorted({max(0, min(60, int(x))) for x in days_list}, reverse=True)
-    max_offset = max(days_list)
+    # 2026-02-16 (N) — `lancamento_gen_days` controls TXN creation. Decoupled
+    # from the reminder offsets — default = max(days_list) for back-compat.
+    gen_days = settings.get("lancamento_gen_days")
+    if gen_days is None:
+        gen_days = max(days_list)
+    gen_days = max(0, min(180, int(gen_days)))
     global_default_msg = settings.get("default_message") or (
         "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
         "vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame."
     )
     channel = (settings.get("channel") or "whatsapp").lower()
     today = datetime.now(timezone.utc).date()
-    cutoff = today + timedelta(days=max_offset)
+    # Walk parcelas where due is within max(gen_days, max(days_list)). The
+    # gen_days controls when we create the row; days_list controls when we
+    # fire reminders. Both events are independent.
+    cutoff = today + timedelta(days=max(gen_days, max(days_list) if days_list else gen_days))
     cursor = db.companies.find(
         {
             "monthly_price": {"$gt": 0},
@@ -357,7 +365,12 @@ async def _process_billing_reminders(db):
 
                 txn = by_index.get(i)
                 if not txn:
-                    # Create the Lancamento now.
+                    # Create the Lancamento only when within `gen_days` window
+                    # (2026-02-16 N). Reminders may still walk further out.
+                    if (due - today).days > gen_days:
+                        # Too early to materialize the row, but maybe a
+                        # reminder offset is past-due. Skip creation.
+                        continue
                     desc_suffix = f" - parcela {i + 1}/{installments}" if installments > 1 else ""
                     txn = {
                         "id": str(__import__('uuid').uuid4()),

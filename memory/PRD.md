@@ -10,6 +10,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-16 (N) — Parametro `lancamento_gen_days` (gera financeiro X dias antes) + sync no save ✅
+
+**Pedido do usuario:** Criar parametro que define quantos dias antes do vencimento o Lancamento eh gerado automaticamente. Antes era hardcoded em 10. Ao cadastrar a empresa com data de 1o vencimento dentro do intervalo, ja lancar imediatamente no financeiro.
+
+**Backend:**
+- `BillingReminderSettingsIn`: novo campo `lancamento_gen_days` (default 10, clip 0..180). Persistido em `system_settings.billing_reminder`.
+- `scheduler.py::_process_billing_reminders`: decoupling claro:
+  - `lancamento_gen_days` controla quando MATERIALIZAR a parcela (cria row em `super_admin_transactions`).
+  - `days_before_due_list` controla quando DISPARAR cada lembrete.
+  - Cutoff walk = `max(gen_days, max(days_list))` para nao perder eventos quando reminders ficam fora da janela de geracao.
+  - Quando `(due - today).days > gen_days` e a row nao existe → `continue` (skip materializacao).
+- `super_admin_routes.py`: `create_company` e `update_company` chamam `await _process_billing_reminders(db)` apos salvar (instantaneo, em vez de esperar ate 60s pelo tick do scheduler).
+
+**Frontend:**
+- `BillingReminderPanel.js`: novo card **"Geracao automatica do Lancamento"** entre os cards de dias/canal e a mensagem padrao. Input number 0-180 com label "dias antes do vencimento". Default 10.
+
+**Validacao e2e:**
+- Configurado `gen_days=30` + `days_list=[10,3,1]`.
+- Empresa criada com `first_due_date=today+20`:
+  - **TXN criado IMEDIATAMENTE** apos POST (1 row, parcela 1/2, due em 20d). 
+  - **History 0 entries** (today+20 > today+10 = fora da janela de qualquer reminder). 
+- Reset settings + cleanup OK.
+
+**Regressao:** 15/15 (iter55+iter56+ticket_auto_close).
+
+**Para producao:** Redeploy. Apos:
+1. SA → Conexoes → Notificacoes de Cobranca → ajustar o novo campo "Geracao automatica do Lancamento" (default 10 mantem comportamento anterior).
+2. Ao salvar uma empresa cujo 1o vencimento esta dentro do intervalo, a parcela ja aparece em Financeiro Admin → Lancamentos imediatamente.
+
+
+
 ### 2026-02-16 (M) — Financeiro Admin: cards expansiveis mobile + defaults + Cliente como 1a coluna ✅
 
 **Pedido do usuario:**
