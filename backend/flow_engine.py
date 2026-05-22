@@ -806,6 +806,12 @@ async def advance_flow(
     tid = ticket.get("id")
     logger.info(f"[flow_engine] advance start flow={flow_id} ticket={tid} is_initial={is_initial} incoming_text={(incoming_text or '')[:80]!r} prev_node={ticket.get('active_flow_node_id')!r}")
 
+    # 2026-02-17 — Track if any outbound failed this round so we do NOT
+    # save a `pending_node_id` (menu/capture) for which the customer never
+    # actually saw the prompt. Without this, the flow gets stuck waiting
+    # for a reply to a message that was never delivered.
+    send_failed_in_round = {"v": False}
+
     async def _emit_and_persist(text: str):
         """Send text outbound and persist as agent message. Honours dry_run.
         Crucially we SEND FIRST (capturing the Baileys message_id) and only
@@ -816,6 +822,20 @@ async def advance_flow(
         if dry_run:
             return
         wa_msg_id = await _send_whatsapp(ticket, text, db=db)
+        # 2026-02-17 — Only flag as failure when a REAL send was attempted
+        # (ticket has connection_id + customer_phone). Without those,
+        # _send_whatsapp short-circuits to None and that's NOT a failure
+        # (test envs / dry runs / preview where WA isn't wired).
+        attempted_real_send = bool(
+            ticket.get("connection_id")
+            and (ticket.get("customer_phone") or ticket.get("lid_jid"))
+        )
+        if attempted_real_send and not wa_msg_id:
+            send_failed_in_round["v"] = True
+            logger.warning(
+                f"[flow_engine] send returned None for ticket={ticket.get('id')} — "
+                f"flow will NOT pause on this node (avoid stuck state)"
+            )
         await _persist_outgoing(db, ticket["id"], text, flow_id,
                                 wa_message_id=wa_msg_id)
 
@@ -1135,8 +1155,19 @@ async def advance_flow(
         logger.warning(f"[flow_engine] hop limit reached on flow {flow_id} ticket {tid}")
 
     if not dry_run:
+        # 2026-02-17 — If any outbound failed, clear pending_node_id so the
+        # customer's NEXT message restarts the flow from the start instead
+        # of being stuck waiting for a reply they never knew was expected.
+        # The auto-reconnect watchdog (flow_engine._bump_send_failure) will
+        # restore the WhatsApp connection in parallel.
+        if send_failed_in_round["v"] and pending_node_id:
+            logger.warning(
+                f"[flow_engine] discarding pending_node_id={pending_node_id!r} "
+                f"because a send failed in this round (avoid stuck state)"
+            )
+            pending_node_id = None
         await _save_state(db, ticket["id"], flow_id, pending_node_id, vars_)
-    logger.info(f"[flow_engine] advance done ticket={tid} sent_count={len(sent)} pending_node={pending_node_id!r}")
+    logger.info(f"[flow_engine] advance done ticket={tid} sent_count={len(sent)} pending_node={pending_node_id!r} send_failed={send_failed_in_round['v']}")
     return sent
 
 

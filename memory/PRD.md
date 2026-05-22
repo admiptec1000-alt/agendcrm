@@ -10,6 +10,48 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (S) — v2.1.12: fix definitivo do "Aguardando mensagem" + recuperacao de fluxo travado ✅
+
+**Bug recorrente:** Mesmo apos v2.1.10/v2.1.11 (TTL 7d + stale_session_force_assert + /restart), usuarios em prod (empresa WEB) continuavam vendo mensagens do BOT chegando como **"Aguardando mensagem. Essa acao pode levar alguns instantes."** + fluxo parando logo no inicio (nao trazia menu de opcoes).
+
+**Root causes residuais identificados:**
+
+1. **Threshold de 12h era folgado demais.** O `assertSessions(force=true)` so disparava se o JID estivesse idle > 12h. Em prod o gap real (14:56 → 20:13 = ~5h) nao acionava — bastava o destinatario ter rotacionado chaves (atualizacao do WA app, troca de dispositivo, sync de multi-device) para a sessao do nosso lado virar stale.
+
+2. **Sem upload periodico de pre-keys.** Baileys gera 30 pre-keys iniciais. Cada nova sessao consome 1. Em uma base ativa, depois de ~30 contatos novos o servidor WA fica sem pre-keys para entregar a quem nos contata → mensagens chegam undecryptable.
+
+3. **Sem feedback de retry-receipts.** Quando o WA do destinatario reporta `status=failed` (codigo 1), nao tinhamos nenhum reforco direcionado para aquele JID.
+
+4. **Flow stuck quando send falha.** Se um node `menu` chamava `_send_whatsapp` e retornava None (real failure), o backend persistia `pending_node_id=menu` no ticket. O cliente nao via a mensagem mas o bot ficava esperando resposta — fluxo parado sem saida.
+
+**Fixes (whatsapp-service v2.1.12):**
+
+- **`force_assert_always`**: removida heuristica de "stale > 12h". Cada `sendMessage` agora faz `assertSessions(force=true)` incondicionalmente. Operacao barata, idempotente, fetcha prekey bundle fresco do servidor WA toda vez.
+- **`prekey_periodic_upload`**: `setInterval` global a cada 30 min chama `sock.uploadPreKeysToServerIfRequired()` em cada instancia conectada. Mais 1 chamada inicial 30s apos `connection==='open'`. Garante que pre-keys nunca esgotem.
+- **`failed_jid_recovery`**: hook em `messages.update`. Quando status=1 (failed) chega para uma mensagem enviada, o JID destino entra em `jidNeedsForceAssert` (Set). Limpa quando chega delivered/read/played. Log explicito quando recovery acontece.
+
+**Fixes (backend `flow_engine.py`):**
+
+- **Stuck-state recovery**: novo flag local `send_failed_in_round`. Quando `_emit_and_persist` chama `_send_whatsapp` em um ticket com `connection_id+phone` REAL e retorna None, marca o round como falho. No final, se houver pending_node_id (menu/capture) e algum send falhou, **descarta o pending_node_id** (clear). Resultado: a proxima mensagem do cliente re-dispara o fluxo do zero em vez de ficar travado.
+- Scope: so trigga para tickets com connection real, preservando o comportamento de tests/dry-run/preview.
+
+**Bump:** `whatsapp-service/index.js` v2.1.11 → **v2.1.12** com 3 features novas no `/version`:
+```
+force_assert_always: true
+prekey_periodic_upload: true  
+failed_jid_recovery: true
+```
+
+**Testes:** 43/43 pytest passando (flow_engine + bot_pause + ticket_auto_close + iter55-57). Novo teste `test_real_send_failure_does_not_pin_pending_node` valida o stuck-state recovery.
+
+**Para producao:**
+1. **CRITICO — redeploy do whatsapp-service no Render** (Baileys). Sem isso, v2.1.12 nao roda em prod e o bug persiste.
+2. Redeploy do backend FastAPI para liberar o stuck-state recovery do flow_engine.
+3. Apos: verificar `GET /version` no Render → deve retornar `v2.1.12` com as 3 flags novas. Logs ao enviar para cliente devem mostrar `[STALE FIX] force-assert recovered flagged JID` quando o recovery acontece.
+
+
+
+
 ### 2026-02-17 (R) — Fix P0: lembretes de cobranca disparando todos juntos + suporte a 0 e dias negativos ✅
 
 **Bug reportado:** Em prod, mensagens de lembrete chegavam ao cliente de forma SIMULTANEA quando havia varios offsets configurados (ex: [10, 3, 1] disparava as 3 numa unica tick). Operador tambem pediu suporte a dia 0 (no vencimento) e a dias APOS vencimento (negativos) para automatizar follow-ups de inadimplencia.

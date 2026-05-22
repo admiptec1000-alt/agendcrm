@@ -157,6 +157,33 @@ def test_ticket_node_clears_flow_state():
     assert saved.get("queue") == "Suporte"
 
 
+def test_real_send_failure_does_not_pin_pending_node(monkeypatch):
+    """2026-02-17 (v2.1.12 companion) — when an actual WhatsApp send fails
+    (ticket has connection_id+phone but Baileys returns None), the flow MUST
+    NOT save `active_flow_node_id`. Otherwise the customer is stuck waiting
+    for a reply to a message they never received."""
+    db = _FakeDB()
+    flow = _flow_with_menu()
+    ticket = _ticket()
+    ticket["connection_id"] = "conn-xyz"  # real send attempt
+    db.tickets.docs["t1"] = ticket
+
+    async def _failing_send(*a, **kw):
+        return None  # simulates Baileys 500 / timeout / no message_id
+
+    monkeypatch.setattr(flow_engine, "_send_whatsapp", _failing_send)
+
+    sent = _run(flow_engine.advance_flow(db, ticket, flow, is_initial=True))
+    saved = db.tickets.docs["t1"]
+    # Engine still emitted text logically (sent list is non-empty), but
+    # the persisted state must NOT pin the menu — so the next inbound
+    # message can re-trigger the whole flow from scratch.
+    assert len(sent) >= 1
+    assert saved["active_flow_node_id"] is None, (
+        f"expected no pending node after send failure — got {saved.get('active_flow_node_id')!r}"
+    )
+
+
 def test_dry_run_does_not_persist():
     db = _FakeDB()
     flow = _flow_with_menu()

@@ -94,6 +94,15 @@ const jidLastSentAt = new Map();
 const JID_LAST_SENT_MAX = 5000;  // cap memory; evict oldest if exceeded
 const SENT_STORE_MAX = 2000;
 
+// 2026-02-17 (v2.1.12) — JIDs whose last send was reported as failed via
+// `messages.update` (status=1). On the next send to such a JID we ALWAYS
+// force-refetch the prekey bundle. Cleared when the next send succeeds or
+// when a delivered/read receipt arrives. Solves the "Aguardando mensagem"
+// pattern reported in prod where a recipient device rotates keys between
+// our sends — our session is technically valid but the recipient cannot
+// decrypt anymore.
+const jidNeedsForceAssert = new Set();
+
 async function persistSentToBackend(jid, msgId, message) {
   try {
     await axios.post(
@@ -408,6 +417,37 @@ setInterval(async () => {
   }
 }, WATCHDOG_INTERVAL_MS);
 
+// ── Pre-key refill watchdog (v2.1.12) ───────────────────────────────────────
+// Every 30 minutes, ask Baileys to upload more pre-keys to the WhatsApp
+// server if needed. Pre-keys are the one-time public keys WhatsApp uses to
+// bootstrap an E2E session with a brand-new contact. Each new outbound
+// session consumes ONE pre-key — and Baileys ships with only 30 by default.
+// On busy bots (broadcasting, billing reminders, first-contact flows), they
+// exhaust within hours. When that happens, the recipient's device receives
+// a ciphertext it cannot decrypt and renders "Aguardando mensagem".
+// uploadPreKeysToServerIfRequired is idempotent and cheap: only uploads if
+// remaining count is below threshold (~20).
+const PREKEY_REFILL_INTERVAL_MS = 30 * 60 * 1000;
+setInterval(async () => {
+  for (const [instanceId, inst] of Object.entries(connections)) {
+    if (!inst || inst.status !== 'connected' || !inst.sock) continue;
+    try {
+      if (typeof inst.sock.uploadPreKeysToServerIfRequired === 'function') {
+        await inst.sock.uploadPreKeysToServerIfRequired();
+        // No log on noop — only log on actual upload happening, but we
+        // cannot tell easily without intercepting. Keep silent in steady
+        // state.
+      } else if (typeof inst.sock.uploadPreKeys === 'function') {
+        await inst.sock.uploadPreKeys();
+      }
+    } catch (e) {
+      console.warn(`[${instanceId}] [PREKEY] periodic upload failed:`, e.message);
+    }
+  }
+}, PREKEY_REFILL_INTERVAL_MS);
+
+
+
 // Ensure auth directory
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
@@ -551,6 +591,25 @@ async function createConnection(instanceId) {
       instance.lastActivityAt = Date.now();
       console.log(`[${instanceId}] Connected as ${sock.user?.id}`);
 
+      // 2026-02-17 (v2.1.12) — Replenish pre-keys 30s after connect.
+      // Baileys ships with 30 prekeys; each new outbound session consumes
+      // one. On busy accounts they exhaust and new sessions cannot be
+      // established, producing "Aguardando mensagem" on the recipient.
+      // Baileys' helper uploads more only when needed.
+      setTimeout(async () => {
+        try {
+          if (typeof sock.uploadPreKeysToServerIfRequired === 'function') {
+            await sock.uploadPreKeysToServerIfRequired();
+            console.log(`[${instanceId}] [PREKEY] initial upload-if-required ok`);
+          } else if (typeof sock.uploadPreKeys === 'function') {
+            await sock.uploadPreKeys();
+            console.log(`[${instanceId}] [PREKEY] initial upload ok (fallback)`);
+          }
+        } catch (e) {
+          console.warn(`[${instanceId}] [PREKEY] initial upload failed:`, e.message);
+        }
+      }, 30000);
+
       // Notify FastAPI
       try {
         await axios.post(`${FASTAPI_URL}/api/channels/webhook/connected`, {
@@ -587,6 +646,18 @@ async function createConnection(instanceId) {
         const map = { 1: 'failed', 2: 'pending', 3: 'sent', 4: 'delivered', 5: 'read', 6: 'played' };
         const status = map[num];
         if (!status) continue;
+        // 2026-02-17 (v2.1.12) — Track failed sends per JID. Next send to
+        // this JID will force-refetch the prekey bundle. Clear the flag
+        // on healthy receipts (delivered/read/played).
+        const jid = u.key?.remoteJid;
+        if (jid) {
+          if (num === 1) {
+            jidNeedsForceAssert.add(jid);
+            console.warn(`[${instanceId}] [STALE FIX] flagged ${jid} for force-assert (msg status=failed)`);
+          } else if (num === 4 || num === 5 || num === 6) {
+            jidNeedsForceAssert.delete(jid);
+          }
+        }
         await axios.post(`${FASTAPI_URL}/api/channels/webhook/message-status`, {
           instance_id: instanceId, message_id: u.key?.id, status,
         }, { timeout: 5000 }).catch(() => {});
@@ -931,32 +1002,27 @@ app.post('/instances/:id/send', async (req, res) => {
     // to a brand-new contact. Without this, the recipient's WhatsApp shows
     // "Aguardando mensagem. Essa ação pode levar alguns instantes." (the
     // pre-key ciphertext arrived but the keys weren't yet established).
-    // 2026-02-15 (G2) — Two-stage approach:
-    //   1. Try force=false (cheap, idempotent — preserves existing session)
-    //   2. If it throws OR the JID has not been talked to in >12h (probable
-    //      stale session), retry with force=true to refetch the prekey
-    //      bundle and rebuild the session. This catches the recurring
-    //      "Aguardando mensagem" bug reported on production where the
-    //      recipient opens a long-stale chat — the session our side has
-    //      is technically valid but the recipient's device rotated keys.
-    const lastSeen = jidLastSentAt.get(targetJid);
-    const isStale = !lastSeen || (Date.now() - lastSeen) > (12 * 60 * 60 * 1000); // 12h
+    // 2026-02-17 (v2.1.12) — ALWAYS-FORCE strategy. Previous 12h "stale"
+    // heuristic missed the common case where the recipient rotated keys
+    // within a few hours (WA app update, device switch, multi-device sync
+    // turbulence). force=true is a cheap idempotent call that fetches a
+    // fresh prekey bundle from the WA server and rebuilds the session
+    // record — eliminating the root cause of the "Aguardando" placeholder.
     try {
-      await instance.sock.assertSessions([targetJid], false);
-      if (isStale) {
-        // Force re-bundle on stale contacts. WA rarely rate-limits this.
-        try {
-          await instance.sock.assertSessions([targetJid], true);
-          console.log(`[${req.params.id}] [STALE FIX] force-assertSessions ok for ${targetJid} (idle=${lastSeen ? Math.round((Date.now() - lastSeen) / 1000 / 60) + 'min' : 'never'})`);
-        } catch (e2) {
-          console.warn(`[${req.params.id}] [STALE FIX] force-assertSessions retry failed for ${targetJid}:`, e2.message);
-        }
+      // Warmup with force=false (free; succeeds for fresh sessions).
+      try { await instance.sock.assertSessions([targetJid], false); } catch (_) {}
+      // Then unconditionally force-refetch. Marker set by messages.update
+      // (status=1 failed) bumps logging priority for diagnostics.
+      const wasFlagged = jidNeedsForceAssert.has(targetJid);
+      await instance.sock.assertSessions([targetJid], true);
+      if (wasFlagged) {
+        console.log(`[${req.params.id}] [STALE FIX] force-assert recovered flagged JID ${targetJid}`);
+        jidNeedsForceAssert.delete(targetJid);
       }
     } catch (e) {
-      console.warn(`[${req.params.id}] assertSessions failed for ${targetJid} (force=false):`, e.message);
-      // Fallback: force=true. Worth the round-trip if the soft one threw.
-      try { await instance.sock.assertSessions([targetJid], true); }
-      catch (e2) { console.warn(`[${req.params.id}] force-assertSessions also failed:`, e2.message); }
+      console.warn(`[${req.params.id}] force-assertSessions failed for ${targetJid}:`, e.message);
+      // Continue — Baileys will still attempt with whatever session state
+      // it has. We log so ops can correlate with downstream "Aguardando".
     }
 
     // disabling link preview avoids some WA edge cases where the server
@@ -1243,7 +1309,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.11',
+    version: 'v2.1.12',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1256,18 +1322,18 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.11',
-    built_at: '2026-02-16',
+    version: 'v2.1.12',
+    built_at: '2026-02-17',
     features: {
-      sent_message_store: true,       // anti blank message fix
-      multi_message_types: true,      // captions, buttons, lists
-      presence_forwarder: true,       // typing indicator
-      ack_forwarder: true,            // read receipts (double check blue)
-      contacts_endpoint: true,        // import contacts
-      notify_and_append: true,        // both upsert types
-      long_ts_coercion: true,         // Long -> Number
-      jid_normalization: true,        // @s.whatsapp.net vs @lid
-      soft_restart: true,             // /restart endpoint (2026-02-16 Q)
+      sent_message_store: true,
+      multi_message_types: true,
+      presence_forwarder: true,
+      ack_forwarder: true,
+      contacts_endpoint: true,
+      notify_and_append: true,
+      long_ts_coercion: true,
+      jid_normalization: true,
+      soft_restart: true,
       crash_guard: true,
       conflict_backoff: true,
       lid_senderpn_resolver: true,
@@ -1283,8 +1349,12 @@ app.get('/version', (req, res) => {
       reconnect_exponential_backoff: true,
       old_socket_cleanup: true,
       zombie_socket_watchdog: true,
-      stale_session_force_assert: true,        // v2.1.10 — re-bundle prekey for JIDs idle >12h
-      sent_cache_ttl_7d: true,                 // v2.1.10 — backend cache TTL 24h -> 7d
+      stale_session_force_assert: true,
+      sent_cache_ttl_7d: true,
+      // 2026-02-17 (v2.1.12) — hard fixes for the residual "Aguardando":
+      force_assert_always: true,        // every send refetches prekey bundle
+      prekey_periodic_upload: true,     // 30min interval keeps server stocked
+      failed_jid_recovery: true,        // messages.update status=1 flags JID
     },
     fastapi_url: FASTAPI_URL,
   });
