@@ -10,6 +10,31 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (Y) — Visibilidade de NODES COM CAPTURA no Flowbuilder ✅
+
+**Root cause confirmado para "fluxo entrega apenas a 1a mensagem":** O node Conteudo "Seja bem-vindo... Como posso te ajudar:" estava com `capture_var` configurado (residuo de edicao anterior). Quando o cliente envia qualquer texto, o engine valida o `capture_format` — se invalido, REPETE a mesma mensagem do Conteudo e NAO avanca para o Menu. Por isso o cliente so via o Conteudo, nunca o menu de opcoes.
+
+**Fix UX (sem mudanca de backend — comportamento esta correto, faltava VISIBILIDADE):**
+
+**No node (canvas):**
+- Badge laranja "⏸ Aguarda" no header do node sempre que `capture_var` esta setado
+- Bloco amarelo no corpo do node mostrando: variavel + formato (CPF/CNPJ/email/CEP/phone/number) — operador identifica de longe quais Conteudos pausam o fluxo
+
+**No editor lateral (clicar no node):**
+- Aviso destacado em amarelo no painel "Capturar resposta": "Atencao: este no esta com captura ATIVADA. O fluxo PAUSA aqui ate o cliente responder. Se o cliente responder algo invalido, o bot re-envia esta mesma mensagem e nao avanca."
+- Botao **"Limpar captura"** em vermelho no canto que zera `capture_var`, `capture_format`, `capture_invalid_message` em 1 clique — operador resolve sem precisar mexer em 3 campos.
+
+**Para o cliente Web Fibra:**
+1. Abrir Flowbuilder
+2. Localizar o Conteudo "Seja bem-vindo a central..." — provavelmente ja apareceu o badge "⏸ Aguarda" no header
+3. Clicar nele
+4. Clicar em "Limpar captura"
+5. Salvar
+6. Testar — agora o Menu 4 opcoes deve chegar logo apos o welcome.
+
+
+
+
 ### 2026-02-17 (X) — v2.1.16: Reset de sessao Signal por JID + indicador visual de anomalias no Flowbuilder ✅
 
 **Contexto:** Apesar dos 5 patches anteriores (v2.1.11–v2.1.15), o usuario continuava reportando "Aguardando mensagem" recorrente em prod. Os patches reduziram a incidencia mas nao a eliminaram porque ALGUMAS sessoes Signal especificas (em prod) ja estavam permanentemente corrompidas no disco (`auth_sessions/`). O retry-receipt nao consegue se recuperar quando o session record local esta inconsistente com o que o destinatario possui.

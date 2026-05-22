@@ -86,9 +86,29 @@ const FlowNode = ({ data, id }) => {
       <div className="px-3 py-1.5 flex items-center gap-2 text-white text-xs font-semibold rounded-t-md" style={{ background: cfg.color }}>
         <Icon className="w-3.5 h-3.5" />
         <span>{cfg.label}</span>
+        {data.config?.capture_var && (
+          <span
+            className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-white text-[9px] font-bold uppercase tracking-wide shadow"
+            title={`Este no PAUSA o fluxo aguardando a resposta do cliente. Variavel: ${data.config.capture_var}${data.config.capture_format ? ` · Formato: ${data.config.capture_format}` : ''}`}
+            data-testid={`flow-node-capture-badge-${id}`}
+          >
+            ⏸ Aguarda
+          </span>
+        )}
       </div>
       <div className="p-2.5">
         <p className="text-[12px] text-slate-700 line-clamp-2">{summary}</p>
+        {data.config?.capture_var && (
+          <div className="mt-1.5 flex items-start gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+            <span>⏸</span>
+            <span className="leading-tight">
+              <strong>Pausa</strong> aguardando resposta em <code className="font-mono bg-white px-0.5 rounded">{data.config.capture_var}</code>
+              {data.config.capture_format && (
+                <> · formato <strong>{data.config.capture_format}</strong></>
+              )}
+            </span>
+          </div>
+        )}
         {isAnomalous && (
           <div className="mt-2 space-y-0.5" data-testid={`flow-node-anomaly-messages-${id}`}>
             {anomalies.map((a, i) => (
@@ -618,7 +638,33 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, o
                   garantindo que o cliente nao avance no fluxo sem dar a
                   informacao no formato correto. */}
               <div className="mt-4 p-3 rounded-lg bg-indigo-50/40 border border-indigo-200 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-700">Capturar resposta do cliente</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-700">Capturar resposta do cliente</p>
+                  {config.capture_var && (
+                    <button
+                      type="button"
+                      onClick={() => setConfig({
+                        ...config,
+                        capture_var: '',
+                        capture_format: '',
+                        capture_invalid_message: '',
+                      })}
+                      className="text-[10px] font-bold text-rose-600 hover:text-rose-800 underline"
+                      data-testid="msg-clear-capture-btn"
+                      title="Remove a pausa — fluxo passa direto ao proximo no"
+                    >
+                      Limpar captura
+                    </button>
+                  )}
+                </div>
+                {config.capture_var && (
+                  <div className="text-[10px] text-amber-900 bg-amber-100 border border-amber-300 rounded px-2 py-1.5 leading-tight">
+                    ⏸ <strong>Atencao:</strong> este no esta com captura ATIVADA. O fluxo PAUSA aqui ate o cliente responder
+                    {config.capture_format ? ` no formato ${config.capture_format.toUpperCase()}` : ''}.
+                    Se o cliente responder algo invalido, o bot re-envia esta mesma mensagem e nao avanca para o proximo no.
+                    Se voce nao quer pausa, clique em <strong>Limpar captura</strong>.
+                  </div>
+                )}
                 <div>
                   <label className="text-[10px] font-bold uppercase text-slate-500">Variavel para guardar a resposta</label>
                   <input
