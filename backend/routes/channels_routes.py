@@ -458,6 +458,48 @@ async def force_reconnect_channel(
     return {"ok": True}
 
 
+@router.post("/connections/{conn_id}/reset-signal-session")
+async def reset_signal_session(
+    conn_id: str,
+    body: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """2026-02-17 (v2.1.16) — Nuclear-option recovery for the persistent
+    "Aguardando mensagem" symptom on a SPECIFIC customer. The operator
+    triggers this from the ticket UI; backend proxies to the Baileys
+    microservice which wipes the Signal session record for that JID and
+    flags it for force-rebuild on the next send.
+
+    Body: {"phone": "5562988887777"}
+    """
+    phone = (body.get("phone") or "").strip()
+    if not phone:
+        raise HTTPException(400, "phone is required")
+    conn = await db.channel_connections.find_one(
+        {"id": conn_id, "company_id": user["company_id"]}
+    )
+    if not conn:
+        raise HTTPException(404, "Conexao nao encontrada")
+    if conn.get("type") != "whatsapp":
+        raise HTTPException(400, "Reset apenas suportado em conexoes WhatsApp")
+    try:
+        from urllib.parse import quote as _q
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                f"{WA_SERVICE_URL}/instances/{conn_id}/reset-session/{_q(phone)}"
+            )
+        if r.status_code >= 400:
+            raise HTTPException(502, f"Baileys retornou {r.status_code}: {r.text[:200]}")
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"reset-signal-session error: {e}")
+        raise HTTPException(500, f"Falha ao resetar sessao: {str(e)[:200]}")
+
+
+
 # === WHATSAPP CONTACTS IMPORT ===
 class ImportWaContactsRequest(BaseModel):
     mode: str = "all"  # all | with_name | without_name

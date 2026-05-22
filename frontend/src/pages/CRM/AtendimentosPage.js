@@ -867,13 +867,43 @@ const AtendimentosPage = () => {
                   <MoreVertical className="w-4 h-4" />
                 </button>
                 {showMoreMenu && (
-                  <div className="absolute right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-30 min-w-[220px]" onMouseLeave={() => setShowMoreMenu(false)}>
+                  <div className="absolute right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-30 min-w-[260px]" onMouseLeave={() => setShowMoreMenu(false)}>
                     <button
                       onClick={() => { setShowMoreMenu(false); setShowMergeModal(true); }}
                       className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                       data-testid="merge-ticket-btn"
                     >
                       <ArrowRightLeft className="w-4 h-4 text-amber-600" /> Mesclar com outro atendimento
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setShowMoreMenu(false);
+                        if (!selectedTicket.connection_id || !selectedTicket.customer_phone) {
+                          toast.error('Faltam dados de conexao/telefone');
+                          return;
+                        }
+                        if (!window.confirm(
+                          `Resetar a sessao Signal para ${selectedTicket.customer_phone}?\n\n` +
+                          `Use quando o cliente ve "Aguardando mensagem" nas suas respostas e o problema nao se resolve sozinho. ` +
+                          `Apaga o cache de criptografia para esse contato e forca uma nova negociacao na proxima mensagem enviada.\n\n` +
+                          `Operacao segura: nao desconecta WhatsApp nem afeta outros contatos.`
+                        )) return;
+                        try {
+                          const { default: api } = await import('../../services/api');
+                          await api.post(
+                            `/channels/connections/${selectedTicket.connection_id}/reset-signal-session`,
+                            { phone: selectedTicket.customer_phone },
+                          );
+                          toast.success('Sessao Signal resetada. A proxima mensagem reconstruira a criptografia.');
+                        } catch (e) {
+                          toast.error(e?.response?.data?.detail || 'Falha ao resetar sessao');
+                        }
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2 border-t border-slate-100"
+                      data-testid="reset-signal-session-btn"
+                      title='Use quando cliente ve "Aguardando mensagem"'
+                    >
+                      <RefreshCw className="w-4 h-4 text-rose-600" /> Resetar sessao Signal
                     </button>
                   </div>
                 )}

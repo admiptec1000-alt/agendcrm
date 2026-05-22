@@ -1113,6 +1113,51 @@ app.post('/instances/:id/send', async (req, res) => {
   }
 });
 
+// 2026-02-17 (v2.1.16) — Nuclear-option session reset per JID. When a customer
+// reports recurring "Aguardando mensagem" that does NOT clear via the normal
+// retry-receipt protocol, the operator can wipe the Signal session record
+// for that JID. The next send will force a fresh prekey bundle exchange and
+// rebuild the session from scratch. Use this sparingly — every reset costs
+// one fresh prekey from the WA server.
+app.post('/instances/:id/reset-session/:jid', async (req, res) => {
+  const inst = connections[req.params.id];
+  if (!inst?.sock) {
+    return res.status(404).json({ ok: false, error: 'instance not connected' });
+  }
+  // Normalize JID: accept raw phone digits OR full JID.
+  let jid = decodeURIComponent(req.params.jid || '');
+  if (jid && !jid.includes('@')) {
+    jid = jid.replace(/\D/g, '') + '@s.whatsapp.net';
+  }
+  if (!jid) {
+    return res.status(400).json({ ok: false, error: 'jid required' });
+  }
+  try {
+    // Delete the session record. Baileys' key store interprets `null` as a
+    // delete signal. We also pass identity-keys=null so the next handshake
+    // re-fetches the public identity from the WA server (covers cases where
+    // the recipient rotated their identity-key without our knowledge).
+    await inst.sock.authState.keys.set({
+      session: { [jid]: null },
+      'pre-key': {},
+    });
+    // Mark for force-assert so the immediate next send re-fetches the prekey
+    // bundle and rebuilds the session. Without this flag, smart-stale logic
+    // might skip the force step if it considers the JID "fresh".
+    jidNeedsForceAssert.add(jid);
+    // Drop any cached "last sent at" so we don't accidentally treat this
+    // freshly-reset JID as recent.
+    jidLastSentAt.delete(jid);
+    console.log(`[${req.params.id}] [SESSION RESET] cleared session for ${jid} — next send will rebuild`);
+    return res.json({ ok: true, jid, message: 'session cleared; next send will rebuild' });
+  } catch (e) {
+    console.warn(`[${req.params.id}] reset-session failed for ${jid}:`, e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
 // Send an interactive message — either buttons (≤3) or a list (sections w/ rows).
 // Baileys supports both via `templateMessage` (buttons) and `listMessage` (list).
 //
@@ -1350,7 +1395,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.15',
+    version: 'v2.1.16',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1363,7 +1408,7 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.15',
+    version: 'v2.1.16',
     built_at: '2026-02-17',
     features: {
       sent_message_store: true,
@@ -1403,6 +1448,9 @@ app.get('/version', (req, res) => {
       // because retries are silently dropped. node-cache added as dependency.
       msg_retry_counter_cache: true,
       cached_group_metadata: true,
+      // v2.1.16 — manual session reset endpoint per-JID (nuclear option for
+      // recipients stuck in "Aguardando mensagem" indefinitely).
+      manual_session_reset: true,
     },
     fastapi_url: FASTAPI_URL,
   });

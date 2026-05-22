@@ -10,6 +10,46 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (X) — v2.1.16: Reset de sessao Signal por JID + indicador visual de anomalias no Flowbuilder ✅
+
+**Contexto:** Apesar dos 5 patches anteriores (v2.1.11–v2.1.15), o usuario continuava reportando "Aguardando mensagem" recorrente em prod. Os patches reduziram a incidencia mas nao a eliminaram porque ALGUMAS sessoes Signal especificas (em prod) ja estavam permanentemente corrompidas no disco (`auth_sessions/`). O retry-receipt nao consegue se recuperar quando o session record local esta inconsistente com o que o destinatario possui.
+
+**Fix nuclear (whatsapp-service v2.1.16):**
+
+Novo endpoint `POST /instances/{id}/reset-session/{jid}`:
+- Apaga o session record do JID via `sock.authState.keys.set({session: {[jid]: null}, 'pre-key': {}})`
+- Marca o JID em `jidNeedsForceAssert` para o proximo send forcar refetch do prekey bundle
+- Limpa entrada do `jidLastSentAt` para nao mascarar como "fresca"
+- Log claro: `[SESSION RESET] cleared session for ${jid} — next send will rebuild`
+- 1 chamada ≈ 1 prekey consumido. Use com parcimonia.
+
+Bump v2.1.15 → **v2.1.16**. Nova flag `manual_session_reset: true`.
+
+**Backend proxy:** `POST /api/channels/connections/{conn_id}/reset-signal-session` com body `{"phone": "5562..."}`. Valida company_id ownership e tipo whatsapp.
+
+**UI no Atendimentos (`AtendimentosPage.js`):**
+- Adicionado item "Resetar sessao Signal" no dropdown de 3 pontinhos do ticket
+- Confirmacao via window.confirm explicando o uso e seguranca da operacao
+- Toast de sucesso/falha
+- `data-testid="reset-signal-session-btn"`
+
+**Indicadores visuais no Flowbuilder (`FlowBuilderPage.js`) — pedido explicito do operador:**
+- Nodes com problema ganham ring vermelho ao redor + badge "!" no canto + lista de mensagens em chips inline:
+  - `orphan`: node nao-terminal sem aresta de saida
+  - `orphan_option`: opcao de menu sem aresta saindo do handle dela
+  - `menu_no_options`: menu sem nenhuma opcao
+- Banner global no topo da canvas mostrando contagem total de anomalias quando ha problemas
+- Atualizacao em tempo real via useEffect: ao deletar uma aresta o anel vermelho aparece instantaneamente sem precisar salvar
+- Padronizacao visual de arestas: todas convertidas para SOLIDAS (`animated:false`) com `stroke:#6366f1`. Resolve a queixa "umas pulsam, outras nao, confunde". Backend ja tratava ambos identicamente — era so confusao visual.
+
+**Para producao:**
+1. **Save to Github** + redeploy whatsapp-service (v2.1.16) + backend + frontend.
+2. Quando ver "Aguardando" recorrente: Atendimentos -> abrir ticket -> 3 pontinhos -> **Resetar sessao Signal**. Proxima mensagem reconstruira a sessao do zero.
+3. No Flowbuilder, nodes com problema ja aparecem em VERMELHO com badge "!" — clique para ver detalhes inline.
+
+
+
+
 ### 2026-02-17 (W) — Diagnostic UI: "Auditar Conexoes do Fluxo" (detecta nos orfaos) ✅
 
 **Contexto:** Apos v2.1.15 resolver o "Aguardando mensagem", o usuario continuou reportando que o bot envia apenas 1 mensagem e para. Diagnostico exigiria logs do backend FastAPI (no Emergent, nao no Render) — fluxo complexo para o operador. Decidi criar um diagnostico in-app.
