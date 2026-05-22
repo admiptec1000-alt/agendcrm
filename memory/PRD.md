@@ -10,6 +10,40 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (AB) — Log persistente de envios do bot + visualizacao SA ✅
+
+**Contexto:** Mesmo apos v2.1.16 + delay de 1.2s entre sends, usuario reportou que o sintoma persiste em prod ("Aguardando" volta + bot nao envia 2a msg). Sem evidencia direta nao da para continuar adivinhando.
+
+**Solucao:** Em vez de mais patches especulativos, criar VISIBILIDADE.
+
+**Backend (`flow_engine.py::_emit_and_persist`):**
+- Cada send do bot agora grava 1 linha na nova collection `flow_send_log` com:
+  - `company_id`, `ticket_id`, `flow_id`, `customer_phone`
+  - `round_send_index` (1 = 1a msg do round, 2 = 2a, etc)
+  - `text_preview` (120 chars do texto enviado)
+  - `wa_msg_id` (None se Baileys nao retornou ID)
+  - `send_ok` (bool)
+  - `elapsed_ms` (tempo de envio)
+  - `created_at`
+- Inserts em try/except — falha de log nao quebra o flow.
+
+**Endpoint:** `GET /api/super-admin/diag/flow-send-log/{company_id}?limit=50` retorna os ultimos N envios.
+
+**UI SA → Reparo SGP:**
+- Botao "Log de envios do bot" ao lado de "Auditar Fluxos SGP"
+- Tabela com cores: verde (✓) = OK, vermelho (✗) = falhou
+- Coluna `elapsed_ms` realca vermelho quando > 15000ms (Baileys lento)
+- Texto explicativo final: "se voce ve welcome ✓ mas menu ✗ → confirma falha de envio. Se ambas ✓ mas cliente nao recebe a 2a → problema esta no LADO DO DESTINATARIO (sessao corrompida, app desatualizado, dispositivo offline)"
+
+**Para producao:**
+1. **Save to Github** + redeploy do backend + frontend.
+2. Faz 1 teste real ("Opa" no WhatsApp).
+3. SA → Reparo SGP → seleciona Web Fibra → "Log de envios do bot".
+4. Le os ultimos 2-4 envios. Resposta definitiva sobre causa.
+
+
+
+
 ### 2026-02-17 (AA) — Delay de 1.2s entre sends consecutivos (fix DEFINITIVO do bot parar na 1a msg) ✅
 
 **Investigacao definitiva:** Carregamos o JSON corrigido do operador no banco de preview e rodamos `advance_flow(dry_run=True, is_initial=True, incoming_text="Opa")`. Resultado:

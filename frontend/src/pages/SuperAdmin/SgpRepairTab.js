@@ -44,6 +44,29 @@ const SgpRepairTab = ({ companies }) => {
   const [edgeAuditLoading, setEdgeAuditLoading] = useState(false);
   const [edgeAuditResult, setEdgeAuditResult] = useState(null);
 
+  // 2026-02-17 — Send-log diagnostics. Reads the last N flow_engine sends
+  // for the selected company and reveals which sends actually landed at
+  // Baileys vs failed silently. Operator sees ground truth.
+  const [sendLogLoading, setSendLogLoading] = useState(false);
+  const [sendLogRows, setSendLogRows] = useState([]);
+
+  const loadSendLog = async () => {
+    if (!companyId) {
+      toast.error('Selecione uma empresa primeiro');
+      return;
+    }
+    setSendLogLoading(true);
+    try {
+      const { data } = await api.get(`/super-admin/diag/flow-send-log/${companyId}?limit=50`);
+      setSendLogRows(data.items || []);
+      toast.success(`${data.count} envio(s) recente(s) carregado(s)`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao carregar log de envios');
+    } finally {
+      setSendLogLoading(false);
+    }
+  };
+
   const runEdgeAudit = async (flowId) => {
     if (!flowId) {
       toast.error('Informe o ID do fluxo.');
@@ -211,8 +234,64 @@ const SgpRepairTab = ({ companies }) => {
             {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
             Auditar Fluxos SGP
           </button>
+          <button
+            onClick={loadSendLog}
+            disabled={!companyId || sendLogLoading}
+            className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-sm font-semibold flex items-center gap-2 disabled:opacity-50"
+            data-testid="sgp-send-log-btn"
+            title="Mostra os ultimos 50 envios reais do bot — quais chegaram e quais falharam"
+          >
+            {sendLogLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            Log de envios do bot
+          </button>
         </div>
       </div>
+
+      {/* 2026-02-17 — Flow send log (ground truth from production) */}
+      {sendLogRows.length > 0 && (
+        <div className="rounded-2xl border border-violet-200 bg-violet-50/30 p-4" data-testid="flow-send-log-panel">
+          <h3 className="text-sm font-bold text-slate-900 mb-2">Ultimos {sendLogRows.length} envios do bot</h3>
+          <p className="text-xs text-slate-600 mb-3">
+            Mostra na ordem (mais recente primeiro) cada mensagem que o bot tentou enviar.
+            <strong className="text-emerald-700"> Verde</strong> = entregue ao Baileys com sucesso.
+            <strong className="text-rose-700"> Vermelho</strong> = Baileys nao retornou message_id (falha de envio).
+            <strong> elapsed_ms</strong> alto (&gt;15000) indica que Baileys estava lento.
+          </p>
+          <div className="max-h-96 overflow-auto rounded-lg border border-violet-200 bg-white">
+            <table className="w-full text-xs">
+              <thead className="bg-violet-100 text-violet-900 sticky top-0">
+                <tr>
+                  <th className="text-left px-2 py-1.5 font-bold">hora</th>
+                  <th className="text-left px-2 py-1.5 font-bold">round#</th>
+                  <th className="text-left px-2 py-1.5 font-bold">phone</th>
+                  <th className="text-left px-2 py-1.5 font-bold">texto</th>
+                  <th className="text-right px-2 py-1.5 font-bold">ms</th>
+                  <th className="text-center px-2 py-1.5 font-bold">ok?</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sendLogRows.map(r => (
+                  <tr key={r.id} className={r.send_ok ? '' : 'bg-rose-50'}>
+                    <td className="px-2 py-1 font-mono text-[10px]">{r.created_at?.slice(11, 19)}</td>
+                    <td className="px-2 py-1 text-center">{r.round_send_index}</td>
+                    <td className="px-2 py-1 font-mono text-[10px]">{r.customer_phone}</td>
+                    <td className="px-2 py-1 truncate max-w-[300px]" title={r.text_preview}>{r.text_preview}</td>
+                    <td className={`px-2 py-1 text-right font-mono ${r.elapsed_ms > 15000 ? 'text-rose-700 font-bold' : ''}`}>
+                      {r.elapsed_ms}
+                    </td>
+                    <td className="px-2 py-1 text-center">
+                      {r.send_ok ? <span className="text-emerald-700 font-bold">✓</span> : <span className="text-rose-700 font-bold">✗</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-2">
+            <strong>Como interpretar:</strong> se voce ve "Seja bem-vindo" com ✓ mas o menu (round#=2) com ✗ → confirma que a 2a mensagem nao foi entregue. Se ambas estao com ✓ mas o cliente nao recebe a 2a → problema esta no LADO DO DESTINATARIO (sessao corrompida, app desatualizado, dispositivo offline).
+          </p>
+        </div>
+      )}
 
       {/* 2026-02-17 — Flow edges audit (orphan detection) */}
       <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4" data-testid="flow-edges-audit-panel">

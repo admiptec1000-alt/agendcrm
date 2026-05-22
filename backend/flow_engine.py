@@ -838,21 +838,43 @@ async def advance_flow(
 
         2026-02-17 — Insere um delay de 1.2s ENTRE sends consecutivos do
         mesmo round. Sem isso, a 2a mensagem chega em Baileys antes da 1a
-        terminar o assertSessions/encrypt pipeline, e Baileys silenciosamente
-        descarta a 2a. Sintoma: bot envia Conteudo de boas-vindas mas o Menu
-        seguinte nao chega ao cliente. Custo: 1.2s a mais por send adicional
-        (operador percebe como "bot digitando"). Beneficio: garantia de
-        entrega serializada.
+        terminar o assertSessions/encrypt pipeline.
         """
+        nonlocal _send_count_local
         if sent:  # this is the 2nd+ send in the same round
             import asyncio as _asyncio
             await _asyncio.sleep(1.2)
         sent.append(text)
+        _send_count_local += 1
         if dry_run:
             return
+        import time as _time
+        t0 = _time.monotonic()
         wa_msg_id = await _send_whatsapp(ticket, text, db=db)
+        elapsed_ms = int((_time.monotonic() - t0) * 1000)
+        # 2026-02-17 — Persistent send log so operator can diagnose
+        # "bot envia 1 msg e para" without reading server logs. Available
+        # via GET /api/super-admin/diag/flow-send-log/{company_id}
+        try:
+            await db.flow_send_log.insert_one({
+                "id": str(__import__('uuid').uuid4()),
+                "company_id": ticket.get("company_id"),
+                "ticket_id": ticket.get("id"),
+                "flow_id": flow_id,
+                "customer_phone": ticket.get("customer_phone"),
+                "round_send_index": _send_count_local,
+                "text_preview": (text or "")[:120],
+                "wa_msg_id": wa_msg_id,
+                "send_ok": bool(wa_msg_id),
+                "elapsed_ms": elapsed_ms,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as _e:
+            logger.warning(f"[flow_engine] flow_send_log insert failed: {_e}")
         await _persist_outgoing(db, ticket["id"], text, flow_id,
                                 wa_message_id=wa_msg_id)
+
+    _send_count_local = 0
 
     # Determine starting node + branch
     current_id: Optional[str] = None

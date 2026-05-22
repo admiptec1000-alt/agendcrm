@@ -2685,6 +2685,31 @@ async def diag_dry_run_flow(
         }
 
 
+@router.get("/diag/flow-send-log/{company_id}")
+async def diag_flow_send_log(
+    company_id: str,
+    limit: int = 30,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-02-17 — Read-only diagnostic. Returns the last N flow_engine
+    sends for a company. Each row reveals:
+      • text_preview: which message
+      • wa_msg_id: did Baileys return an id? (None = send failed silently)
+      • send_ok: bool
+      • elapsed_ms: how long the send took (>15000 indicates Baileys was slow)
+      • round_send_index: 1 = 1st send of the round, 2 = 2nd, etc.
+    With this an operator can SEE in production exactly which sends are
+    landing vs failing without reading server logs.
+    """
+    rows = await db.flow_send_log.find(
+        {"company_id": company_id},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(max(1, min(limit, 200))).to_list(200)
+    return {"company_id": company_id, "count": len(rows), "items": rows}
+
+
+
 
 @router.get("/diag/flow-edges-audit/{flow_id}")
 async def diag_flow_edges_audit(
