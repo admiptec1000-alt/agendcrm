@@ -37,6 +37,37 @@ const SgpRepairTab = ({ companies }) => {
   const [loading, setLoading] = useState(false);
   const [appliedByFlow, setAppliedByFlow] = useState({}); // flow_id -> last apply result
 
+  // 2026-02-17 — Flow-edges audit (orphan node detection). Used when the bot
+  // sends the first message and stops — almost always means a node has no
+  // outgoing edge so flow_engine terminates without sending the next one.
+  const [edgeAuditFlowId, setEdgeAuditFlowId] = useState('');
+  const [edgeAuditLoading, setEdgeAuditLoading] = useState(false);
+  const [edgeAuditResult, setEdgeAuditResult] = useState(null);
+
+  const runEdgeAudit = async (flowId) => {
+    if (!flowId) {
+      toast.error('Informe o ID do fluxo.');
+      return;
+    }
+    setEdgeAuditLoading(true);
+    setEdgeAuditResult(null);
+    try {
+      const { data } = await api.get(`/super-admin/diag/flow-edges-audit/${flowId}`);
+      setEdgeAuditResult(data);
+      if (data.stats.orphans > 0) {
+        toast.warning(`${data.stats.orphans} no(s) ORFAO(s) detectado(s) — clique para ver`);
+      } else if (data.stats.dangling_edges > 0) {
+        toast.warning(`${data.stats.dangling_edges} aresta(s) apontando para no inexistente`);
+      } else {
+        toast.success('Auditoria OK — todas as conexoes estao validas');
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao auditar conexoes');
+    } finally {
+      setEdgeAuditLoading(false);
+    }
+  };
+
   // SGP fatura2via debug state — used to inspect the EXACT response the
   // SGP returns for a given CPF + contrato so we can confirm whether
   // `links[0].link_pix_html` is actually populated.
@@ -97,8 +128,7 @@ const SgpRepairTab = ({ companies }) => {
       );
       setAppliedByFlow(prev => ({ ...prev, [flowId]: { ...data, dry_run: dryRun } }));
       if (dryRun) {
-        toast.info(`Pre-visualizacao: ${data.changes_count} mudanca(s) a aplicar.`);
-      } else {
+        toast.info(`Pre-visualizacao: ${data.changes_count} mudanca(s) a aplicar.`);      } else {
         toast.success(`Reparo aplicado: ${data.changes_count} mudanca(s).`);
         // Re-audit so the report card refreshes
         await runAudit(companyId);
@@ -182,6 +212,116 @@ const SgpRepairTab = ({ companies }) => {
             Auditar Fluxos SGP
           </button>
         </div>
+      </div>
+
+      {/* 2026-02-17 — Flow edges audit (orphan detection) */}
+      <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4" data-testid="flow-edges-audit-panel">
+        <div className="flex items-start gap-3 mb-3">
+          <div className="p-2 rounded-lg bg-rose-100 text-rose-700 shrink-0">
+            <AlertTriangle className="w-4 h-4" />
+          </div>
+          <div className="flex-1">
+            <h3 className="text-sm font-bold text-slate-900">Auditar conexoes do fluxo (nos orfaos)</h3>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Use quando o bot entrega <strong>apenas a 1a mensagem</strong> e o fluxo
+              nao continua. Lista cada no + suas arestas de saida + destaca nos sem
+              proximo (orfaos). Aresta animada/pontilhada e estatica/continua sao
+              tratadas exatamente igual pelo backend.
+            </p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Como pegar o flow_id: abra o <strong>Flowbuilder da empresa</strong>,
+              copie o ID da URL (apos <code className="font-mono">/flows/</code>).
+              Tambem aparece quando voce roda "Auditar Fluxos SGP" acima.
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={edgeAuditFlowId}
+            onChange={(e) => setEdgeAuditFlowId(e.target.value)}
+            placeholder="flow_id (ex: 7a3f...)"
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
+            data-testid="edge-audit-flow-id-input"
+          />
+          <button
+            onClick={() => runEdgeAudit(edgeAuditFlowId)}
+            disabled={!edgeAuditFlowId || edgeAuditLoading}
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-50"
+            data-testid="edge-audit-run-btn"
+          >
+            {edgeAuditLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            Auditar Conexoes
+          </button>
+        </div>
+        {edgeAuditResult && (
+          <div className="mt-3 space-y-2" data-testid="edge-audit-result">
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="px-2 py-1 rounded bg-slate-200 font-mono">
+                {edgeAuditResult.stats.nodes} nos
+              </span>
+              <span className="px-2 py-1 rounded bg-slate-200 font-mono">
+                {edgeAuditResult.stats.edges} arestas
+              </span>
+              <span className={`px-2 py-1 rounded font-semibold ${edgeAuditResult.stats.orphans > 0 ? 'bg-rose-200 text-rose-900' : 'bg-emerald-200 text-emerald-900'}`}>
+                {edgeAuditResult.stats.orphans} orfaos
+              </span>
+              {edgeAuditResult.stats.dangling_edges > 0 && (
+                <span className="px-2 py-1 rounded bg-amber-200 text-amber-900 font-semibold">
+                  {edgeAuditResult.stats.dangling_edges} arestas penduradas
+                </span>
+              )}
+            </div>
+            {edgeAuditResult.orphans.length > 0 && (
+              <div className="rounded-lg border border-rose-300 bg-rose-50 p-3">
+                <div className="text-xs font-bold text-rose-900 mb-1">
+                  Nos ORFAOS (sem proximo passo):
+                </div>
+                <ul className="space-y-1">
+                  {edgeAuditResult.orphans.map(o => (
+                    <li key={o.id} className="text-xs text-rose-800">
+                      <span className="font-mono bg-white px-1 rounded mr-1">{o.type}</span>
+                      {o.label}
+                      <span className="text-[10px] text-rose-500 ml-2">({o.id})</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-rose-700 mt-2">
+                  ➜ Abra o Flowbuilder, localize esses nos e <strong>conecte a bolinha inferior</strong> ao proximo node desejado. Depois clique em <strong>Salvar</strong>.
+                </p>
+              </div>
+            )}
+            <details className="rounded-lg border border-slate-200 bg-white">
+              <summary className="cursor-pointer text-xs font-semibold text-slate-700 px-3 py-2">
+                Ver todos os {edgeAuditResult.nodes.length} nos + conexoes
+              </summary>
+              <div className="max-h-80 overflow-auto px-3 pb-2 text-xs">
+                {edgeAuditResult.nodes.map(n => (
+                  <div key={n.id} className={`py-1.5 border-b border-slate-100 ${n.is_orphan ? 'bg-rose-50' : ''}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono bg-slate-200 px-1.5 rounded text-[10px]">{n.type}</span>
+                      <span className={n.is_orphan ? 'font-semibold text-rose-700' : 'text-slate-700'}>{n.label}</span>
+                      {n.is_orphan && <span className="text-[10px] text-rose-600 font-bold">ORFAO</span>}
+                    </div>
+                    {n.out_edges.length > 0 && (
+                      <div className="pl-4 mt-0.5 text-[11px] text-slate-500">
+                        {n.out_edges.map((e, i) => (
+                          <div key={i}>
+                            ↳ {e.source_handle ? `[${e.source_handle}] ` : ''}
+                            <span className={e.target_exists ? '' : 'text-rose-600 line-through'}>
+                              {e.target_label}
+                            </span>
+                            {!e.target_exists && <span className="text-rose-600 ml-1">(no inexistente!)</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          </div>
+        )}
       </div>
 
       {/* SGP fatura2via debug panel */}

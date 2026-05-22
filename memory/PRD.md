@@ -10,6 +10,38 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (W) — Diagnostic UI: "Auditar Conexoes do Fluxo" (detecta nos orfaos) ✅
+
+**Contexto:** Apos v2.1.15 resolver o "Aguardando mensagem", o usuario continuou reportando que o bot envia apenas 1 mensagem e para. Diagnostico exigiria logs do backend FastAPI (no Emergent, nao no Render) — fluxo complexo para o operador. Decidi criar um diagnostico in-app.
+
+**Novo endpoint:** `GET /api/super-admin/diag/flow-edges-audit/{flow_id}` (read-only). Retorna:
+- Stats: total nodes / edges / orfaos / arestas penduradas / contagem por tipo
+- Lista de **orfaos** (nodes sem aresta de saida exceto ticket/end/transfer)
+- Lista de **dangling_edges** (arestas apontando para nodes inexistentes)
+- Per-node breakdown: label preview (80 chars), out_edges com target_label + source_handle + flag animated + target_exists
+
+**Novo painel SA** em **Reparo SGP → "Auditar conexoes do fluxo"**:
+- Input para flow_id
+- Botao "Auditar Conexoes"
+- Mostra stats em chips coloridos (rose para orfaos, amber para penduradas, emerald se tudo OK)
+- Bloco vermelho destacando os orfaos com instrucao: "Abra o Flowbuilder, localize esses nos e conecte a bolinha inferior ao proximo node desejado".
+- `<details>` expansivel listando TODOS os nos + conexoes (com destaque visual para orfaos).
+- Hint sobre arestas animadas (pontilhadas) vs estaticas (continuas): "tratadas igualmente pelo backend".
+
+**Validacao end-to-end (preview):**
+- Criado flow de teste com `n_start → n_msg` (sem aresta de saida do msg para o menu).
+- GET retornou orfaos: `n_msg` (Seja bem-vindo) + `n_menu` (Escolha:) → exatamente o cenario reportado pelo operador.
+- Fluxo de teste removido apos validacao.
+
+**Para producao:**
+1. **Save to Github** + redeploy do backend FastAPI no Emergent.
+2. Em SA → Reparo SGP → secao "Auditar conexoes do fluxo": copiar flow_id do flowbuilder Web Fibra (vai aparecer no botao "Auditar Fluxos SGP" acima).
+3. Clicar em "Auditar Conexoes" → o painel revelara se a aresta Conteudo→Menu existe ou nao.
+4. Se houver orfaos: voltar ao Flowbuilder e arrastar a bolinha inferior do node orfao ate a bolinha superior do proximo node desejado, depois "Salvar".
+
+
+
+
 ### 2026-02-17 (V) — v2.1.15: msgRetryCounterCache (ROOT CAUSE real do "Aguardando") ✅
 
 **Investigacao profunda apos 4 patches sem efeito:** Os patches v2.1.10-v2.1.14 tentavam EVITAR a sessao Signal ficar dessincronizada. Mas o "Aguardando mensagem" no destinatario eh um estado **temporario** que tem um mecanismo nativo do WhatsApp para se auto-curar: o **retry-receipt protocol**. Quando recipiente nao consegue decifrar, ele manda um retry receipt → nosso Baileys deveria responder re-cifrando com sessao fresca via callback `getMessage` → mensagem chega decifrada. Se isso funcionasse, "Aguardando" sumiria em segundos sozinho.

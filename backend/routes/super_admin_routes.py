@@ -2624,3 +2624,94 @@ async def export_repaired_sgp_flow(
         media_type="application/json; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/diag/flow-edges-audit/{flow_id}")
+async def diag_flow_edges_audit(
+    flow_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-02-17 — Diagnostic endpoint. Audits a flow's nodes vs edges and
+    returns a structured report including orphan nodes (no outgoing edge),
+    dangling edges (target missing), and per-node outgoing edge details
+    with target labels. Use when the bot stops mid-flow."""
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    nodes = flow.get("nodes") or []
+    edges = flow.get("edges") or []
+    by_id = {n.get("id"): n for n in nodes}
+
+    def _node_label(n: dict) -> str:
+        if not n:
+            return "(missing)"
+        cfg = (n.get("data") or {}).get("config") or {}
+        msg = cfg.get("message") or cfg.get("text") or cfg.get("label") or ""
+        if not msg:
+            opts = cfg.get("options")
+            if opts:
+                msg = f"{len(opts)} opcoes"
+        msg = (msg or "(sem texto)").strip().replace("\n", " ")
+        return (msg[:80] + "...") if len(msg) > 80 else msg
+
+    def _node_type(n: dict) -> str:
+        d = (n.get("data") or {})
+        return (d.get("nodeType") or n.get("type") or "unknown").lower()
+
+    nodes_report: list = []
+    type_counts: dict = {}
+    orphans: list = []
+    for n in nodes:
+        nid = n.get("id")
+        nt = _node_type(n)
+        type_counts[nt] = type_counts.get(nt, 0) + 1
+        out_edges = [e for e in edges if e.get("source") == nid]
+        out_pretty = [
+            {
+                "target_id": e.get("target"),
+                "target_label": _node_label(by_id.get(e.get("target"))),
+                "target_type": _node_type(by_id.get(e.get("target")) or {}),
+                "source_handle": e.get("sourceHandle") or None,
+                "animated": bool(e.get("animated")),
+                "target_exists": e.get("target") in by_id,
+            }
+            for e in out_edges
+        ]
+        is_orphan = (nt not in ("ticket", "end", "transfer")) and not out_edges
+        if is_orphan:
+            orphans.append({"id": nid, "type": nt, "label": _node_label(n)})
+        nodes_report.append({
+            "id": nid,
+            "type": nt,
+            "label": _node_label(n),
+            "out_edges_count": len(out_edges),
+            "out_edges": out_pretty,
+            "is_orphan": is_orphan,
+        })
+
+    dangling_edges = [
+        {
+            "source": e.get("source"),
+            "target": e.get("target"),
+            "source_label": _node_label(by_id.get(e.get("source")) or {}),
+        }
+        for e in edges
+        if e.get("target") not in by_id or e.get("source") not in by_id
+    ]
+
+    return {
+        "flow_id": flow_id,
+        "name": flow.get("name"),
+        "stats": {
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "orphans": len(orphans),
+            "dangling_edges": len(dangling_edges),
+            "type_counts": type_counts,
+        },
+        "orphans": orphans,
+        "dangling_edges": dangling_edges,
+        "nodes": nodes_report,
+    }
+
