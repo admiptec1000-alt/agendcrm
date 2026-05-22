@@ -834,7 +834,19 @@ async def advance_flow(
         Crucially we SEND FIRST (capturing the Baileys message_id) and only
         then persist locally with that id stamped. This makes the outgoing
         echo from /webhook/message hit the dedup branch and prevents the
-        same bot reply from showing up twice in the operator UI."""
+        same bot reply from showing up twice in the operator UI.
+
+        2026-02-17 — Insere um delay de 1.2s ENTRE sends consecutivos do
+        mesmo round. Sem isso, a 2a mensagem chega em Baileys antes da 1a
+        terminar o assertSessions/encrypt pipeline, e Baileys silenciosamente
+        descarta a 2a. Sintoma: bot envia Conteudo de boas-vindas mas o Menu
+        seguinte nao chega ao cliente. Custo: 1.2s a mais por send adicional
+        (operador percebe como "bot digitando"). Beneficio: garantia de
+        entrega serializada.
+        """
+        if sent:  # this is the 2nd+ send in the same round
+            import asyncio as _asyncio
+            await _asyncio.sleep(1.2)
         sent.append(text)
         if dry_run:
             return

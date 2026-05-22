@@ -2626,6 +2626,66 @@ async def export_repaired_sgp_flow(
     )
 
 
+@router.post("/diag/dry-run-flow/{flow_id}")
+async def diag_dry_run_flow(
+    flow_id: str,
+    body: dict,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-02-17 — Run a flow in DRY-RUN mode (no WhatsApp send, no DB
+    state changes) and return the exact list of messages the engine would
+    emit, plus per-hop logs. Use this to verify "is the engine reaching
+    the Menu node?" without going through real WhatsApp/Baileys.
+
+    Body: {"incoming_text": "Opa", "is_initial": true}
+    """
+    from flow_engine import advance_flow
+
+    flow = await db.flow_builders.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "Fluxo nao encontrado")
+    # Synthesize a minimal ticket so the engine has something to walk.
+    fake_ticket = {
+        "id": "DRYRUN_TICKET",
+        "company_id": flow.get("company_id"),
+        "connection_id": "DRYRUN_CONN",
+        "customer_phone": (body.get("phone") or "5562999999999"),
+        "customer_name": "Dry Run",
+        "active_flow_id": flow_id if not body.get("is_initial", True) else None,
+        "active_flow_node_id": body.get("active_flow_node_id"),
+        "flow_vars": body.get("flow_vars") or {},
+    }
+    try:
+        sent = await advance_flow(
+            db=db,
+            ticket=fake_ticket,
+            flow=flow,
+            incoming_text=body.get("incoming_text"),
+            is_initial=bool(body.get("is_initial", True)),
+            dry_run=True,
+        )
+        return {
+            "ok": True,
+            "messages_count": len(sent),
+            "messages": sent,
+            "would_pause_at": None,  # The engine doesn't surface this in dry_run; left for future improvement.
+            "summary": (
+                f"Engine emitiu {len(sent)} mensagem(s). "
+                + ("✅ Fluxo NORMAL — todas mensagens previstas." if len(sent) >= 2
+                   else "⚠ Engine emitiu APENAS 1 mensagem — confere com o sintoma do operador.")
+            ),
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()[-2000:],
+        }
+
+
+
 @router.get("/diag/flow-edges-audit/{flow_id}")
 async def diag_flow_edges_audit(
     flow_id: str,

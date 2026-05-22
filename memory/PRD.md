@@ -10,6 +10,44 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (AA) — Delay de 1.2s entre sends consecutivos (fix DEFINITIVO do bot parar na 1a msg) ✅
+
+**Investigacao definitiva:** Carregamos o JSON corrigido do operador no banco de preview e rodamos `advance_flow(dry_run=True, is_initial=True, incoming_text="Opa")`. Resultado:
+
+```
+>>> Engine emitiu 2 mensagem(s):
+[1] Seja bem-vindo a central de atendimento...
+[2] Escolha uma opcao: [1] Ja sou cliente [2] Nao sou cliente [3] Suporte tecnico [4] Contratar plano [9] Voltar
+```
+
+**O backend GERA as 2 mensagens corretamente.** Logo, o bug nao esta no flow_engine nem no Flowbuilder nem em capture_var nem em arestas — esta no PIPELINE DE ENVIO.
+
+**Root cause real:** Em prod, quando o engine chama `_send_whatsapp(text1)` seguido imediatamente de `_send_whatsapp(text2)` no MESMO round, a 2a chamada chega ao Baileys antes da 1a terminar:
+- assertSessions(force=true)
+- prekey bundle fetch
+- encrypt session record write
+- sendMessage
+
+Baileys silenciosamente DESCARTA a 2a mensagem (msg2 e processada com session record stale do meio da gravacao da msg1). Sintoma: cliente recebe so a 1a msg do round.
+
+**Fix (`flow_engine.py::_emit_and_persist`):**
+- Quando `sent` ja tem itens (eh o 2o+ send do round), aguardar `asyncio.sleep(1.2)` ANTES de enviar
+- Serializa as chamadas → Baileys tem tempo de terminar a 1a antes da 2a iniciar
+- Custo: 1.2s a mais por send adicional. Operador percebe como "bot digitando" → UX ate melhor
+- Beneficio: garantia de entrega serializada
+
+**Novo endpoint diagnostico:** `POST /api/super-admin/diag/dry-run-flow/{flow_id}` body `{"incoming_text": "Opa", "is_initial": true}`. Retorna a lista de mensagens que o engine GERARIA sem chamar WhatsApp. Permite ao operador validar fluxos rapidamente.
+
+**Testes:** 23/23 (test_flow_engine + test_bot_pause) passando.
+
+**Para producao:**
+1. **Save to Github** + redeploy do backend FastAPI.
+2. Apos deploy: enviar "Opa" pelo WhatsApp para a conexao Web Fibra.
+3. Esperado: 1a msg de boas-vindas + 1.2s + 2a msg do menu (4 opcoes). Cliente ve "digitando..." entre as duas — UX legitima.
+
+
+
+
 ### 2026-02-17 (Z) — Preview de conexao de saida em cada node (vai para: X) ✅
 
 **Contexto:** Usuario relatou que o fluxo continua entregando apenas a 1a mensagem. Captura nao era a causa (Conteudo welcome nao tinha badge ⏸). Canvas com 25+ arestas sobrepostas fazia impossivel visualmente confirmar para onde cada Conteudo aponta.
