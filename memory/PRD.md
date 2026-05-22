@@ -10,6 +10,32 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (Z) — Preview de conexao de saida em cada node (vai para: X) ✅
+
+**Contexto:** Usuario relatou que o fluxo continua entregando apenas a 1a mensagem. Captura nao era a causa (Conteudo welcome nao tinha badge ⏸). Canvas com 25+ arestas sobrepostas fazia impossivel visualmente confirmar para onde cada Conteudo aponta.
+
+**Fix UX (sem backend):**
+
+Cada node nao-menu/nao-terminal/nao-start agora mostra um **chip verde** dentro do corpo:
+`→ Vai para: <label-do-target> [type]`
+
+Implementado em `decorateNode(n, allEdges, allNodes)`:
+- Para non-menu nodes com EXATAMENTE 1 aresta de saida, resolve o `target.id` no allNodes e renderiza o label preview (50 chars).
+- Atualiza em tempo real via useEffect quando arestas mudam.
+- Excluido para menus (que tem N opcoes/handles diferentes) — esses ja mostram per-opcao via os handles vermelhos quando orfaos.
+
+**Beneficio direto:** o Conteudo "Seja bem-vindo" agora vai exibir, dentro do proprio node:
+- ✅ Se conectado corretamente: `→ Vai para: 4 opcoes`
+- ❌ Se apontando para no errado: `→ Vai para: Menu (Sem opcoes)` — operador identifica de imediato
+
+**Para producao:**
+1. **Save to Github** + redeploy do frontend.
+2. Abrir Flowbuilder Web Fibra.
+3. Olhar o Conteudo "Seja bem-vindo" — o chip verde dentro dele revelara para onde a aresta de saida realmente aponta.
+
+
+
+
 ### 2026-02-17 (Y) — Visibilidade de NODES COM CAPTURA no Flowbuilder ✅
 
 **Root cause confirmado para "fluxo entrega apenas a 1a mensagem":** O node Conteudo "Seja bem-vindo... Como posso te ajudar:" estava com `capture_var` configurado (residuo de edicao anterior). Quando o cliente envia qualquer texto, o engine valida o `capture_format` — se invalido, REPETE a mesma mensagem do Conteudo e NAO avanca para o Menu. Por isso o cliente so via o Conteudo, nunca o menu de opcoes.

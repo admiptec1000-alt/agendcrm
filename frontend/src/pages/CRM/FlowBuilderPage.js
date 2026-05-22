@@ -44,6 +44,10 @@ const FlowNode = ({ data, id }) => {
   //   • menu_no_options: menu node without any option configured
   const anomalies = data.anomalies || [];
   const isAnomalous = anomalies.length > 0;
+  // 2026-02-17 — Outgoing connection preview. Shows the target node's label
+  // INSIDE this node so the operator can confirm "ah, esse Conteudo aponta
+  // para o Menu correto" without having to trace lines across the canvas.
+  const outgoingTo = data.outgoing_to;
 
   return (
     <div
@@ -98,6 +102,18 @@ const FlowNode = ({ data, id }) => {
       </div>
       <div className="p-2.5">
         <p className="text-[12px] text-slate-700 line-clamp-2">{summary}</p>
+        {outgoingTo && !isMenu && (
+          <div
+            className="mt-1.5 flex items-start gap-1 text-[10px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5"
+            data-testid={`flow-node-outgoing-${id}`}
+          >
+            <span>→</span>
+            <span className="leading-tight">
+              Vai para: <strong>{outgoingTo.label || outgoingTo.type}</strong>
+              <span className="ml-1 text-[9px] text-emerald-600">[{outgoingTo.type}]</span>
+            </span>
+          </div>
+        )}
         {data.config?.capture_var && (
           <div className="mt-1.5 flex items-start gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
             <span>⏸</span>
@@ -191,10 +207,10 @@ const FlowBuilderPage = () => {
     setSelectedNode(null);
   }, []);
 
-  // Inject onDelete + anomaly flags into node data so the canvas can render
-  // visual alerts. We pass the current edges so each node knows whether its
-  // outgoing connections are intact.
-  const decorateNode = useCallback((n, allEdges = []) => {
+  // Inject onDelete + anomaly flags + outgoing-target preview into node data.
+  // The third arg `allNodes` enables resolution of "this node points to: X"
+  // chip rendered inside each non-menu node body.
+  const decorateNode = useCallback((n, allEdges = [], allNodes = null) => {
     // Migrate legacy menu options (string[]) to {label}[]
     let cfg = n.data?.config || {};
     if (n.data?.nodeType === 'menu' && Array.isArray(cfg.options)) {
@@ -203,20 +219,40 @@ const FlowBuilderPage = () => {
         options: cfg.options.map(o => typeof o === 'string' ? { label: o } : o),
       };
     }
-    // 2026-02-17 — Compute per-node anomalies. Visible on the canvas as a
-    // red ring + "!" badge + inline message chips. Terminal node types
-    // (ticket/end/transfer) are intentionally excluded — they're supposed
-    // to end the flow.
+    // 2026-02-17 — Compute per-node anomalies AND outgoing target preview.
+    // Visible on the canvas as a red ring + "!" badge + inline message chips
+    // for anomalies, plus a green "→ Vai para: X" chip for outgoing previews.
     const TERMINAL = new Set(['ticket', 'end', 'transfer']);
     const anomalies = [];
     const nt = n.data?.nodeType;
+    // Helper to label a node (used both for outgoing preview and inside menu's option pretty-print)
+    const _label = (target) => {
+      if (!target) return null;
+      const tcfg = (target.data?.config) || {};
+      const txt = tcfg.message || tcfg.text || tcfg.question || tcfg.label || '';
+      if (!txt) {
+        const opts = tcfg.options;
+        if (Array.isArray(opts) && opts.length) return `${opts.length} opcoes`;
+      }
+      const s = (txt || '(sem texto)').replace(/\n/g, ' ');
+      return s.length > 50 ? s.slice(0, 50) + '...' : s;
+    };
+    const nodesById = (() => {
+      const m = {};
+      // This callback receives one node — we don't have the full node list
+      // here. The map will be supplied via a second arg to decorateNode
+      // (see useEffect / openFlow callers below).
+      return m;
+    })();
+    // The function caller passes (n, allEdges, allNodes). The third arg is
+    // optional for back-compat; when present we resolve the outgoing target's
+    // label so it appears inline on the canvas.
     if (!TERMINAL.has(nt) && nt !== 'start' && nt !== undefined) {
       if (nt === 'menu') {
-        const opts = cfg.options || [];
-        if (opts.length === 0 && !cfg.dynamic_source) {
+        const opts = ((n.data?.config?.options) || []);
+        if (opts.length === 0 && !(n.data?.config?.dynamic_source)) {
           anomalies.push({ type: 'menu_no_options', message: 'Menu sem opcoes configuradas' });
         } else {
-          // Check each option has an outgoing edge with matching handle
           const handles = new Set(
             allEdges
               .filter(e => e.source === n.id)
@@ -235,17 +271,33 @@ const FlowBuilderPage = () => {
           });
         }
       } else {
-        // Non-menu, non-terminal nodes need exactly one outgoing edge.
         const out = allEdges.filter(e => e.source === n.id);
         if (out.length === 0) {
           anomalies.push({ type: 'orphan', message: 'Sem proximo no — fluxo termina aqui' });
         }
       }
     }
+    // Compute outgoing_to preview for non-menu nodes with exactly one out edge.
+    let outgoing_to = null;
+    if (nt !== 'menu' && !TERMINAL.has(nt) && nt !== 'start') {
+      const out = allEdges.filter(e => e.source === n.id);
+      if (out.length === 1 && allNodes) {
+        const target = allNodes.find(x => x.id === out[0].target);
+        if (target) {
+          outgoing_to = {
+            id: target.id,
+            type: target.data?.nodeType || 'unknown',
+            label: _label(target),
+          };
+        }
+      }
+    }
+    // Avoid unused-var lint
+    void nodesById;
     return {
       ...n,
       type: 'flow',
-      data: { ...n.data, config: cfg, onDelete: deleteNode, anomalies },
+      data: { ...n.data, config: cfg, onDelete: deleteNode, anomalies, outgoing_to },
     };
   }, [deleteNode]);
 
@@ -259,13 +311,12 @@ const FlowBuilderPage = () => {
                        // para que conexoes novas e antigas tenham o mesmo visual.
   }, es)), []);
 
-  // 2026-02-17 — Re-run anomaly detection whenever edges change so the canvas
-  // alert updates live (operator deletes a connection → red ring appears
-  // instantly without needing to save/reload).
+  // 2026-02-17 — Re-run anomaly + outgoing detection whenever edges change.
   useEffect(() => {
-    setNodes(ns => ns.map(n => decorateNode(n, edges)));
-    // We intentionally exclude `nodes` from deps to avoid an infinite loop —
-    // setNodes is stable; we only want to react to edge changes here.
+    setNodes(ns => {
+      const decorated = ns.map(n => decorateNode(n, edges, ns));
+      return decorated;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edges, decorateNode]);
 
@@ -273,15 +324,15 @@ const FlowBuilderPage = () => {
     setCurrentFlow(flow);
     setShowFlowsList(false);
     // 2026-02-17 — Normalize edges so old (animated/dashed) and new (solid)
-    // share the same visual. Backend treats both identically; the mismatch
-    // was confusing operators ("essa conexao parece quebrada porque pulsa").
+    // share the same visual.
     const incomingEdges = (flow.edges || []).map(e => ({
       ...e,
       animated: false,
       style: { strokeWidth: 2, stroke: '#6366f1', ...(e.style || {}) },
       markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed },
     }));
-    setNodes((flow.nodes || []).map(n => decorateNode(n, incomingEdges)));
+    const incomingNodes = flow.nodes || [];
+    setNodes(incomingNodes.map(n => decorateNode(n, incomingEdges, incomingNodes)));
     setEdges(incomingEdges);
   };
 
