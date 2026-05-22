@@ -10,6 +10,40 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (V) — v2.1.15: msgRetryCounterCache (ROOT CAUSE real do "Aguardando") ✅
+
+**Investigacao profunda apos 4 patches sem efeito:** Os patches v2.1.10-v2.1.14 tentavam EVITAR a sessao Signal ficar dessincronizada. Mas o "Aguardando mensagem" no destinatario eh um estado **temporario** que tem um mecanismo nativo do WhatsApp para se auto-curar: o **retry-receipt protocol**. Quando recipiente nao consegue decifrar, ele manda um retry receipt → nosso Baileys deveria responder re-cifrando com sessao fresca via callback `getMessage` → mensagem chega decifrada. Se isso funcionasse, "Aguardando" sumiria em segundos sozinho.
+
+**Root cause real:** O `makeWASocket` estava sendo criado **SEM `msgRetryCounterCache`**. Baileys 6.7+ exige esse cache (NodeCache) para rastrear quantas vezes cada msg foi retentada. Sem ele:
+- Retries chegam mas nao sao contabilizados
+- Baileys nao consegue distinguir "primeira tentativa" de "ja tentei 3x desisti"
+- Internamente DROPA os retries silenciosamente
+- → recipiente fica eternamente em "Aguardando mensagem" mesmo apos minutos/horas
+
+**Fix (whatsapp-service v2.1.15):**
+
+- `yarn add node-cache` — nova dependencia (Baileys-recomendada).
+- `msgRetryCounterCache = new NodeCache({ stdTTL: 300, useClones: false })` — 5 min TTL.
+- `groupMetadataCache = new NodeCache(...)` — analogo para retries em grupos.
+- Wire no `makeWASocket({ ..., msgRetryCounterCache, cachedGroupMetadata })`.
+- Flags novas no `/version`: `msg_retry_counter_cache: true`, `cached_group_metadata: true`.
+
+**Por que os patches anteriores nao resolviam:**
+- v2.1.10 (stale > 12h) cobria gap longo — nao o problema atual.
+- v2.1.13 (smart 1h + flagged) cobria janelas medias — nao adiantou pq retry nao funcionava.
+- v2.1.14 (inbound trigger) era surgical para sessoes fresh — mas se a sessao ja falhou e o retry nao auto-curra, o estado "Aguardando" persiste.
+- v2.1.15 **habilita o auto-cura nativo do WhatsApp**. Sem essa flag, qualquer falha de decryption no destinatario eh DEFINITIVA.
+
+**Bump:** v2.1.14 → **v2.1.15**.
+
+**Para producao:**
+1. **Save to Github** + redeploy do whatsapp-service no Render.
+2. Validar `/version` retornando `v2.1.15` + `msg_retry_counter_cache: true`.
+3. Teste real: enviar "Opa" varias vezes em conversas distintas. Se ainda aparecer "Aguardando", aguarde 10-30 segundos — agora deveria se auto-curar pelo retry protocol.
+
+
+
+
 ### 2026-02-17 (U) — v2.1.14: force_assert_on_inbound (fixa o "Aguardando" residual com gap < 1h) ✅
 
 **Bug residual em prod (apos v2.1.13):** Cliente envia "Opa" em uma janela ATIVA (gap de apenas 2 min desde o ultimo send que funcionou), e a resposta do bot chega como "Aguardando mensagem". O smart-threshold de 1h da v2.1.13 nao cobre esse caso pois a sessao parecia "fresca" (idle < 1h).

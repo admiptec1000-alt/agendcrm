@@ -86,6 +86,17 @@ const connections = {};
 // it to MongoDB with a 24h TTL. On `getMessage` miss we GET back from the
 // backend before returning the empty fallback.
 const sentMessageStore = {};
+
+// 2026-02-17 (v2.1.15) — CRITICAL: NodeCache used as msgRetryCounterCache for
+// Baileys. Without this, Baileys cannot track which messages were already
+// retried — the retry-receipt protocol that normally CURES "Aguardando
+// mensagem" silently breaks because Baileys can't tell if the recipient is
+// asking for a fresh re-encryption or hitting the wrong message id.
+// 5 min TTL is the Baileys-recommended value for retry counters.
+const NodeCache = require('node-cache');
+const msgRetryCounterCache = new NodeCache({ stdTTL: 60 * 5, useClones: false });
+// Same for group metadata so group retry receipts are handled correctly.
+const groupMetadataCache = new NodeCache({ stdTTL: 60 * 5, useClones: false });
 // Map<jid, timestamp> — last successful sendMessage per JID. Used by the
 // assertSessions stale-detection heuristic (2026-02-15 (G2)). When a JID
 // hasn't been talked to in >12h, we proactively re-fetch the prekey bundle
@@ -488,6 +499,13 @@ async function createConnection(instanceId) {
     defaultQueryTimeoutMs: 0,
     keepAliveIntervalMs: 25000,
     retryRequestDelayMs: 500,
+    // 2026-02-17 (v2.1.15) — Pass NodeCache-based retry counter so Baileys'
+    // retry-receipt protocol actually works. Without this, every undecrypted
+    // message on the recipient stays as "Aguardando mensagem" forever.
+    msgRetryCounterCache,
+    // Group metadata cache — required for retries inside groups (and used
+    // generally by Baileys to avoid extra round-trips on each group send).
+    cachedGroupMetadata: async (jid) => groupMetadataCache.get(jid),
     // Mark device online on connect so WhatsApp server treats us as active
     // (helps avoid "Aguardando mensagem..." prekey placeholder on recipients)
     markOnlineOnConnect: true,
@@ -1332,7 +1350,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.14',
+    version: 'v2.1.15',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1345,7 +1363,7 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.14',
+    version: 'v2.1.15',
     built_at: '2026-02-17',
     features: {
       sent_message_store: true,
@@ -1380,6 +1398,11 @@ app.get('/version', (req, res) => {
       // force-assert on next outbound. Fixes the post-inbound stale window
       // observed in prod (msg arrives as "Aguardando" even with 2-min gap).
       force_assert_on_inbound: true,
+      // v2.1.15 — the REAL root cause: Baileys needs msgRetryCounterCache to
+      // honor retry-receipts. Without it, "Aguardando mensagem" never clears
+      // because retries are silently dropped. node-cache added as dependency.
+      msg_retry_counter_cache: true,
+      cached_group_metadata: true,
     },
     fastapi_url: FASTAPI_URL,
   });
