@@ -10,6 +10,29 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (U) — v2.1.14: force_assert_on_inbound (fixa o "Aguardando" residual com gap < 1h) ✅
+
+**Bug residual em prod (apos v2.1.13):** Cliente envia "Opa" em uma janela ATIVA (gap de apenas 2 min desde o ultimo send que funcionou), e a resposta do bot chega como "Aguardando mensagem". O smart-threshold de 1h da v2.1.13 nao cobre esse caso pois a sessao parecia "fresca" (idle < 1h).
+
+**Root cause:** Quando o dispositivo do cliente envia uma mensagem, sua sessao Signal **avanca o ratchet** (chain key, e as vezes prekey de novo). O sock.sendMessage do nosso lado pode usar uma view ANTIGA do session record, gerando ciphertext que o destinatario nao consegue mais decifrar → "Aguardando mensagem".
+
+**Fix (whatsapp-service v2.1.14):**
+
+- **`force_assert_on_inbound`**: hook em `sock.ev.on('messages.upsert')`. Quando uma mensagem NAO `fromMe` chega de um JID nao-grupo, o JID eh adicionado ao Set `jidNeedsForceAssert` automaticamente.
+- O proximo send para esse JID dispara `assertSessions(force=true)` (mecanismo `failed_jid_recovery` ja existente) refetchando o prekey bundle e reconstruindo o session record fresco.
+- Cobre exatamente a janela "post-inbound stale" reportada em prod, sem impactar latencia de fluxos novos ou outbound proativos.
+- Custo: 1 force-assert por turno de conversa (quando cliente realmente responde). Nao afeta sends em serie.
+
+**Bump:** v2.1.13 → **v2.1.14**. Flag nova `force_assert_on_inbound: true` no `/version`.
+
+**Para producao:**
+1. **Save to Github** + redeploy do whatsapp-service no Render (v2.1.14).
+2. Validar `/version` retornando `v2.1.14` + `force_assert_on_inbound: true`.
+3. Teste real no WhatsApp: enviar "Opa" para a conexao SA → primeira resposta do bot deve chegar limpa, sem "Aguardando".
+
+
+
+
 ### 2026-02-17 (T) — v2.1.13: ROLLBACK do force-assert-always + cooldown no auto-reconnect (fix regressao do fluxo) ✅
 
 **Regressao identificada:** Apos deploy de v2.1.12 em prod, o FlowBuilder parou de entregar fluxos com multiplos Conteudos em sequencia. Sintomas: 1a mensagem entregue, demais nao chegam. Mesmo ambiente (empresa WEB), mesmo flow que funcionava ate v2.1.11.

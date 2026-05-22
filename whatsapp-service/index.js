@@ -681,6 +681,18 @@ async function createConnection(instanceId) {
       // backend can decide (per-company setting) whether to surface them.
       if (remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
 
+      // 2026-02-17 (v2.1.14) — When customer device sends us a message, their
+      // Signal session may have advanced its ratchet state (rotating chain key
+      // or even prekey if it's a new chat). If we then encrypt a reply using
+      // our OLD view of the session, the recipient cannot decrypt → "Aguardando
+      // mensagem". Mark the JID for force-assert so the very next outbound
+      // send refreshes the prekey bundle and rebuilds the session record.
+      // This is cheaper than asserting on every send and surgically fixes the
+      // exact post-inbound stale-session window observed in prod (gap 2 min).
+      if (!fromMe && remoteJid && !isGroup) {
+        jidNeedsForceAssert.add(remoteJid);
+      }
+
       // CRITICAL: Modern WhatsApp uses Linked Device IDs (@lid) for contact
       // identification that DO NOT match the phone number. If we just strip
       // "@lid" we end up with a random internal ID (e.g. 242158913192070)
@@ -1320,7 +1332,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.13',
+    version: 'v2.1.14',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1333,7 +1345,7 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.13',
+    version: 'v2.1.14',
     built_at: '2026-02-17',
     features: {
       sent_message_store: true,
@@ -1361,12 +1373,13 @@ app.get('/version', (req, res) => {
       old_socket_cleanup: true,
       zombie_socket_watchdog: true,
       sent_cache_ttl_7d: true,
-      // v2.1.13 — smart force-assert (idle>1h OR flagged) instead of every send.
-      // v2.1.12 caused timeout-driven false-positive auto-restarts that broke
-      // multi-message flows. Reverted to smart threshold.
       smart_stale_session_force_assert: true,
       prekey_periodic_upload: true,
       failed_jid_recovery: true,
+      // v2.1.14 — when customer sends us a message, mark their JID for
+      // force-assert on next outbound. Fixes the post-inbound stale window
+      // observed in prod (msg arrives as "Aguardando" even with 2-min gap).
+      force_assert_on_inbound: true,
     },
     fastapi_url: FASTAPI_URL,
   });
