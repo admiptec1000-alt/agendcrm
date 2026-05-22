@@ -10,6 +10,44 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-17 (T) — v2.1.13: ROLLBACK do force-assert-always + cooldown no auto-reconnect (fix regressao do fluxo) ✅
+
+**Regressao identificada:** Apos deploy de v2.1.12 em prod, o FlowBuilder parou de entregar fluxos com multiplos Conteudos em sequencia. Sintomas: 1a mensagem entregue, demais nao chegam. Mesmo ambiente (empresa WEB), mesmo flow que funcionava ate v2.1.11.
+
+**Root cause da regressao (v2.1.12):**
+
+1. **`force_assert_always` era TOO aggressive.** Cada `sendMessage` fazia uma chamada de rede ao servidor WA para refetch de prekey bundle (`assertSessions(force=true)`). Isso adicionou 5-10s por send.
+2. **Backend httpx timeout de 15s.** Quando o flow disparava 3-4 sends rapidos (Conteudo -> Conteudo -> Menu), os ultimos sends estouravam o timeout porque a fila de assertSessions atrasava o sendMessage.
+3. **MAX_CONSECUTIVE_FAILURES=3 sem cooldown.** Apos 3 timeouts (que aconteciam dentro do MESMO fluxo em ~30s), `_bump_send_failure` disparava `POST /restart` na conexao Baileys → derrubava a conexao no meio da execucao do fluxo → cliente nunca via as mensagens restantes.
+4. Resultado: a "cura" (v2.1.12) era pior que a doenca — em vez de "Aguardando mensagem", o fluxo PARAVA completamente.
+
+**Fixes (v2.1.13):**
+
+**whatsapp-service (`index.js`):**
+- **`smart_stale_session_force_assert`** (substitui `force_assert_always`): voltou para heuristica de threshold, mas com **1h** (em vez de 12h da v2.1.10). force=true so dispara quando:
+  - JID nunca foi contatado (`!jidLastSentAt.has(jid)`)
+  - JID idle > 1h
+  - JID flagged via `messages.update` status=1 (mantido)
+- Cobertura do caso de prod (5h gap = stale) preservada. Sends normais entre msgs proximas nao pagam o custo de network.
+- Mantidos: `prekey_periodic_upload` (30 min), `failed_jid_recovery` (Set).
+- Bump v2.1.12 → **v2.1.13** com flag `force_assert_always` removida explicitamente.
+
+**Backend (`flow_engine.py`):**
+- `MAX_CONSECUTIVE_FAILURES` 3 → **5** (reduz false-positives durante bursts transitorios).
+- **`AUTO_RECONNECT_COOLDOWN_MINUTES = 5`**: se um auto-restart aconteceu nos ultimos 5 min, novas falhas NAO disparam restart de novo. Loga warning informativo e retorna. Evita restart storms que matam fluxos.
+- httpx timeout 15s → **25s**: tolera o force-assert ocasional sem virar false-positive.
+- Removido `send_failed_in_round` + stuck-state pending_node clear (heuristica desnecessaria — o root cause real foi corrigido).
+
+**Testes:** 42/42 passando. Removido `test_real_send_failure_does_not_pin_pending_node` (workaround nao mais necessario).
+
+**Para producao:**
+1. **Save to Github** + redeploy do whatsapp-service no Render (v2.1.13 + smart_force).
+2. Redeploy do backend FastAPI (cooldown + timeout maior).
+3. Apos: o FlowBuilder volta a entregar todos os Conteudos do fluxo + o force-assert ainda corrige sessoes stale (>1h) + auto-reconnect so dispara em falhas SUSTENTADAS (nao em bursts transientes de 30s).
+
+
+
+
 ### 2026-02-17 (S) — v2.1.12: fix definitivo do "Aguardando mensagem" + recuperacao de fluxo travado ✅
 
 **Bug recorrente:** Mesmo apos v2.1.10/v2.1.11 (TTL 7d + stale_session_force_assert + /restart), usuarios em prod (empresa WEB) continuavam vendo mensagens do BOT chegando como **"Aguardando mensagem. Essa acao pode levar alguns instantes."** + fluxo parando logo no inicio (nao trazia menu de opcoes).

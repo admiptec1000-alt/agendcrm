@@ -1002,27 +1002,38 @@ app.post('/instances/:id/send', async (req, res) => {
     // to a brand-new contact. Without this, the recipient's WhatsApp shows
     // "Aguardando mensagem. Essa ação pode levar alguns instantes." (the
     // pre-key ciphertext arrived but the keys weren't yet established).
-    // 2026-02-17 (v2.1.12) — ALWAYS-FORCE strategy. Previous 12h "stale"
-    // heuristic missed the common case where the recipient rotated keys
-    // within a few hours (WA app update, device switch, multi-device sync
-    // turbulence). force=true is a cheap idempotent call that fetches a
-    // fresh prekey bundle from the WA server and rebuilds the session
-    // record — eliminating the root cause of the "Aguardando" placeholder.
+    //
+    // 2026-02-17 (v2.1.13) — REVERTED v2.1.12's "always force" to a smart
+    // heuristic. force=true is a network round-trip to WA (5-10s sometimes).
+    // Doing it on EVERY send pushed multi-message flows past the backend's
+    // 15s timeout, triggering false-positive auto-restarts that broke the
+    // very flows we were trying to protect. New strategy:
+    //   1. force=false warmup (cheap, idempotent).
+    //   2. force=true ONLY when JID is "suspicious":
+    //      • Never sent before (no entry in jidLastSentAt) → first contact
+    //      • Idle > 1h (was 12h in v2.1.10 — kept short so prod issues
+    //        like 5h gap are still covered)
+    //      • Explicitly flagged by messages.update status=1 (failed_jid_recovery)
+    //   3. Otherwise rely on Baileys' session cache (cheap, ~50ms).
+    const lastSeen = jidLastSentAt.get(targetJid);
+    const idleMs = lastSeen ? Date.now() - lastSeen : Infinity;
+    const isStale = !lastSeen || idleMs > (60 * 60 * 1000);  // 1h
+    const wasFlagged = jidNeedsForceAssert.has(targetJid);
     try {
-      // Warmup with force=false (free; succeeds for fresh sessions).
       try { await instance.sock.assertSessions([targetJid], false); } catch (_) {}
-      // Then unconditionally force-refetch. Marker set by messages.update
-      // (status=1 failed) bumps logging priority for diagnostics.
-      const wasFlagged = jidNeedsForceAssert.has(targetJid);
-      await instance.sock.assertSessions([targetJid], true);
-      if (wasFlagged) {
-        console.log(`[${req.params.id}] [STALE FIX] force-assert recovered flagged JID ${targetJid}`);
-        jidNeedsForceAssert.delete(targetJid);
+      if (isStale || wasFlagged) {
+        try {
+          await instance.sock.assertSessions([targetJid], true);
+          if (wasFlagged) {
+            console.log(`[${req.params.id}] [STALE FIX] force-assert recovered flagged JID ${targetJid}`);
+            jidNeedsForceAssert.delete(targetJid);
+          }
+        } catch (e2) {
+          console.warn(`[${req.params.id}] force-assertSessions failed (jid=${targetJid}, stale=${isStale}, flagged=${wasFlagged}):`, e2.message);
+        }
       }
     } catch (e) {
-      console.warn(`[${req.params.id}] force-assertSessions failed for ${targetJid}:`, e.message);
-      // Continue — Baileys will still attempt with whatever session state
-      // it has. We log so ops can correlate with downstream "Aguardando".
+      console.warn(`[${req.params.id}] assertSessions warmup failed for ${targetJid}:`, e.message);
     }
 
     // disabling link preview avoids some WA edge cases where the server
@@ -1309,7 +1320,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.12',
+    version: 'v2.1.13',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1322,7 +1333,7 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.12',
+    version: 'v2.1.13',
     built_at: '2026-02-17',
     features: {
       sent_message_store: true,
@@ -1349,12 +1360,13 @@ app.get('/version', (req, res) => {
       reconnect_exponential_backoff: true,
       old_socket_cleanup: true,
       zombie_socket_watchdog: true,
-      stale_session_force_assert: true,
       sent_cache_ttl_7d: true,
-      // 2026-02-17 (v2.1.12) — hard fixes for the residual "Aguardando":
-      force_assert_always: true,        // every send refetches prekey bundle
-      prekey_periodic_upload: true,     // 30min interval keeps server stocked
-      failed_jid_recovery: true,        // messages.update status=1 flags JID
+      // v2.1.13 — smart force-assert (idle>1h OR flagged) instead of every send.
+      // v2.1.12 caused timeout-driven false-positive auto-restarts that broke
+      // multi-message flows. Reverted to smart threshold.
+      smart_stale_session_force_assert: true,
+      prekey_periodic_upload: true,
+      failed_jid_recovery: true,
     },
     fastapi_url: FASTAPI_URL,
   });

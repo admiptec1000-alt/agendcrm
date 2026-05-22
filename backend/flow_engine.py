@@ -288,7 +288,11 @@ async def _send_whatsapp(ticket: dict, text: str, db=None) -> Optional[str]:
     if not (connection_id and target):
         return None
     try:
-        async with httpx.AsyncClient(timeout=15.0) as cli:
+        # 2026-02-17 — Bumped 15s → 25s. The pre-send assertSessions(force=true)
+        # can take 5-10s on cold sessions or under WA server load. A 15s hard
+        # cap was clipping legitimate sends and triggering false-positive
+        # failure counters mid-flow.
+        async with httpx.AsyncClient(timeout=25.0) as cli:
             r = await cli.post(
                 f"{wa_url}/instances/{connection_id}/send",
                 json={"phone": target, "message": text},
@@ -326,20 +330,28 @@ async def _send_whatsapp(ticket: dict, text: str, db=None) -> Optional[str]:
         return None
 
 
-MAX_CONSECUTIVE_FAILURES = 3
+MAX_CONSECUTIVE_FAILURES = 5
+AUTO_RECONNECT_COOLDOWN_MINUTES = 5
 
 
 async def _bump_send_failure(db, connection_id: str, wa_url: str, reason: str):
     """Increment the consecutive failure counter for a connection. When it
     crosses the threshold, attempt an automatic force-reconnect on the
     Baileys microservice (no operator intervention required). 2026-02-16 (Q).
+
+    2026-02-17 — Added a cooldown guard so a transient burst of failures
+    inside a SINGLE flow execution (e.g. 3 timeouts in 10s because Baileys
+    was momentarily slow) does not trigger an auto-restart mid-flow — which
+    would itself break the customer's session. Threshold bumped from 3→5
+    and we refuse to restart if we already did within the last 5 minutes.
     """
     if not db or not connection_id:
         return
     try:
-        from datetime import datetime as _dt, timezone as _tz
-        now_iso = _dt.now(_tz.utc).isoformat()
-        res = await db.channel_connections.find_one_and_update(
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        now = _dt.now(_tz.utc)
+        now_iso = now.isoformat()
+        await db.channel_connections.update_one(
             {"id": connection_id},
             {
                 "$inc": {"send_failures_count": 1},
@@ -348,33 +360,44 @@ async def _bump_send_failure(db, connection_id: str, wa_url: str, reason: str):
                     "last_send_failure_reason": reason[:200],
                 },
             },
-            return_document=True,
         )
-        count = (res or {}).get("send_failures_count", 0) if res else 0
-        # NB: motor's find_one_and_update without ReturnDocument.AFTER returns
-        # the doc BEFORE update — so to know the new count we re-read.
         fresh = await db.channel_connections.find_one(
-            {"id": connection_id}, {"_id": 0, "send_failures_count": 1}
+            {"id": connection_id},
+            {"_id": 0, "send_failures_count": 1, "last_auto_reconnect_at": 1},
         )
         count = (fresh or {}).get("send_failures_count", 0)
-        if count >= MAX_CONSECUTIVE_FAILURES:
-            logger.error(
-                f"[flow_engine] connection {connection_id} hit {count} consecutive "
-                f"send failures (last={reason!r}) — triggering auto force-reconnect"
-            )
+        if count < MAX_CONSECUTIVE_FAILURES:
+            return
+        # Cooldown check — avoid restart storms mid-flow.
+        last_reconnect = (fresh or {}).get("last_auto_reconnect_at")
+        if last_reconnect:
             try:
-                async with httpx.AsyncClient(timeout=10.0) as cli:
-                    await cli.post(f"{wa_url}/instances/{connection_id}/restart")
-                # Reset so we don't keep hammering Baileys on every send.
-                await db.channel_connections.update_one(
-                    {"id": connection_id},
-                    {"$set": {
-                        "send_failures_count": 0,
-                        "last_auto_reconnect_at": now_iso,
-                    }},
-                )
-            except Exception as e:
-                logger.error(f"[flow_engine] auto force-reconnect failed: {e}")
+                lr = _dt.fromisoformat(last_reconnect)
+                if (now - lr) < _td(minutes=AUTO_RECONNECT_COOLDOWN_MINUTES):
+                    logger.warning(
+                        f"[flow_engine] connection {connection_id} hit {count} failures "
+                        f"but auto-restart is in cooldown (last={last_reconnect}). "
+                        f"Skipping; will retry after cooldown expires."
+                    )
+                    return
+            except Exception:
+                pass
+        logger.error(
+            f"[flow_engine] connection {connection_id} hit {count} consecutive "
+            f"send failures (last={reason!r}) — triggering auto force-reconnect"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as cli:
+                await cli.post(f"{wa_url}/instances/{connection_id}/restart")
+            await db.channel_connections.update_one(
+                {"id": connection_id},
+                {"$set": {
+                    "send_failures_count": 0,
+                    "last_auto_reconnect_at": now_iso,
+                }},
+            )
+        except Exception as e:
+            logger.error(f"[flow_engine] auto force-reconnect failed: {e}")
     except Exception as e:
         logger.warning(f"[flow_engine] _bump_send_failure error: {e}")
 
@@ -806,12 +829,6 @@ async def advance_flow(
     tid = ticket.get("id")
     logger.info(f"[flow_engine] advance start flow={flow_id} ticket={tid} is_initial={is_initial} incoming_text={(incoming_text or '')[:80]!r} prev_node={ticket.get('active_flow_node_id')!r}")
 
-    # 2026-02-17 — Track if any outbound failed this round so we do NOT
-    # save a `pending_node_id` (menu/capture) for which the customer never
-    # actually saw the prompt. Without this, the flow gets stuck waiting
-    # for a reply to a message that was never delivered.
-    send_failed_in_round = {"v": False}
-
     async def _emit_and_persist(text: str):
         """Send text outbound and persist as agent message. Honours dry_run.
         Crucially we SEND FIRST (capturing the Baileys message_id) and only
@@ -822,20 +839,6 @@ async def advance_flow(
         if dry_run:
             return
         wa_msg_id = await _send_whatsapp(ticket, text, db=db)
-        # 2026-02-17 — Only flag as failure when a REAL send was attempted
-        # (ticket has connection_id + customer_phone). Without those,
-        # _send_whatsapp short-circuits to None and that's NOT a failure
-        # (test envs / dry runs / preview where WA isn't wired).
-        attempted_real_send = bool(
-            ticket.get("connection_id")
-            and (ticket.get("customer_phone") or ticket.get("lid_jid"))
-        )
-        if attempted_real_send and not wa_msg_id:
-            send_failed_in_round["v"] = True
-            logger.warning(
-                f"[flow_engine] send returned None for ticket={ticket.get('id')} — "
-                f"flow will NOT pause on this node (avoid stuck state)"
-            )
         await _persist_outgoing(db, ticket["id"], text, flow_id,
                                 wa_message_id=wa_msg_id)
 
@@ -1155,19 +1158,8 @@ async def advance_flow(
         logger.warning(f"[flow_engine] hop limit reached on flow {flow_id} ticket {tid}")
 
     if not dry_run:
-        # 2026-02-17 — If any outbound failed, clear pending_node_id so the
-        # customer's NEXT message restarts the flow from the start instead
-        # of being stuck waiting for a reply they never knew was expected.
-        # The auto-reconnect watchdog (flow_engine._bump_send_failure) will
-        # restore the WhatsApp connection in parallel.
-        if send_failed_in_round["v"] and pending_node_id:
-            logger.warning(
-                f"[flow_engine] discarding pending_node_id={pending_node_id!r} "
-                f"because a send failed in this round (avoid stuck state)"
-            )
-            pending_node_id = None
         await _save_state(db, ticket["id"], flow_id, pending_node_id, vars_)
-    logger.info(f"[flow_engine] advance done ticket={tid} sent_count={len(sent)} pending_node={pending_node_id!r} send_failed={send_failed_in_round['v']}")
+    logger.info(f"[flow_engine] advance done ticket={tid} sent_count={len(sent)} pending_node={pending_node_id!r}")
     return sent
 
 
