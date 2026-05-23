@@ -670,6 +670,63 @@ async def list_contact_presence(
     return docs
 
 
+@router.post("/webhook/auto-recovery")
+async def webhook_auto_recovery(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
+    """2026-02-18 (v2.1.17) — Receives auto-recovery notifications from the
+    Baileys microservice. Whenever a bot-sent message stays stuck without
+    DELIVERY_ACK (recipient "Aguardando mensagem"), the microservice wipes
+    the Signal session, re-sends the same text, and POSTs us here so the
+    SA log + flow_send_log reflect the recovery.
+
+    Body: {instance_id, jid, original_msg_id, new_msg_id, retry}
+    """
+    data = await request.json()
+    instance_id = data.get("instance_id")
+    original = data.get("original_msg_id")
+    new_id = data.get("new_msg_id")
+    retry = int(data.get("retry") or 1)
+    jid = data.get("jid") or ""
+    conn = await db.channel_connections.find_one({"id": instance_id})
+    if not conn:
+        return {"ok": False, "error": "instance_not_found"}
+    company_id = conn["company_id"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Update the matching outbound message to track the new msg id so any
+    # future DELIVERY_ACK arriving for `new_id` actually finds it. Also
+    # mark a delivery_status flag so the chat UI can render it visually.
+    if original and new_id:
+        await db.tickets.update_one(
+            {"company_id": company_id, "messages.wa_message_id": original},
+            {"$set": {
+                "messages.$.wa_message_id": new_id,
+                "messages.$.auto_recovery_retry": retry,
+                "messages.$.auto_recovery_at": now_iso,
+                "messages.$.delivery_status": "resent",
+            }},
+        )
+    # Persist a flow_send_log entry so the operator-facing "Log de envios"
+    # surfaces these events.
+    try:
+        await db.flow_send_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "ticket_id": None,
+            "flow_id": None,
+            "customer_phone": (jid or "").split("@")[0] if "@" in (jid or "") else jid,
+            "round_send_index": 0,
+            "text_preview": f"AUTO-RECOVERY retry #{retry} (jid={jid})",
+            "wa_msg_id": new_id,
+            "send_ok": True,
+            "elapsed_ms": 0,
+            "phase": "auto_recovery",
+            "error": f"recovered_from={original}",
+            "created_at": now_iso,
+        })
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @router.post("/webhook/connected")
 async def webhook_connected(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
     data = await request.json()

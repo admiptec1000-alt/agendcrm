@@ -114,6 +114,131 @@ const SENT_STORE_MAX = 2000;
 // decrypt anymore.
 const jidNeedsForceAssert = new Set();
 
+// ────────────────────────────────────────────────────────────────────────
+// 2026-02-18 (v2.1.17) — AUTO-RECOVERY for "Aguardando mensagem" stuck
+// deliveries. When the recipient's WhatsApp cannot decrypt our ciphertext
+// (corrupted Signal session, e.g. after their device rotated identity
+// keys), the message stays in PENDING/SERVER_ACK forever without reaching
+// DELIVERY_ACK. The customer sees a placeholder "Aguardando mensagem.
+// Essa ação pode levar alguns instantes." and the bot looks dead.
+//
+// Strategy: track every outbound msgId; if it does not reach DELIVERY_ACK
+// (status≥3) within STUCK_TIMEOUT_MS, we:
+//   1. WIPE the local Signal session record for that JID,
+//   2. Force-assert (fetches a fresh pre-key bundle from WA),
+//   3. Re-encrypt+re-send the original text.
+// Bounded retries (MAX_AUTO_RETRIES) prevent infinite loops.
+// Backend webhook is notified each time so the SA "Log de envios" reflects
+// the recovery attempts in real time.
+//
+// Standard Baileys WAMessageStatus enum (verified at runtime against
+// proto.WebMessageInfo.Status on 2026-02-18 / Baileys 6.7.21):
+//   ERROR=0, PENDING=1, SERVER_ACK=2, DELIVERY_ACK=3, READ=4, PLAYED=5
+// Anything ≥3 means the recipient device received and decrypted the
+// ciphertext — at which point we are safe and the entry is dropped.
+const pendingDeliveries = new Map(); // outbound msgId -> tracking entry
+const STUCK_TIMEOUT_MS = 20 * 1000;
+const MAX_AUTO_RETRIES = 2;
+const STUCK_CHECK_INTERVAL_MS = 5 * 1000;
+const PENDING_DELIVERIES_MAX = 1000;  // cap memory
+
+function trackOutboundForRecovery(instanceId, jid, msgId, text) {
+  if (!msgId) return;
+  // Cap memory: evict oldest entries when overflowing.
+  if (pendingDeliveries.size >= PENDING_DELIVERIES_MAX) {
+    const it = pendingDeliveries.keys();
+    pendingDeliveries.delete(it.next().value);
+  }
+  pendingDeliveries.set(msgId, {
+    instanceId, jid, text,
+    sentAt: Date.now(),
+    retries: 0,
+    msgId,
+  });
+}
+
+setInterval(async () => {
+  const now = Date.now();
+  for (const [msgId, info] of pendingDeliveries.entries()) {
+    if (now - info.sentAt < STUCK_TIMEOUT_MS) continue;
+    if (info.retries >= MAX_AUTO_RETRIES) {
+      console.error(
+        `[${info.instanceId}] [AUTO-RECOVERY] giving up msgId=${msgId} ` +
+        `jid=${info.jid} after ${info.retries} retries`
+      );
+      pendingDeliveries.delete(msgId);
+      continue;
+    }
+    const inst = connections[info.instanceId];
+    if (!inst?.sock || inst.status !== 'connected') continue;
+    info.retries += 1;
+    info.sentAt = Date.now();  // delay the NEXT recovery cycle
+    const ageSec = Math.round((now - info.sentAt) / 1000);
+    console.warn(
+      `[${info.instanceId}] [AUTO-RECOVERY] msgId=${msgId} jid=${info.jid} ` +
+      `stuck >${Math.round(STUCK_TIMEOUT_MS/1000)}s; wiping session + ` +
+      `re-sending (retry #${info.retries}/${MAX_AUTO_RETRIES})`
+    );
+    try {
+      // 1. Wipe local Signal session record for the JID.
+      await inst.sock.authState.keys.set({
+        session: { [info.jid]: null },
+      });
+      // 2. Mark for force-assert. The next assertSessions call WILL fetch
+      // a fresh pre-key bundle because the local session is gone.
+      jidNeedsForceAssert.add(info.jid);
+      try {
+        await inst.sock.assertSessions([info.jid], true);
+      } catch (e2) {
+        console.warn(
+          `[${info.instanceId}] [AUTO-RECOVERY] assertSessions warmup ` +
+          `failed (will still try send): ${e2.message}`
+        );
+      }
+      // 3. Re-send the original text.
+      const sent = await inst.sock.sendMessage(
+        info.jid,
+        { text: info.text, linkPreview: false },
+      );
+      if (sent?.key?.id) {
+        const newId = sent.key.id;
+        // Move tracking under the new msgId so the next round catches it
+        // if it also gets stuck.
+        pendingDeliveries.delete(msgId);
+        pendingDeliveries.set(newId, {
+          ...info,
+          msgId: newId,
+          sentAt: Date.now(),
+        });
+        rememberSent(info.jid, newId, { conversation: info.text });
+        jidLastSentAt.set(info.jid, Date.now());
+        console.log(
+          `[${info.instanceId}] [AUTO-RECOVERY] re-sent as ${newId} ` +
+          `(retry #${info.retries})`
+        );
+        // Fire-and-forget notification so the SA log shows the recovery.
+        axios.post(`${FASTAPI_URL}/api/channels/webhook/auto-recovery`, {
+          instance_id: info.instanceId,
+          jid: info.jid,
+          original_msg_id: msgId,
+          new_msg_id: newId,
+          retry: info.retries,
+        }, { timeout: 5000 }).catch(() => {});
+      } else {
+        console.warn(
+          `[${info.instanceId}] [AUTO-RECOVERY] re-send produced no key.id ` +
+          `(msgId=${msgId})`
+        );
+      }
+    } catch (e) {
+      console.error(
+        `[${info.instanceId}] [AUTO-RECOVERY] retry failed for msgId=${msgId} ` +
+        `jid=${info.jid}: ${e.message}`
+      );
+    }
+  }
+}, STUCK_CHECK_INTERVAL_MS);
+
 async function persistSentToBackend(jid, msgId, message) {
   try {
     await axios.post(
@@ -654,30 +779,52 @@ async function createConnection(instanceId) {
     } catch (_) {}
   });
 
-  // Forward read receipts / delivery acks (Baileys status numbers:
-  // 1=error, 2=pending, 3=sent, 4=delivered, 5=read, 6=played)
+  // Forward read receipts / delivery acks. Baileys WAMessageStatus enum
+  // (verified at runtime against proto.WebMessageInfo.Status on Baileys
+  // 6.7.21):
+  //   0 = ERROR, 1 = PENDING, 2 = SERVER_ACK, 3 = DELIVERY_ACK,
+  //   4 = READ, 5 = PLAYED
+  // We forward the status name AS-IS so the backend can react (e.g. mark
+  // a flow_send_log row as actually delivered). We also use the same
+  // signal to dismiss outbound deliveries from the auto-recovery
+  // watchlist (anything ≥ DELIVERY_ACK means the recipient device
+  // decrypted the ciphertext successfully).
   sock.ev.on('messages.update', async (updates) => {
     for (const u of updates) {
       try {
         const num = u.update?.status;
         if (num === undefined || num === null) continue;
-        const map = { 1: 'failed', 2: 'pending', 3: 'sent', 4: 'delivered', 5: 'read', 6: 'played' };
+        const map = {
+          0: 'failed',
+          1: 'pending',
+          2: 'server_ack',
+          3: 'delivered',
+          4: 'read',
+          5: 'played',
+        };
         const status = map[num];
         if (!status) continue;
+        const jid = u.key?.remoteJid;
+        const wamId = u.key?.id;
         // 2026-02-17 (v2.1.12) — Track failed sends per JID. Next send to
         // this JID will force-refetch the prekey bundle. Clear the flag
         // on healthy receipts (delivered/read/played).
-        const jid = u.key?.remoteJid;
         if (jid) {
-          if (num === 1) {
+          if (num === 0 /* ERROR */) {
             jidNeedsForceAssert.add(jid);
-            console.warn(`[${instanceId}] [STALE FIX] flagged ${jid} for force-assert (msg status=failed)`);
-          } else if (num === 4 || num === 5 || num === 6) {
+            console.warn(`[${instanceId}] [STALE FIX] flagged ${jid} for force-assert (msg status=ERROR)`);
+          } else if (num >= 3 /* DELIVERY_ACK or higher */) {
             jidNeedsForceAssert.delete(jid);
           }
         }
+        // 2026-02-18 (v2.1.17) — Drop the message from the auto-recovery
+        // watchlist as soon as the recipient device received it. Anything
+        // ≥ DELIVERY_ACK proves the ciphertext decrypted successfully.
+        if (wamId && num >= 3 && pendingDeliveries.has(wamId)) {
+          pendingDeliveries.delete(wamId);
+        }
         await axios.post(`${FASTAPI_URL}/api/channels/webhook/message-status`, {
-          instance_id: instanceId, message_id: u.key?.id, status,
+          instance_id: instanceId, message_id: wamId, status,
         }, { timeout: 5000 }).catch(() => {});
       } catch (_) {}
     }
@@ -1087,6 +1234,12 @@ app.post('/instances/:id/send', async (req, res) => {
         const it = jidLastSentAt.keys();
         for (let i = 0; i < overflow; i++) jidLastSentAt.delete(it.next().value);
       }
+      // 2026-02-18 (v2.1.17) — Add to auto-recovery watchlist. If the
+      // recipient's device fails to decrypt our ciphertext (the classic
+      // "Aguardando mensagem" symptom), the message will never reach
+      // DELIVERY_ACK. The interval at the top of this file picks it up,
+      // wipes the session, and re-sends automatically.
+      trackOutboundForRecovery(req.params.id, targetJid, sent.key.id, message);
     }
 
     // Persist LID <-> phone mapping for the @lid fallback in incoming.

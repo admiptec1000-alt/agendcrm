@@ -10,6 +10,38 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (v2.1.17) — Auto-recovery contra "Aguardando mensagem" ✅
+
+**Contexto:** Mesmo após self-echo dedup (AC2), o cliente final ainda via "Aguardando mensagem. Essa ação pode levar alguns instantes." no celular. CRM mostrava o fluxo executando perfeitamente (welcome, menu, CPF, contratos, Pix) — mas as mensagens chegavam ao WhatsApp do cliente como placeholders criptografados que ele não conseguia decifrar (sessão Signal corrompida).
+
+**Estratégia:** Recovery automática POR MENSAGEM, sem precisar de intervenção do operador.
+
+**Microserviço `/app/whatsapp-service/index.js` (v2.1.17):**
+1. **Watchlist `pendingDeliveries`** — toda mensagem enviada via `/send` é registrada (msgId → {jid, text, sentAt, retries}).
+2. **Interval a cada 5s** — varre a watchlist. Para qualquer mensagem stuck > 20s (sem ack `DELIVERY_ACK≥3`):
+   - Wipe da sessão Signal local: `sock.authState.keys.set({ session: { [jid]: null } })`
+   - Marca JID para force-assert + `assertSessions([jid], true)` (busca novo prekey bundle do servidor WA)
+   - Re-envia o texto original via `sendMessage`
+   - Move tracking pro novo msgId (caso o re-envio também trave)
+   - Limite: `MAX_AUTO_RETRIES=2`; depois disso desiste e loga
+3. **Notifica o backend** via `POST /api/channels/webhook/auto-recovery` para o SA conseguir auditar.
+4. **Correção do mapeamento WAMessageStatus**: estava OFF-BY-ONE (ERROR=0 era ignorado, PENDING=1 era tratado como 'failed' disparando force-assert em TODOS os sends). Corrigido pelo enum oficial do Baileys 6.7.21: `{0:'failed', 1:'pending', 2:'server_ack', 3:'delivered', 4:'read', 5:'played'}`.
+5. **Watchlist limpa automaticamente** quando recebe `messages.update` com status≥3 (DELIVERY_ACK): mensagem chegou, recovery não é mais necessária.
+
+**Backend `/app/backend/routes/channels_routes.py`:**
+- Novo endpoint `POST /api/channels/webhook/auto-recovery` — recebe a notificação, atualiza `wa_message_id` do ticket pro novo id (para futuros acks baterem), grava em `flow_send_log` com `phase=auto_recovery` para visibilidade no painel SA.
+
+**Diag** `/api/super-admin/diag/backend-version`:
+- Novo flag: `auto_recovery_webhook=true`
+
+**Para verificar em produção:**
+1. **Save to GitHub** → deploy do backend **E** do microserviço `whatsapp-service`.
+2. Diag → `auto_recovery_webhook=true`.
+3. Logs do whatsapp-service no Render mostrarão `[AUTO-RECOVERY] msgId=... jid=... stuck >20s; wiping session + re-sending` sempre que o sintoma acontecer.
+4. Cliente que estava recebendo "Aguardando mensagem" deve passar a receber a mensagem **automaticamente em ~25s** sem nenhuma ação do operador.
+
+
+
 ### 2026-02-18 (AC2) — Self-echo dedup + impede auto-pause espúrio do bot ✅
 
 **Sintomas em produção (visíveis nos prints do usuário):**

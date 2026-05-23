@@ -2653,6 +2653,8 @@ async def diag_backend_version(user: dict = Depends(require_super_admin)):
             # 2026-02-18 (AC2) — self-echo dedup in channels_routes
             "self_echo_dedup": "dropping self-echo" in ch_src,
             "self_echo_backfill_id": '"messages.$.wa_message_id"' in ch_src,
+            # 2026-02-18 (v2.1.17) — auto-recovery webhook is registered
+            "auto_recovery_webhook": "/webhook/auto-recovery" in ch_src,
         },
     }
 
