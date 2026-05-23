@@ -3463,7 +3463,10 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
     try {
       await channelsAPI.createConnection({ name: `${name} ${connections.length + 1}`, type });
       loadData(); toast.success('Conexao adicionada!');
-    } catch (e) { toast.error('Erro ao criar conexao'); }
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.message || 'Erro ao criar conexao';
+      toast.error(detail);
+    }
   };
 
   const removeConnection = async (connId) => {
