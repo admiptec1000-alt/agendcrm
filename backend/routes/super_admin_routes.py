@@ -2645,6 +2645,8 @@ async def diag_backend_version(user: dict = Depends(require_super_admin)):
             "delay_between_sends_v2": "_asyncio.sleep(1.2)" in src,
             "cooldown_minutes_const": "AUTO_RECONNECT_COOLDOWN_MINUTES" in src,
             "send_count_local": "_send_count_local" in src,
+            "emit_state_dict": '_emit_state = {"count": 0}' in src,
+            "pre_send_log": '"phase": "pre_send"' in src,
         },
     }
 

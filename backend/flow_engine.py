@@ -829,52 +829,70 @@ async def advance_flow(
     tid = ticket.get("id")
     logger.info(f"[flow_engine] advance start flow={flow_id} ticket={tid} is_initial={is_initial} incoming_text={(incoming_text or '')[:80]!r} prev_node={ticket.get('active_flow_node_id')!r}")
 
-    async def _emit_and_persist(text: str):
-        """Send text outbound and persist as agent message. Honours dry_run.
-        Crucially we SEND FIRST (capturing the Baileys message_id) and only
-        then persist locally with that id stamped. This makes the outgoing
-        echo from /webhook/message hit the dedup branch and prevents the
-        same bot reply from showing up twice in the operator UI.
+    # 2026-02-17 — Diagnostics: ALWAYS log every emit attempt FIRST, then
+    # send. If anything crashes during send, we still have the breadcrumb.
+    # Switched from nonlocal counter to mutable dict (Python closure trap-safe).
+    _emit_state = {"count": 0}
 
-        2026-02-17 — Insere um delay de 1.2s ENTRE sends consecutivos do
-        mesmo round. Sem isso, a 2a mensagem chega em Baileys antes da 1a
-        terminar o assertSessions/encrypt pipeline.
-        """
-        nonlocal _send_count_local
-        if sent:  # this is the 2nd+ send in the same round
+    async def _emit_and_persist(text: str):
+        """Send text outbound and persist as agent message. Honours dry_run."""
+        _emit_state["count"] += 1
+        idx = _emit_state["count"]
+        # PRE-SEND LOG (always, regardless of subsequent failures)
+        if not dry_run:
+            try:
+                await db.flow_send_log.insert_one({
+                    "id": str(__import__('uuid').uuid4()),
+                    "company_id": ticket.get("company_id"),
+                    "ticket_id": ticket.get("id"),
+                    "flow_id": flow_id,
+                    "customer_phone": ticket.get("customer_phone"),
+                    "round_send_index": idx,
+                    "text_preview": (text or "")[:120],
+                    "wa_msg_id": None,  # filled below
+                    "send_ok": None,    # filled below
+                    "elapsed_ms": None, # filled below
+                    "phase": "pre_send",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as _e:
+                logger.warning(f"[flow_engine] pre-send log insert failed: {_e}")
+        if idx > 1:
             import asyncio as _asyncio
             await _asyncio.sleep(1.2)
         sent.append(text)
-        _send_count_local += 1
         if dry_run:
             return
         import time as _time
         t0 = _time.monotonic()
-        wa_msg_id = await _send_whatsapp(ticket, text, db=db)
-        elapsed_ms = int((_time.monotonic() - t0) * 1000)
-        # 2026-02-17 — Persistent send log so operator can diagnose
-        # "bot envia 1 msg e para" without reading server logs. Available
-        # via GET /api/super-admin/diag/flow-send-log/{company_id}
+        wa_msg_id = None
+        send_err = None
         try:
-            await db.flow_send_log.insert_one({
-                "id": str(__import__('uuid').uuid4()),
-                "company_id": ticket.get("company_id"),
-                "ticket_id": ticket.get("id"),
-                "flow_id": flow_id,
-                "customer_phone": ticket.get("customer_phone"),
-                "round_send_index": _send_count_local,
-                "text_preview": (text or "")[:120],
-                "wa_msg_id": wa_msg_id,
-                "send_ok": bool(wa_msg_id),
-                "elapsed_ms": elapsed_ms,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            wa_msg_id = await _send_whatsapp(ticket, text, db=db)
         except Exception as _e:
-            logger.warning(f"[flow_engine] flow_send_log insert failed: {_e}")
-        await _persist_outgoing(db, ticket["id"], text, flow_id,
-                                wa_message_id=wa_msg_id)
-
-    _send_count_local = 0
+            send_err = str(_e)[:200]
+            logger.error(f"[flow_engine] _send_whatsapp threw: {_e}")
+        elapsed_ms = int((_time.monotonic() - t0) * 1000)
+        # POST-SEND LOG update
+        try:
+            await db.flow_send_log.update_many(
+                {"ticket_id": ticket.get("id"), "round_send_index": idx,
+                 "phase": "pre_send"},
+                {"$set": {
+                    "wa_msg_id": wa_msg_id,
+                    "send_ok": bool(wa_msg_id),
+                    "elapsed_ms": elapsed_ms,
+                    "phase": "complete",
+                    "error": send_err,
+                }},
+            )
+        except Exception as _e:
+            logger.warning(f"[flow_engine] post-send log update failed: {_e}")
+        try:
+            await _persist_outgoing(db, ticket["id"], text, flow_id,
+                                    wa_message_id=wa_msg_id)
+        except Exception as _e:
+            logger.error(f"[flow_engine] _persist_outgoing threw: {_e}")
 
     # Determine starting node + branch
     current_id: Optional[str] = None

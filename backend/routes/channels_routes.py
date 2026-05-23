@@ -959,7 +959,27 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
                 from routes.crm_routes import _trigger_flow_for_ticket
                 await _trigger_flow_for_ticket(db, conn["company_id"], conn["default_flow_id"], ticket)
         except Exception as e:
-            logger.warning(f"[webhook/message] flow trigger failed: {e}")
+            logger.error(f"[webhook/message] flow trigger CRASHED: {e}", exc_info=True)
+            # 2026-02-17 — Also record this in flow_send_log so operator
+            # sees the crash without reading server logs.
+            try:
+                await db.flow_send_log.insert_one({
+                    "id": str(__import__('uuid').uuid4()),
+                    "company_id": conn.get("company_id"),
+                    "ticket_id": ticket.get("id"),
+                    "flow_id": conn.get("default_flow_id"),
+                    "customer_phone": ticket.get("customer_phone"),
+                    "round_send_index": 0,
+                    "text_preview": f"FLOW_TRIGGER_CRASH: {str(e)[:100]}",
+                    "wa_msg_id": None,
+                    "send_ok": False,
+                    "elapsed_ms": 0,
+                    "phase": "crash",
+                    "error": str(e)[:500],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
     else:
         # Idempotency: skip if same wa message id already pushed.
         # This is CRITICAL for outgoing-from-phone messages: when the
