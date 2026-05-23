@@ -2626,6 +2626,30 @@ async def export_repaired_sgp_flow(
     )
 
 
+@router.get("/diag/backend-version")
+async def diag_backend_version(user: dict = Depends(require_super_admin)):
+    """2026-02-17 — Returns which features are present in this backend
+    build. Useful to verify that the latest commit actually got deployed.
+    Compare against the expected features list when shipping new fixes.
+    """
+    import flow_engine
+    import inspect
+    src = inspect.getsource(flow_engine)
+    return {
+        "ok": True,
+        "build_at": "2026-02-17",
+        "features": {
+            # Check for specific tokens in the flow_engine source — if the
+            # latest patch is present, these substrings will be found.
+            "flow_send_log_v2": "flow_send_log.insert_one" in src,
+            "delay_between_sends_v2": "_asyncio.sleep(1.2)" in src,
+            "cooldown_minutes_const": "AUTO_RECONNECT_COOLDOWN_MINUTES" in src,
+            "send_count_local": "_send_count_local" in src,
+        },
+    }
+
+
+
 @router.post("/diag/dry-run-flow/{flow_id}")
 async def diag_dry_run_flow(
     flow_id: str,
