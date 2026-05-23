@@ -2693,20 +2693,106 @@ async def diag_dry_run_flow(
             "ok": True,
             "messages_count": len(sent),
             "messages": sent,
-            "would_pause_at": None,  # The engine doesn't surface this in dry_run; left for future improvement.
             "summary": (
                 f"Engine emitiu {len(sent)} mensagem(s). "
-                + ("✅ Fluxo NORMAL — todas mensagens previstas." if len(sent) >= 2
-                   else "⚠ Engine emitiu APENAS 1 mensagem — confere com o sintoma do operador.")
+                + ("OK" if len(sent) >= 2 else "Apenas 1 — confere com o sintoma.")
             ),
         }
     except Exception as e:
         import traceback
-        return {
-            "ok": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()[-2000:],
-        }
+        return {"ok": False, "error": str(e), "traceback": traceback.format_exc()[-2000:]}
+
+
+@router.get("/diag/connection-flow-map/{company_id}")
+async def diag_connection_flow_map(
+    company_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-02-17 — Mostra para CADA conexao WhatsApp da empresa qual
+    flow_id esta vinculado e quais sao os primeiros nodes desse fluxo.
+    Isso revela se o operador esta editando UM fluxo mas a conexao usa
+    OUTRO.
+    """
+    conns = await db.channel_connections.find(
+        {"company_id": company_id, "type": "whatsapp"},
+        {"_id": 0, "id": 1, "name": 1, "phone": 1, "default_flow_id": 1,
+         "status": 1, "send_failures_count": 1},
+    ).to_list(50)
+
+    result_conns = []
+    for c in conns:
+        flow_id = c.get("default_flow_id")
+        flow_info = None
+        if flow_id:
+            f = await db.flow_builders.find_one(
+                {"id": flow_id}, {"_id": 0, "id": 1, "name": 1, "nodes": 1, "edges": 1}
+            )
+            if f:
+                nodes = f.get("nodes") or []
+                edges = f.get("edges") or []
+                # Find start → next node, and next node's properties
+                start = next((n for n in nodes
+                              if (n.get("data") or {}).get("nodeType") == "start"), None)
+                start_id = start.get("id") if start else None
+                start_target = None
+                if start_id:
+                    e = next((x for x in edges if x.get("source") == start_id), None)
+                    if e:
+                        target_node = next((n for n in nodes if n.get("id") == e.get("target")), None)
+                        if target_node:
+                            cfg = (target_node.get("data") or {}).get("config") or {}
+                            start_target = {
+                                "id": target_node.get("id"),
+                                "type": (target_node.get("data") or {}).get("nodeType"),
+                                "text_preview": (cfg.get("text") or cfg.get("message") or "")[:100],
+                                "has_capture_var": bool(cfg.get("capture_var")),
+                                "capture_var": cfg.get("capture_var") or None,
+                                "next_edge_target": None,
+                            }
+                            # Find the edge AFTER this welcome (welcome -> menu?)
+                            next_e = next((x for x in edges if x.get("source") == target_node.get("id")), None)
+                            if next_e:
+                                ntarget = next((n for n in nodes if n.get("id") == next_e.get("target")), None)
+                                if ntarget:
+                                    ncfg = (ntarget.get("data") or {}).get("config") or {}
+                                    start_target["next_edge_target"] = {
+                                        "id": ntarget.get("id"),
+                                        "type": (ntarget.get("data") or {}).get("nodeType"),
+                                        "text_preview": (ncfg.get("text") or ncfg.get("message") or "")[:100],
+                                        "options_count": len(ncfg.get("options") or []),
+                                    }
+                flow_info = {
+                    "id": f.get("id"),
+                    "name": f.get("name"),
+                    "nodes_count": len(nodes),
+                    "edges_count": len(edges),
+                    "start_id": start_id,
+                    "after_start": start_target,
+                }
+            else:
+                flow_info = {"id": flow_id, "name": "(FLOW NOT FOUND IN DB!)"}
+        result_conns.append({
+            "connection_id": c.get("id"),
+            "connection_name": c.get("name"),
+            "connection_phone": c.get("phone"),
+            "status": c.get("status"),
+            "send_failures_count": c.get("send_failures_count", 0),
+            "default_flow_id": flow_id,
+            "flow_info": flow_info,
+        })
+
+    # List ALL flows in this company (so operator can spot duplicates)
+    all_flows = await db.flow_builders.find(
+        {"company_id": company_id},
+        {"_id": 0, "id": 1, "name": 1, "is_active": 1, "updated_at": 1}
+    ).to_list(50)
+
+    return {
+        "company_id": company_id,
+        "connections": result_conns,
+        "all_flows_in_company": all_flows,
+    }
 
 
 @router.get("/diag/flow-send-log/{company_id}")
