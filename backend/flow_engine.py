@@ -1210,6 +1210,13 @@ async def advance_flow(
         logger.warning(f"[flow_engine] hop limit reached on flow {flow_id} ticket {tid}")
 
     if not dry_run:
+        # 2026-02-18 — Per Emergent Support guidance: the flow state MUST be
+        # preserved as-is even when an outbound send failed in this round.
+        # The previous "discard pending_node_id on send failure" logic was
+        # removed in 5e662d0 — DO NOT reintroduce it. The customer's next
+        # message will re-trigger the engine and natural retry happens via
+        # the menu reply matcher; clearing pending_node_id here permanently
+        # breaks resumption of the flow.
         await _save_state(db, ticket["id"], flow_id, pending_node_id, vars_)
     logger.info(f"[flow_engine] advance done ticket={tid} sent_count={len(sent)} pending_node={pending_node_id!r}")
     return sent

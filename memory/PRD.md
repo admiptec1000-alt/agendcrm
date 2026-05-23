@@ -10,6 +10,25 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (AC) — Fix Suporte: preserva pending_node_id em falhas de envio ✅
+
+**Contexto:** Suporte Emergent identificou que o flow_engine estava zerando `pending_node_id` quando um envio do round falhava (`send_failed_in_round`), interrompendo o fluxo permanentemente em vez de aguardar a próxima mensagem do cliente. Bot parava após 1ª mensagem em produção.
+
+**Status do código:** Patch já aplicado no commit `5e662d0` (22/05) — bloco `if send_failed_in_round["v"] and pending_node_id: pending_node_id = None` foi removido. Variável `send_failed_in_round` extinta do arquivo.
+
+**Ações 2026-02-18:**
+- Adicionado comentário defensivo em `/app/backend/flow_engine.py:1212` explicando que NÃO se deve reintroduzir lógica de zerar `pending_node_id` em falhas.
+- Criado `/app/backend/tests/test_flow_engine_state_preservation.py` com 3 testes regressivos (todos passando) que falham caso a lógica antiga retorne.
+- Bumpado `build_at` no endpoint `/api/super-admin/diag/backend-version` para `2026-02-18` e adicionados 2 novos feature flags:
+  - `no_send_failed_in_round_flag` — confirma que a variável removida não voltou
+  - `preserves_pending_on_failure` — confirma ausência do log "discarding pending_node_id"
+
+**Para verificar em produção:**
+1. Em Emergent → **Clear build cache & deploy**.
+2. Acessar (super-admin) `GET /api/super-admin/diag/backend-version` → confirmar `build_at="2026-02-18"` e ambos flags = true.
+3. Refazer teste real ("Opa" no WhatsApp) — bot deve enviar welcome + menu sem travar.
+
+
 ### 2026-02-17 (AB) — Log persistente de envios do bot + visualizacao SA ✅
 
 **Contexto:** Mesmo apos v2.1.16 + delay de 1.2s entre sends, usuario reportou que o sintoma persiste em prod ("Aguardando" volta + bot nao envia 2a msg). Sem evidencia direta nao da para continuar adivinhando.

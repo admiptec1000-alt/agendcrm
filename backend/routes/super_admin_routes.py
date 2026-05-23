@@ -2637,7 +2637,7 @@ async def diag_backend_version(user: dict = Depends(require_super_admin)):
     src = inspect.getsource(flow_engine)
     return {
         "ok": True,
-        "build_at": "2026-02-17",
+        "build_at": "2026-02-18",
         "features": {
             # Check for specific tokens in the flow_engine source — if the
             # latest patch is present, these substrings will be found.
@@ -2647,6 +2647,12 @@ async def diag_backend_version(user: dict = Depends(require_super_admin)):
             "send_count_local": "_send_count_local" in src,
             "emit_state_dict": '_emit_state = {"count": 0}' in src,
             "pre_send_log": '"phase": "pre_send"' in src,
+            # 2026-02-18 — Support-team fix: the engine must NEVER clear
+            # pending_node_id when a send fails. Presence of the old logic
+            # would break flow resumption. These flags must be TRUE for
+            # the patched build.
+            "no_send_failed_in_round_flag": "send_failed_in_round" not in src,
+            "preserves_pending_on_failure": "discarding pending_node_id" not in src,
         },
     }
 
