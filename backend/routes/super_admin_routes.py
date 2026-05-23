@@ -2635,24 +2635,24 @@ async def diag_backend_version(user: dict = Depends(require_super_admin)):
     import flow_engine
     import inspect
     src = inspect.getsource(flow_engine)
+    # 2026-02-18 — Also check channels_routes for the self-echo dedup fix.
+    import routes.channels_routes as _ch
+    ch_src = inspect.getsource(_ch)
     return {
         "ok": True,
         "build_at": "2026-02-18",
         "features": {
-            # Check for specific tokens in the flow_engine source — if the
-            # latest patch is present, these substrings will be found.
             "flow_send_log_v2": "flow_send_log.insert_one" in src,
             "delay_between_sends_v2": "_asyncio.sleep(1.2)" in src,
             "cooldown_minutes_const": "AUTO_RECONNECT_COOLDOWN_MINUTES" in src,
             "send_count_local": "_send_count_local" in src,
             "emit_state_dict": '_emit_state = {"count": 0}' in src,
             "pre_send_log": '"phase": "pre_send"' in src,
-            # 2026-02-18 — Support-team fix: the engine must NEVER clear
-            # pending_node_id when a send fails. Presence of the old logic
-            # would break flow resumption. These flags must be TRUE for
-            # the patched build.
             "no_send_failed_in_round_flag": "send_failed_in_round" not in src,
             "preserves_pending_on_failure": "discarding pending_node_id" not in src,
+            # 2026-02-18 (AC2) — self-echo dedup in channels_routes
+            "self_echo_dedup": "dropping self-echo" in ch_src,
+            "self_echo_backfill_id": '"messages.$.wa_message_id"' in ch_src,
         },
     }
 

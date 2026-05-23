@@ -10,6 +10,39 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (AC2) — Self-echo dedup + impede auto-pause espúrio do bot ✅
+
+**Sintomas em produção (visíveis nos prints do usuário):**
+1. Mensagens do bot apareciam **duplicadas** no CRM (no celular do cliente NÃO duplicam).
+2. Ticket aparecia com badge **"Bot pausado"** logo após o welcome+menu.
+3. Cliente respondia "1" ou "2" e o bot não processava (porque `is_flow_active` retorna False quando `bot_paused=True`).
+
+**Causa raiz (`/app/backend/routes/channels_routes.py::webhook_message`):**
+- Baileys, em algumas contas, NÃO retorna `wa_msg_id` na resposta do send → `_persist_outgoing` grava `wa_message_id=None`.
+- O `messages.upsert` echo do WhatsApp com `from_me=true` chega depois carregando o id REAL.
+- Dedup estrita por `wa_message_id` falha (None ≠ real id) → mensagem é gravada 2x.
+- E como `from_me=true`, `pause_bot_on_ticket_if_enabled` é chamado → bot pausado → cliente travado.
+
+**Fix:**
+- Em `channels_routes.py` (entre as linhas ~990 e 994 originais), adicionada uma camada de dedup por **(sender_type=agent + texto idêntico + janela 45s)** ANTES de inserir a mensagem e ANTES de chamar `pause_bot_on_ticket_if_enabled`. Quando detecta echo, retorna `{"ok": True, "duplicate": True, "self_echo": True}` e faz backfill do `wa_message_id` real na mensagem original.
+- Janela de 45s é apertada o suficiente para não engolir uma mensagem do operador que tenha o mesmo texto coincidentemente.
+- Sanity: mensagens de operador com **texto diferente** ou **fora da janela** continuam pausando o bot normalmente.
+
+**Testes regressivos (`/app/backend/tests/test_webhook_self_echo_dedup.py`):** 2 testes passando.
+- `test_from_me_echo_of_bot_message_is_deduped`
+- `test_from_me_real_operator_message_still_pauses_bot`
+
+**Feature flags no `/api/super-admin/diag/backend-version`:**
+- `self_echo_dedup` — confirma presença do log "dropping self-echo"
+- `self_echo_backfill_id` — confirma backfill do wa_message_id
+
+**Para verificar em produção:**
+1. **Save to GitHub → Clear build cache & deploy** (backend).
+2. Acessar (super-admin) `GET /api/super-admin/diag/backend-version` → confirmar `self_echo_dedup=true` e `self_echo_backfill_id=true`.
+3. Como o ticket #2484 do print ainda está com `bot_paused=true`, **excluir/reabrir o atendimento** OU usar o botão "Despausar bot" no menu 3-pontos do ticket para reativar o cliente.
+4. Cliente manda "Opa" novamente → welcome + menu (sem duplicar no CRM, sem badge "Bot pausado") → cliente responde "2" → bot avança para "Não cliente".
+
+
 ### 2026-02-18 (AC) — Fix Suporte: preserva pending_node_id em falhas de envio ✅
 
 **Contexto:** Suporte Emergent identificou que o flow_engine estava zerando `pending_node_id` quando um envio do round falhava (`send_failed_in_round`), interrompendo o fluxo permanentemente em vez de aguardar a próxima mensagem do cliente. Bot parava após 1ª mensagem em produção.

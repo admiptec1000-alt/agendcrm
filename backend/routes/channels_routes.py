@@ -990,6 +990,54 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         existing_ids = [m.get("wa_message_id") for m in (ticket.get("messages") or [])]
         if msg_id and msg_id in existing_ids:
             return {"ok": True, "duplicate": True}
+        # 2026-02-18 — Self-echo dedup fallback. When Baileys does NOT
+        # return a `wa_message_id` on the bot's send (observed in prod
+        # under certain accounts), `_persist_outgoing` stores
+        # `wa_message_id=None`. The subsequent `messages.upsert` echo with
+        # `fromMe=true` then has a real `msg_id` that does NOT match any
+        # stored None → the strict id dedup above misses it, and we end
+        # up: (a) duplicating the message in the CRM, and (b) flipping
+        # `bot_paused=true` (because from_me echo looks like the operator
+        # typed from the phone). Below we look at the LAST FEW agent
+        # messages and bail if any one matches on content within a short
+        # window. Window kept tight (45s) so a real operator typing the
+        # same text shortly after is not swallowed.
+        if from_me and text:
+            from datetime import timedelta as _td
+            now_utc = datetime.now(timezone.utc)
+            text_norm = (text or "").strip()
+            try:
+                for _m in reversed((ticket.get("messages") or [])[-8:]):
+                    if (_m.get("sender_type") != "agent"
+                            or (_m.get("content") or "").strip() != text_norm):
+                        continue
+                    _ts = _m.get("created_at")
+                    if not _ts:
+                        continue
+                    try:
+                        _dt = datetime.fromisoformat(_ts.replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                    if (now_utc - _dt) < _td(seconds=45):
+                        logger.info(
+                            f"[webhook/message] dropping self-echo (from_me=true) "
+                            f"matching recent bot/agent message on ticket={ticket['id']} "
+                            f"text={text_norm[:60]!r}"
+                        )
+                        # If the echo carries a real wa_message_id, backfill
+                        # it on the existing record so future echoes match
+                        # via the strict id path above.
+                        if msg_id and not _m.get("wa_message_id"):
+                            try:
+                                await db.tickets.update_one(
+                                    {"id": ticket["id"], "messages.id": _m.get("id")},
+                                    {"$set": {"messages.$.wa_message_id": msg_id}},
+                                )
+                            except Exception:
+                                pass
+                        return {"ok": True, "duplicate": True, "self_echo": True}
+            except Exception as _e:
+                logger.warning(f"[webhook/message] self-echo dedup failed: {_e}")
         update_set = {"updated_at": datetime.now(timezone.utc).isoformat()}
         if from_me:
             # Track last outgoing so the @lid fallback works for the very
