@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import SgpRepairTab from './SgpRepairTab';
 import { AdmLancamentosPanel } from './AdmLancamentosPanel';
+import { CompanyReportPanel } from './CompanyReportPanel';
 import { LicensesPanel } from './LicensesPanel';
 import { LicenseAssignmentPanel } from './LicenseAssignmentPanel';
 import { EditableComboBox } from '../../components/EditableComboBox';
@@ -118,6 +119,8 @@ const SuperAdminDashboard = () => {
     { key: 'licenses', label: 'Licencas', icon: Package },
     { key: 'partners', label: 'Parceiros', icon: HandCoins },
     { key: 'financial', label: 'Financeiro Admin', icon: Receipt },
+    // 2026-02-18 — Relatorio Empresas (custo/venda/lucro/vencimento)
+    { key: 'sa-report-companies', label: 'Relatorio Empresas', icon: BarChart3 },
     // 2026-02-16 (J) — Atendimento + Conexao para o SA (usados para
     // enviar lembretes de cobranca via WhatsApp).
     { key: 'sa-atendimentos', label: 'Atendimentos', icon: Headphones },
@@ -402,6 +405,7 @@ const SuperAdminDashboard = () => {
             </div>
           )}
           {activeTab === 'sgp-repair' && <SgpRepairTab companies={companies} />}
+          {activeTab === 'sa-report-companies' && <CompanyReportPanel />}
           {activeTab === 'settings' && <SettingsTab companies={companies} />}
         </div>
       </main>
@@ -2420,19 +2424,38 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
   const handleSave = async () => {
     setSaving(true);
     try {
+      // 2026-02-18 — `monthly_price` agora eh sempre computado:
+      //   total venda das licencas - desconto fixo da empresa.
+      // O campo manual foi removido da UI; ainda enviamos para compat backend.
+      const _licenses = form.licenses || [];
+      let _catalog = [];
+      try {
+        const r = await api.get('/super-admin/licenses');
+        _catalog = r?.data || [];
+      } catch (_) { /* sem catalogo eh ok — usaremos custom_sale_price quando presente */ }
+      const _sale = _licenses.reduce((acc, a) => {
+        const lic = _catalog.find(l => l.id === a.license_id);
+        const unitSale = a.custom_sale_price != null
+          ? Number(a.custom_sale_price)
+          : Number(lic?.sale_price || 0);
+        return acc + unitSale * (Number(a.qty) || 1);
+      }, 0);
+      const _disc = form.discount === '' || form.discount === null ? 0 : Number(form.discount);
+      const _computedMonthly = Math.max(0, _sale - _disc);
       // Billing fields: send as numbers (or null when empty). The backend
       // recomputes max_connections/max_users from the licenses array, so we
       // don't need to send those.
       const billingPayload = {
-        licenses: form.licenses || [],
-        monthly_price: form.monthly_price === '' || form.monthly_price === null ? null : Number(form.monthly_price),
+        licenses: _licenses,
+        monthly_price: _computedMonthly,
+        total_sale_price: _sale,  // 2026-02-18 — usado pelo Financeiro
         billing_cycle: form.billing_cycle || null,
         installments: form.installments === '' ? null : Number(form.installments),
         grace_days: form.grace_days === '' ? null : Number(form.grace_days),
         first_due_date: form.first_due_date || null,
         representante: form.representante || null,
         // 2026-02-18 — Desconto + observacao
-        discount: form.discount === '' || form.discount === null ? 0 : Number(form.discount),
+        discount: _disc,
         observation: form.observation || null,
       };
       if (isEditing) {
@@ -2705,13 +2728,11 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               discount={Number(form.discount) || 0}
               onDiscountChange={(v) => setForm({...form, discount: v})}
             />
-            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mt-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Mensalidade (R$)</label>
-                <input type="number" step="0.01" value={form.monthly_price}
-                  onChange={e => setForm({...form, monthly_price: e.target.value})}
-                  className="input-field text-sm" data-testid="company-monthly-price" placeholder="0,00" />
-              </div>
+            {/* 2026-02-18 — Campo "Mensalidade" REMOVIDO da UI: o valor
+                mensal devido eh agora calculado automaticamente como
+                (valor venda total das licencas - desconto). Ainda enviamos
+                `monthly_price` no payload para compatibilidade backend. */}
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3 mt-4">
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Ciclo</label>
                 <select value={form.billing_cycle}

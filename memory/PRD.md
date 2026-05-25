@@ -10,6 +10,51 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (REPORT+SIMPLIF) — Card "Custo" removido + Relatorio Empresas + Mensalidade unificada ✅
+
+**Pedido do operador:**
+1. Tela cadastro empresa: tirar card "Custo total", ordem `Valor venda total → Desconto → Valor devido`, unificar/remover input "Mensalidade".
+2. Financeiro: valor original do lancamento deve ser o `valor_venda_total` da empresa.
+3. Novo relatorio: empresa | custo | valor venda | lucro | vencimento (em X dias / atrasado Y dias) com filtros mes atual / mes passado / personalizado + Tipo BD + busca. Adequado a mobile.
+
+**Frontend — `LicenseAssignmentPanel.js`:**
+- Removido card "Custo total" (era usado internamente, nao precisa visibilidade do operador).
+- Adicionados cards "Desconto" e "Valor devido (mensal)" no grid de totais (agora 5 colunas em md+).
+- Ordem final: Conexoes → Usuarios → Valor venda total → Desconto → Valor devido.
+
+**Frontend — `Dashboard.js` (modal Editar Empresa):**
+- Input "Mensalidade (R$)" REMOVIDO da UI. Valor agora eh sempre calculado: `total_sale_price - discount`.
+- `handleSave` busca o catalogo de licencas via `api.get('/super-admin/licenses')` e calcula `_sale + _disc → _computedMonthly`. Persiste `monthly_price` (compat) + novo `total_sale_price` (canonical).
+- Grid de "Ciclo / Parcelas / Carencia" passou de 4 para 3 colunas com a remocao.
+
+**Backend — `models.py`:**
+- `CompanyCreate`/`CompanyUpdate` ganharam `total_sale_price: Optional[float]`.
+- `super_admin_routes.py::update_company` persiste o campo.
+
+**Backend — `scheduler.py`:**
+- Em `_process_billing_reminders`, `price` agora prefere `total_sale_price` (fallback para `monthly_price` legado).
+- Filtro do cursor: `$or: [{monthly_price>0}, {total_sale_price>0}]` para empresas que so tem o campo novo.
+
+**Backend — novo endpoint `GET /api/super-admin/reports/companies`:**
+- Query params: `period` (`current_month` | `last_month` | `custom`), `date_from`, `date_to`, `database_type`, `q` (busca por nome/representante/email/telefone).
+- Retorna `{rows, totals}` com `custo`, `venda`, `desconto`, `valor_devido`, `lucro`, `due_date`, `status` (`em_dia | vence_hoje | atrasado | pago | sem_cobranca`), `days_to_due`.
+- Ordenado: atrasados primeiro → vence hoje → em dia → pago → sem cobranca.
+- Totalizadores: custo_total, venda_total, lucro_total, atrasado_count, em_dia_count, pago_count.
+
+**Frontend — novo painel `CompanyReportPanel.js`** (sidebar SA: "Relatorio Empresas"):
+- **Mobile-first**: tabela em `md+`, **cards** com layout vertical em `<md`.
+- Filtros em grid responsivo: 1 col mobile → 2 cols sm → 4 cols lg.
+- 4 cards de totalizadores no topo (custo/venda/lucro com margem%/atrasados).
+- Badges de status coloridas com icone (verde/amarelo/vermelho/cinza).
+- Botao **"Exportar CSV"** que gera download com BOM UTF-8 (compativel Excel).
+- Re-fetch automatico ao mudar periodo ou tipo BD; campo busca dispara em Enter ou via botao "Aplicar filtros".
+
+**Testes:** 7/7 regressivos passando (`test_billing_send_messages_flag`, `test_flow_engine_state_preservation`, `test_webhook_self_echo_dedup`). FakeColl atualizada para suportar query `$or`.
+
+**Para verificar em producao:** Save to GitHub + deploy do backend Emergent.
+
+
+
 ### 2026-02-18 (BILL-NO-SEND) — Edicao/criacao de empresa nao envia mais mensagens ✅
 
 **Problemas reportados:**

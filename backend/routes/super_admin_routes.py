@@ -669,6 +669,8 @@ async def create_company(
         extra_billing_set["discount"] = float(data.discount or 0)
     if data.observation is not None:
         extra_billing_set["observation"] = (data.observation or "").strip()
+    if data.total_sale_price is not None:
+        extra_billing_set["total_sale_price"] = float(data.total_sale_price or 0)
     if extra_billing_set:
         await db.companies.update_one({"id": company_id}, {"$set": extra_billing_set})
         for k, v in extra_billing_set.items():

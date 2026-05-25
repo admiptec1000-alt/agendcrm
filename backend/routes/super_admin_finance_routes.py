@@ -14,7 +14,7 @@ Also exposes:
   • Operational impersonation: opens a company panel as the SuperAdmin's own
     "operational company" so they can use modules (Kanban, Integrations, etc.)
 """
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional
 import uuid
 
@@ -697,4 +697,154 @@ async def adm_finance_summary(
         "transaction_count": len(rows),
         "ticket_medio": round(bruto_entradas / len(entradas), 2) if entradas else 0,
         "by_payment_method": by_method,
+    }
+
+
+
+# ────────────────────────────────────────────────────────────────────────
+# 2026-02-18 — Relatorio Empresas (rentabilidade + status de cobranca)
+# ────────────────────────────────────────────────────────────────────────
+@router.get("/reports/companies")
+async def adm_report_companies(
+    period: str = "current_month",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    database_type: Optional[str] = None,
+    q: Optional[str] = None,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    """Relatorio Empresas. Cada linha: empresa, custo das licencas, valor de
+    venda, lucro (venda - custo), proxima parcela do periodo, status (em X
+    dias / atrasado Y dias / pago).
+    """
+    today = datetime.utcnow().date()
+    if period == "current_month":
+        start = today.replace(day=1)
+        if start.month == 12:
+            end = date(start.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end = date(start.year, start.month + 1, 1) - timedelta(days=1)
+    elif period == "last_month":
+        first_this = today.replace(day=1)
+        end = first_this - timedelta(days=1)
+        start = end.replace(day=1)
+    elif period == "custom":
+        try:
+            start = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else today.replace(day=1)
+            end = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else today
+        except Exception:
+            raise HTTPException(400, "date_from/date_to invalidos (YYYY-MM-DD)")
+    else:
+        raise HTTPException(400, "period invalido")
+    start_iso = start.isoformat()
+    end_iso = end.isoformat()
+
+    licenses: list = []
+    for coll_name in ("licenses", "super_admin_licenses", "license_catalog"):
+        try:
+            col = getattr(db, coll_name)
+            licenses = await col.find({}, {"_id": 0}).to_list(500)
+            if licenses:
+                break
+        except Exception:
+            pass
+    lic_by_id = {lic.get("id"): lic for lic in (licenses or [])}
+
+    cq: dict = {"is_super_admin_system": {"$ne": True}}
+    if database_type:
+        cq["database_type"] = database_type
+    if q:
+        rx = {"$regex": q, "$options": "i"}
+        cq["$or"] = [{"name": rx}, {"email": rx}, {"representante": rx}, {"phone": rx}]
+
+    rows: List[dict] = []
+    async for c in db.companies.find(cq, {
+        "_id": 0, "id": 1, "name": 1, "representante": 1, "email": 1,
+        "database_type": 1, "licenses": 1, "discount": 1,
+        "total_sale_price": 1, "monthly_price": 1, "first_due_date": 1,
+        "status": 1,
+    }):
+        custo = 0.0
+        venda = 0.0
+        for a in (c.get("licenses") or []):
+            lic = lic_by_id.get(a.get("license_id")) or {}
+            qty = int(a.get("qty") or 1)
+            custo += float(lic.get("cost") or 0) * qty
+            unit_sale = (
+                float(a.get("custom_sale_price"))
+                if a.get("custom_sale_price") is not None
+                else float(lic.get("sale_price") or 0)
+            )
+            venda += unit_sale * qty
+        _tsp = float(c.get("total_sale_price") or 0)
+        if _tsp > 0:
+            venda = _tsp
+        desconto = float(c.get("discount") or 0)
+        valor_devido = max(0.0, venda - desconto)
+        lucro = venda - custo
+
+        parcela = await db.super_admin_transactions.find_one(
+            {
+                "company_id": c["id"],
+                "direction": "entrada",
+                "due_date": {"$gte": start_iso, "$lte": end_iso},
+            },
+            {"_id": 0, "status": 1, "due_date": 1, "amount": 1, "paid_at": 1},
+            sort=[("due_date", 1)],
+        )
+
+        status_label = "sem_cobranca"
+        days_to_due = None
+        if parcela:
+            due_iso = parcela.get("due_date") or ""
+            if (parcela.get("status") or "").lower() == "pago":
+                status_label = "pago"
+            else:
+                try:
+                    d = datetime.strptime(due_iso, "%Y-%m-%d").date()
+                    days_to_due = (d - today).days
+                    if days_to_due < 0:
+                        status_label = "atrasado"
+                    elif days_to_due == 0:
+                        status_label = "vence_hoje"
+                    else:
+                        status_label = "em_dia"
+                except Exception:
+                    pass
+
+        rows.append({
+            "company_id": c["id"],
+            "company_name": c.get("name") or "",
+            "representante": c.get("representante") or "",
+            "database_type": c.get("database_type") or "Padrao",
+            "custo": round(custo, 2),
+            "venda": round(venda, 2),
+            "desconto": round(desconto, 2),
+            "valor_devido": round(valor_devido, 2),
+            "lucro": round(lucro, 2),
+            "due_date": parcela.get("due_date") if parcela else None,
+            "status": status_label,
+            "days_to_due": days_to_due,
+        })
+
+    rows.sort(key=lambda r: (
+        {"atrasado": 0, "vence_hoje": 1, "em_dia": 2, "pago": 3, "sem_cobranca": 4}.get(r["status"], 5),
+        r["days_to_due"] if r["days_to_due"] is not None else 9999,
+    ))
+
+    totals = {
+        "custo_total": round(sum(r["custo"] for r in rows), 2),
+        "venda_total": round(sum(r["venda"] for r in rows), 2),
+        "lucro_total": round(sum(r["lucro"] for r in rows), 2),
+        "atrasado_count": sum(1 for r in rows if r["status"] == "atrasado"),
+        "em_dia_count": sum(1 for r in rows if r["status"] == "em_dia"),
+        "pago_count": sum(1 for r in rows if r["status"] == "pago"),
+    }
+    return {
+        "period": period,
+        "start": start_iso,
+        "end": end_iso,
+        "rows": rows,
+        "totals": totals,
     }

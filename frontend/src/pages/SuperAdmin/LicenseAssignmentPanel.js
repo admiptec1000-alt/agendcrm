@@ -176,13 +176,16 @@ export const LicenseAssignmentPanel = ({ value, onChange, companyId, discount = 
             data-testid="company-discount"
           />
           <p className="text-[11px] text-slate-500 mt-1">
-            Subtrai do "Valor venda total" e de cada lancamento gerado para esta empresa.
+            Subtrai de "Valor venda total" e propaga em cada lancamento gerado.
           </p>
         </div>
       )}
 
-      {/* Totals + usage counters */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+      {/* Totals + usage counters
+          2026-02-18 — Reorganizado conforme solicitacao do operador:
+            • Conexoes  • Usuarios  • Valor venda total  • Desconto  • Valor devido
+          Removido "Custo total" (campo interno, nao precisa exposicao na UI). */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-3">
         <CounterCard
           label="Conexoes"
           used={usage?.used_connections}
@@ -197,16 +200,21 @@ export const LicenseAssignmentPanel = ({ value, onChange, companyId, discount = 
           warn={usage && usage.used_users > localTotals.maxUsr}
           testid="counter-users"
         />
-        <CounterCard label="Custo total" value={money(localTotals.cost)} testid="counter-cost" />
         <CounterCard
           label="Valor venda total"
-          value={money(Math.max(0, localTotals.sale - (Number(discount) || 0)))}
-          subtitle={
-            Number(discount) > 0
-              ? `bruto ${money(localTotals.sale)} − desconto ${money(Number(discount))}`
-              : null
-          }
+          value={money(localTotals.sale)}
           testid="counter-sale"
+        />
+        <CounterCard
+          label="Desconto"
+          value={money(Number(discount) || 0)}
+          testid="counter-discount"
+        />
+        <CounterCard
+          label="Valor devido (mensal)"
+          value={money(Math.max(0, localTotals.sale - (Number(discount) || 0)))}
+          subtitle="venda − desconto"
+          testid="counter-devido"
           emphasis
         />
       </div>

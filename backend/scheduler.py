@@ -357,7 +357,12 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
     cutoff = today + timedelta(days=max(gen_days, max_positive_offset))
     cursor = db.companies.find(
         {
-            "monthly_price": {"$gt": 0},
+            # 2026-02-18 — Aceita empresas com monthly_price > 0 OU
+            # total_sale_price > 0 (novo modelo unificado).
+            "$or": [
+                {"monthly_price": {"$gt": 0}},
+                {"total_sale_price": {"$gt": 0}},
+            ],
             "installments": {"$gt": 0},
             "first_due_date": {"$ne": None},
             "is_super_admin_system": {"$ne": True},
@@ -380,7 +385,11 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
             first_due = c.get("first_due_date") or ""
             if not first_due:
                 continue
-            price = float(c.get("monthly_price") or 0)
+            # 2026-02-18 — Valor da parcela: prefere `total_sale_price` (calculado
+            # a partir das licencas no cadastro da empresa). Fallback para
+            # `monthly_price` quando ausente (compatibilidade legado).
+            _tsp = float(c.get("total_sale_price") or 0)
+            price = _tsp if _tsp > 0 else float(c.get("monthly_price") or 0)
             installments = int(c.get("installments") or 0)
             cycle = (c.get("billing_cycle") or "monthly").lower()
             if price <= 0 or installments <= 0:

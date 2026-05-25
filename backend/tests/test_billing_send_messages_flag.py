@@ -57,6 +57,17 @@ class FakeColl:
         for d in self.docs:
             ok = True
             for k, v in (q or {}).items():
+                # 2026-02-18 — Suporta `$or: [...]` no top-level.
+                if k == "$or" and isinstance(v, list):
+                    if not any(
+                        all(
+                            (d.get(sk) > sv.get("$gt") if isinstance(sv, dict) and "$gt" in sv else d.get(sk) == sv)
+                            for sk, sv in subq.items()
+                        )
+                        for subq in v
+                    ):
+                        ok = False; break
+                    continue
                 dv = d.get(k)
                 if isinstance(v, dict):
                     if "$gt" in v and not (dv is not None and dv > v["$gt"]):

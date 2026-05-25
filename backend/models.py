@@ -185,6 +185,9 @@ class CompanyCreate(BaseModel):
     # campo `observation` de cada lancamento gerado para criar um historico
     # rastreavel das condicoes comerciais no momento da geracao.
     observation: Optional[str] = None
+    # 2026-02-18 — Valor de venda total (soma das licencas). Persistido
+    # para uso pelo scheduler ao gerar Lancamentos no Financeiro Adm.
+    total_sale_price: Optional[float] = None
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -209,6 +212,7 @@ class CompanyUpdate(BaseModel):
     representante: Optional[str] = None
     discount: Optional[float] = None  # 2026-02-18
     observation: Optional[str] = None  # 2026-02-18
+    total_sale_price: Optional[float] = None  # 2026-02-18
 
 class CompanyResponse(BaseModel):
     id: str
