@@ -427,6 +427,21 @@ async def _process_billing_reminders(db):
                             "multa_pct": default_lf_multa,
                             "juros_dia_pct": default_lf_juros,
                         }
+                    # 2026-02-18 — Propaga `discount` da empresa para a parcela.
+                    _company_discount = float(c.get("discount") or 0)
+                    if _company_discount > 0:
+                        txn["discount"] = _company_discount
+                    # 2026-02-18 — Snapshot do campo `observation` da empresa
+                    # no momento da geracao, para auditoria/historico.
+                    _company_obs = (c.get("observation") or "").strip()
+                    if _company_obs:
+                        txn["observations"] = [{
+                            "id": str(__import__('uuid').uuid4()),
+                            "text": _company_obs,
+                            "author_id": None,
+                            "author_name": "Sistema (cadastro da empresa)",
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        }]
                     await db.super_admin_transactions.insert_one(txn)
                     logger.info(
                         f"[scheduler] billing-reminder: created Lancamento "

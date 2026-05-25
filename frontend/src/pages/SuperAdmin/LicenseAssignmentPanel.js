@@ -88,6 +88,15 @@ export const LicenseAssignmentPanel = ({ value, onChange, companyId }) => {
 
   return (
     <div className="space-y-3" data-testid="license-assignment-panel">
+      {/* 2026-02-18 — Botao "Adicionar licenca" movido para LOGO ABAIXO do
+          titulo (mais intuitivo: clique adiciona uma nova linha vazia
+          imediatamente abaixo das ja existentes). */}
+      <button type="button" onClick={addLicense}
+        className="w-full px-4 py-2.5 text-sm rounded-lg border-2 border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold flex items-center justify-center gap-2 transition-colors"
+        data-testid="license-add-btn">
+        <Plus className="w-4 h-4" /> Adicionar licenca
+      </button>
+
       {assignments.length === 0 && (
         <div className="p-4 rounded-lg border-2 border-dashed border-slate-200 text-center text-sm text-slate-500">
           <Package className="w-6 h-6 mx-auto mb-2 opacity-50" />
@@ -142,12 +151,6 @@ export const LicenseAssignmentPanel = ({ value, onChange, companyId }) => {
           </div>
         );
       })}
-
-      <button type="button" onClick={addLicense}
-        className="w-full px-4 py-2 text-sm rounded-lg border-2 border-dashed border-slate-300 text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2"
-        data-testid="license-add-btn">
-        <Plus className="w-4 h-4" /> Adicionar licenca
-      </button>
 
       {/* Totals + usage counters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">

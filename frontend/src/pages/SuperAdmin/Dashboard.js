@@ -2367,6 +2367,12 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
     first_due_date: company?.first_due_date || '',
     // 2026-02-16 (L) — Representante: usado como {{nome}} nas cobrancas.
     representante: company?.representante || '',
+    // 2026-02-18 — Desconto fixo (R$) propagado pra cada lancamento gerado
+    // a partir das licencas da empresa.
+    discount: company?.discount ?? '',
+    // 2026-02-18 — Observacao livre da empresa. Snapshotted como entrada
+    // no historico de observacoes de cada lancamento gerado.
+    observation: company?.observation || '',
   });
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
@@ -2425,6 +2431,9 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
         grace_days: form.grace_days === '' ? null : Number(form.grace_days),
         first_due_date: form.first_due_date || null,
         representante: form.representante || null,
+        // 2026-02-18 — Desconto + observacao
+        discount: form.discount === '' || form.discount === null ? 0 : Number(form.discount),
+        observation: form.observation || null,
       };
       if (isEditing) {
         await superAdminAPI.updateCompany(company.id, {
@@ -2760,6 +2769,45 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               <em> Conexoes → Notificacoes de Cobranca</em>. Quando o representante for vazio,
               eh usado o nome da empresa.
             </p>
+
+            {/* 2026-02-18 — Desconto + Observacao da empresa.
+                Ambos sao propagados para cada lancamento gerado a partir
+                das licencas. O desconto subtrai do valor devido na hora
+                da baixa; a observacao vira a primeira entrada do
+                historico do lancamento. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 pt-4 border-t border-slate-200">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Desconto fixo (R$) <span className="text-slate-400">(opcional)</span>
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={form.discount}
+                  onChange={e => setForm({...form, discount: e.target.value})}
+                  placeholder="0.00"
+                  className="input-field text-sm w-full"
+                  data-testid="company-discount"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Subtrai automaticamente do valor de cada lancamento desta empresa.
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Observacoes <span className="text-slate-400">(sincroniza com cada lancamento)</span>
+                </label>
+                <textarea
+                  value={form.observation}
+                  onChange={e => setForm({...form, observation: e.target.value})}
+                  rows={2}
+                  placeholder="Ex: Cliente preferencial — pode estender 5d em caso de atraso"
+                  className="input-field text-sm w-full"
+                  data-testid="company-observation"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Status (editing only) */}

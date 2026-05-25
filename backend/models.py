@@ -177,6 +177,14 @@ class CompanyCreate(BaseModel):
     # 2026-02-16 (L) — Nome do representante usado como variavel {{nome}} nas
     # mensagens de cobranca. Quando vazio, cai no `name` da empresa.
     representante: Optional[str] = None
+    # 2026-02-18 — Desconto fixo (R$) aplicado em cada lancamento gerado a
+    # partir das licencas da empresa. Propagado para `super_admin_transactions.discount`
+    # em todas as parcelas recorrentes desta empresa.
+    discount: Optional[float] = 0.0
+    # 2026-02-18 — Observacoes livres sobre a empresa. Snapshotted no
+    # campo `observation` de cada lancamento gerado para criar um historico
+    # rastreavel das condicoes comerciais no momento da geracao.
+    observation: Optional[str] = None
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -199,6 +207,8 @@ class CompanyUpdate(BaseModel):
     database_type: Optional[str] = None
     first_due_date: Optional[str] = None
     representante: Optional[str] = None
+    discount: Optional[float] = None  # 2026-02-18
+    observation: Optional[str] = None  # 2026-02-18
 
 class CompanyResponse(BaseModel):
     id: str

@@ -375,6 +375,10 @@ class AdmTxnIn(BaseModel):
     notes: Optional[str] = None
     recurrence: Optional[_RecurrenceIn] = None
     late_fee: Optional[_LateFeeIn] = None
+    # 2026-02-18 — Desconto aplicado ao lancamento. Subtrai do `amount`
+    # ao calcular `valor_devido`. Quando vem da licenca da empresa, eh
+    # propagado em todos os lancamentos recorrentes daquela licenca.
+    discount: Optional[float] = 0.0
     # Tipo do lancamento — 2026-02-15. 'licenca' associa o lancamento a uma
     # Empresa cadastrada (ou cliente externo); 'diversos' eh o lancamento
     # manual generico (modelo antigo). Existentes ficam sem kind = tratados
@@ -402,6 +406,7 @@ class AdmTxnUpdate(BaseModel):
     notes: Optional[str] = None
     late_fee: Optional[_LateFeeIn] = None
     valor_recebido: Optional[float] = None  # 2026-02-16 (O)
+    discount: Optional[float] = None  # 2026-02-18
     kind: Optional[str] = None
     company_id: Optional[str] = None
     external_client_name: Optional[str] = None
@@ -447,11 +452,15 @@ async def adm_list_transactions(
         t["gross_amount"] = round(gross, 2)
         t["net_amount"] = round(gross, 2)
         lf = t.get("late_fee") or {}
-        if lf.get("enabled") and t.get("status") == "pendente":
+        if t.get("status") == "pendente":
+            # 2026-02-18 — Sempre computamos `late_fee_computed` quando
+            # pendente (mesmo sem late_fee.enabled), para devolver
+            # `valor_devido` ja descontado e habilitar UI consistente.
             t["late_fee_computed"] = compute_late_fee_amount(
                 gross, t.get("due_date"),
-                float(lf.get("multa_pct") or 0),
-                float(lf.get("juros_dia_pct") or 0),
+                float(lf.get("multa_pct") or 0) if lf.get("enabled") else 0.0,
+                float(lf.get("juros_dia_pct") or 0) if lf.get("enabled") else 0.0,
+                discount=float(t.get("discount") or 0),
             )
     return rows
 
@@ -510,6 +519,10 @@ async def adm_create_transaction(
                 "multa_pct": float(data.late_fee.multa_pct or 0),
                 "juros_dia_pct": float(data.late_fee.juros_dia_pct or 0),
             }
+        # 2026-02-18 — Persiste discount em todas as parcelas (recorrentes
+        # herdam o desconto pai).
+        if data.discount is not None:
+            txn["discount"] = float(data.discount or 0)
         # Lancamento Licenca metadata — 2026-02-15. Stored on EVERY recurrence
         # row so each invoice in a yearly cycle carries the same Empresa link
         # and license snapshot.
@@ -602,6 +615,36 @@ async def adm_mark_unpaid(
     r = await db.super_admin_transactions.update_one(
         {"id": txn_id},
         {"$set": {"status": "pendente"}, "$unset": {"paid_at": ""}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(404, "Lancamento nao encontrado")
+    return await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
+
+
+@router.post("/finance/transactions/{txn_id}/observation")
+async def adm_add_observation(
+    txn_id: str,
+    payload: dict,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    sa: dict = Depends(require_super_admin),
+):
+    """2026-02-18 — Adiciona uma entrada ao historico de observacoes do
+    lancamento. Cada entrada eh imutavel e carimba data/autor.
+    Body: {"text": "..."}
+    """
+    text = (payload or {}).get("text", "").strip() if isinstance(payload, dict) else ""
+    if not text:
+        raise HTTPException(400, "text obrigatorio")
+    entry = {
+        "id": str(uuid.uuid4()),
+        "text": text,
+        "author_id": sa.get("id") or sa.get("sub"),
+        "author_name": sa.get("name") or sa.get("email") or "Super Admin",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.super_admin_transactions.update_one(
+        {"id": txn_id},
+        {"$push": {"observations": entry}},
     )
     if r.matched_count == 0:
         raise HTTPException(404, "Lancamento nao encontrado")

@@ -4,7 +4,7 @@ import api from '../../services/api';
 import {
   Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
   CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent, Building, Pencil,
-  Send, History, ChevronDown, ChevronUp, Calendar as CalendarIcon,
+  Send, History, ChevronDown, ChevronUp, Calendar as CalendarIcon, Check,
 } from 'lucide-react';
 
 // Returns YYYY-MM for today (used as default month filter). 2026-02-16 (M).
@@ -375,7 +375,7 @@ export const AdmLancamentosPanel = () => {
                     <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
                       {isOut ? '−' : '+'} {fmt(t.amount)}
                       {overdue && (
-                        <div className="text-[10px] text-slate-500 font-normal">Devido: {fmt(t.late_fee_computed.total)}</div>
+                        <div className="text-[10px] text-slate-500 font-normal">Devido: {fmt(t.late_fee_computed.valor_devido)}</div>
                       )}
                     </td>
                     <td className="px-3 py-2 text-center">
@@ -431,7 +431,7 @@ export const AdmLancamentosPanel = () => {
                   <div className={`text-sm font-bold mt-0.5 ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
                     {isOut ? '−' : '+'} {fmt(t.amount)}
                     {overdue && (
-                      <span className="ml-2 text-[10px] font-normal text-slate-500">→ {fmt(t.late_fee_computed.total)}</span>
+                      <span className="ml-2 text-[10px] font-normal text-slate-500">→ {fmt(t.late_fee_computed.valor_devido)}</span>
                     )}
                   </div>
                 </div>
@@ -466,7 +466,7 @@ export const AdmLancamentosPanel = () => {
                   </div>
                   {overdue && (
                     <div className="flex items-center gap-1 text-rose-700 text-[11px] font-medium">
-                      <AlertTriangle className="w-3 h-3" /> Atrasado {t.late_fee_computed.days_overdue}d · Devido {fmt(t.late_fee_computed.total)}
+                      <AlertTriangle className="w-3 h-3" /> Atrasado {t.late_fee_computed.days_overdue}d · Devido {fmt(t.late_fee_computed.valor_devido)}
                     </div>
                   )}
                   {/* Mobile actions row — paga/edit/delete/lembrete */}
@@ -649,6 +649,10 @@ const MetricCard = ({ label, value, icon: Icon, color }) => {
 
 const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
   const isEdit = !!initial?.id;
+  // 2026-02-18 — Quando o lancamento ja foi pago, abrimos em modo READ-ONLY
+  // com botao Estornar baixa. Edicao livre so quando pendente.
+  const isPaid = (initial?.status || '').toLowerCase() === 'pago';
+  const isReadOnly = isEdit && isPaid;
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
     direction: initial?.direction || 'entrada',
@@ -657,9 +661,12 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
     payment_method: initial?.payment_method || 'pix',
     category: initial?.category || 'servico',
     date: initial?.date || today,
-    due_date: initial?.due_date || today,
+    // 2026-02-18 — Removido campo "Vencimento (se pendente)" da UI.
+    // due_date passa a ser igual a `date` automaticamente. A multiplicacao
+    // (recorrencia) gera os vencimentos futuros a partir desse mesmo valor.
     status: initial?.status || 'pendente',
     notes: initial?.notes || '',
+    discount: initial?.discount ?? 0,  // 2026-02-18
     kind: initial?.kind || 'licenca',
     client_kind: initial?.external_client_name ? 'external' : 'native',
     company_id: initial?.company_id || '',
@@ -712,6 +719,10 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
       const payload = {
         ...form,
         amount: parseFloat(form.amount),
+        // 2026-02-18 — due_date espelha `date` (campo unico de vencimento).
+        due_date: form.date,
+        // 2026-02-18 — Desconto fixo (R$). Default 0.
+        discount: parseFloat(form.discount || 0) || 0,
       };
       // New fields (2026-02-15). Only send the relevant ones — backend
       // accepts them via Optional[...] so omitting is fine.
@@ -779,22 +790,35 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
         data-testid="adm-txn-form-modal"
       >
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-slate-900">{isEdit ? 'Editar Lancamento' : 'Novo Lancamento (Adm)'}</h2>
+          <h2 className="text-xl font-bold text-slate-900">
+            {isReadOnly ? 'Visualizar Lancamento' : (isEdit ? 'Editar Lancamento' : 'Novo Lancamento (Adm)')}
+            {isReadOnly && (
+              <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 align-middle">
+                <Check className="w-3 h-3" /> Pago
+              </span>
+            )}
+          </h2>
           <button type="button" onClick={onClose} className="p-1 hover:bg-slate-100 rounded">
             <X className="w-5 h-5" />
           </button>
         </div>
 
+        {/* 2026-02-18 — Resumo da baixa quando o lancamento ja foi pago */}
+        {isReadOnly && (
+          <PaidSummary txn={initial} onReversed={() => { onSaved(); onClose(); }} />
+        )}
+
+        <fieldset disabled={isReadOnly} className={isReadOnly ? 'opacity-90' : ''}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Tipo do lancamento — Licenca (vincula a empresa cadastrada/externa) OU Diversos. */}
           <Field label="Tipo">
-            <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} className="input" data-testid="adm-form-kind">
+            <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} className="input" data-testid="adm-form-kind" disabled={isReadOnly}>
               <option value="licenca">Licenca</option>
               <option value="diversos">Diversos</option>
             </select>
           </Field>
           <Field label="Direcao">
-            <select value={form.direction} onChange={(e) => setForm({ ...form, direction: e.target.value })} className="input" data-testid="adm-form-direction">
+            <select value={form.direction} onChange={(e) => setForm({ ...form, direction: e.target.value })} className="input" data-testid="adm-form-direction" disabled={isReadOnly}>
               <option value="entrada">Entrada (receber)</option>
               <option value="saida">Saida (pagar)</option>
             </select>
@@ -875,19 +899,20 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
             <input type="text" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="input" placeholder="Mensalidade plataforma — Cliente X" data-testid="adm-form-description" />
           </Field>
           <Field label="Valor (R$)">
-            <input type="number" step="0.01" min="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="input" data-testid="adm-form-amount" />
+            <input type="number" step="0.01" min="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="input" data-testid="adm-form-amount" disabled={isReadOnly} />
           </Field>
           <Field label="Categoria">
-            <input type="text" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input" data-testid="adm-form-category" />
+            <input type="text" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input" data-testid="adm-form-category" disabled={isReadOnly} />
           </Field>
-          <Field label="Data">
-            <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="input" data-testid="adm-form-date" />
+          <Field label="Data de vencimento">
+            <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="input" data-testid="adm-form-date" disabled={isReadOnly} />
           </Field>
-          <Field label="Vencimento (se pendente)" className="col-span-2">
-            <input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} className="input" data-testid="adm-form-due-date" />
+          {/* 2026-02-18 — Desconto fixo (R$). Subtrai do valor devido. */}
+          <Field label="Desconto (R$)">
+            <input type="number" step="0.01" min="0" value={form.discount} onChange={(e) => setForm({ ...form, discount: e.target.value })} className="input" placeholder="0.00" data-testid="adm-form-discount" disabled={isReadOnly} />
           </Field>
           <Field label="Observacoes" className="col-span-2">
-            <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} className="input" data-testid="adm-form-notes" />
+            <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} className="input" data-testid="adm-form-notes" disabled={isReadOnly} />
           </Field>
         </div>
 
@@ -934,14 +959,17 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
             </div>
           )}
         </div>
+        </fieldset>
 
         <div className="flex gap-2 mt-5">
           <button type="button" onClick={onClose} className="flex-1 px-4 py-2 border border-slate-300 rounded text-sm font-semibold hover:bg-slate-50">
-            Cancelar
+            {isReadOnly ? 'Fechar' : 'Cancelar'}
           </button>
-          <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-primary text-white rounded text-sm font-semibold disabled:opacity-50" data-testid="adm-form-submit">
-            {saving ? 'Salvando...' : 'Criar Lancamento'}
-          </button>
+          {!isReadOnly && (
+            <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-primary text-white rounded text-sm font-semibold disabled:opacity-50" data-testid="adm-form-submit">
+              {saving ? 'Salvando...' : (isEdit ? 'Salvar alteracoes' : 'Criar Lancamento')}
+            </button>
+          )}
         </div>
       </form>
     </div>
@@ -955,16 +983,169 @@ const Field = ({ label, children, className = '' }) => (
   </div>
 );
 
+// 2026-02-18 — Resumo da baixa para lancamentos com status=pago, exibido
+// no topo do modal "Visualizar Lancamento". Inclui:
+//   • Linha-a-linha: valor original, desconto, multa+juros, total devido,
+//     valor efetivamente recebido (acusa diferenca se houve).
+//   • Metodo de pagamento + data da baixa (em DD-MM-AAAA).
+//   • Botao "Estornar baixa" que chama POST /finance/transactions/{id}/unpay.
+//   • Historico de observacoes (campo `observations`) com timestamp+autor.
+//   • Form para adicionar nova observacao (POST .../observation).
+const PaidSummary = ({ txn, onReversed }) => {
+  const [reversing, setReversing] = useState(false);
+  const [obsList, setObsList] = useState(txn?.observations || []);
+  const [newObs, setNewObs] = useState('');
+  const [savingObs, setSavingObs] = useState(false);
+  const handleReverse = async () => {
+    if (!window.confirm(`Confirma estornar a baixa de "${txn?.description || ''}"? O lancamento voltara para Pendente.`)) {
+      return;
+    }
+    setReversing(true);
+    try {
+      await api.post(`/super-admin/finance/transactions/${txn.id}/unpay`);
+      toast.success('Baixa estornada');
+      onReversed();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao estornar');
+      setReversing(false);
+    }
+  };
+  const addObs = async () => {
+    const text = newObs.trim();
+    if (!text) return;
+    setSavingObs(true);
+    try {
+      const r = await api.post(`/super-admin/finance/transactions/${txn.id}/observation`, { text });
+      setObsList(r.data?.observations || obsList);
+      setNewObs('');
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao gravar observacao');
+    } finally {
+      setSavingObs(false);
+    }
+  };
+  const orig = Number(txn?.amount || 0);
+  const desc = Number(txn?.discount || 0);
+  const lf = txn?.late_fee_computed || {};
+  const lateTotal = Number(lf.total || 0);
+  const recebido = Number(txn?.valor_recebido ?? orig);
+  const valorDevido = Number(lf.valor_devido ?? (orig - desc + lateTotal));
+  const diff = recebido - valorDevido;
+  const paidDate = txn?.paid_at ? new Date(txn.paid_at).toLocaleDateString('pt-BR') : '—';
+  const methodLabel = labelForMethod(txn?.payment_method);
+  return (
+    <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50/40 p-4 mb-4" data-testid="paid-summary">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+          <Check className="w-4 h-4" />
+          Baixa registrada em {paidDate} · {methodLabel}
+        </div>
+        <button
+          type="button"
+          onClick={handleReverse}
+          disabled={reversing}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-rose-300 text-rose-700 bg-white hover:bg-rose-50 disabled:opacity-50"
+          data-testid="paid-summary-reverse-btn"
+        >
+          {reversing ? 'Estornando...' : 'Estornar baixa'}
+        </button>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <SummaryCell label="Valor original" value={fmt(orig)} />
+        {desc > 0 && <SummaryCell label="Desconto" value={`− ${fmt(desc)}`} tone="emerald" />}
+        {lateTotal > 0 && (
+          <SummaryCell
+            label={`Multa+Juros${lf.days_overdue ? ` (${lf.days_overdue}d)` : ''}`}
+            value={`+ ${fmt(lateTotal)}`}
+            tone="amber"
+          />
+        )}
+        <SummaryCell label="Valor devido" value={fmt(valorDevido)} bold />
+        <SummaryCell label="Valor recebido" value={fmt(recebido)} bold tone="emerald" />
+        {Math.abs(diff) >= 0.01 && (
+          <SummaryCell
+            label={diff > 0 ? 'Recebido a mais' : 'Recebido a menor'}
+            value={`${diff > 0 ? '+' : ''}${fmt(diff)}`}
+            tone={diff > 0 ? 'emerald' : 'rose'}
+          />
+        )}
+      </div>
+
+      {/* Histórico de observações */}
+      <div className="mt-4 border-t border-emerald-200 pt-3">
+        <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-bold mb-2">Historico de observacoes</div>
+        {obsList.length === 0 ? (
+          <p className="text-xs text-slate-500 italic mb-2">Sem observacoes registradas.</p>
+        ) : (
+          <ul className="space-y-1.5 mb-2 max-h-40 overflow-y-auto">
+            {obsList.map((o, i) => (
+              <li key={o.id || i} className="text-xs bg-white rounded border border-emerald-100 p-2">
+                <div className="text-slate-700 whitespace-pre-wrap">{o.text}</div>
+                <div className="text-[10px] text-slate-400 mt-1">
+                  {o.author_name || 'Sistema'} · {o.created_at ? new Date(o.created_at).toLocaleString('pt-BR') : ''}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={newObs}
+            onChange={(e) => setNewObs(e.target.value)}
+            placeholder="Adicionar observacao..."
+            className="input flex-1 text-xs"
+            data-testid="paid-summary-new-obs"
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addObs(); } }}
+          />
+          <button
+            type="button"
+            onClick={addObs}
+            disabled={savingObs || !newObs.trim()}
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
+            data-testid="paid-summary-add-obs"
+          >
+            {savingObs ? '...' : 'Adicionar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const SummaryCell = ({ label, value, tone = 'slate', bold = false }) => {
+  const cls = {
+    slate: 'text-slate-700',
+    emerald: 'text-emerald-700',
+    amber: 'text-amber-700',
+    rose: 'text-rose-700',
+  }[tone] || 'text-slate-700';
+  return (
+    <div className="bg-white rounded-lg border border-emerald-100 p-2">
+      <p className="text-[9px] uppercase tracking-wider text-slate-500">{label}</p>
+      <p className={`font-mono ${bold ? 'font-bold' : 'font-medium'} ${cls}`}>{value}</p>
+    </div>
+  );
+};
+
 export default AdmLancamentosPanel;
 
 // 2026-02-16 (O) — PayTxnModal: confirma baixa com possibilidade de editar
-// valor recebido (default = total devido com multa/juros, fallback = amount)
+// valor recebido (default = valor devido com multa/juros e desconto)
 // e trocar metodo de pagamento. UX: 3 botoes coloridos para Pix/Boleto/Dinheiro
 // + campo valor + Confirmar.
+// 2026-02-18 — Corrigido bug: totalDevido usava `late_fee_computed.total`
+// (somente multa+juros) em vez de `late_fee_computed.valor_devido`
+// (base + multa + juros - desconto). Resultado: modal mostrava "+R$ -199,52"
+// porque calculava `totalDevido - amount` com numeros incoerentes.
 const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
-  const totalDevido = txn?.late_fee_computed?.total ?? txn?.amount ?? 0;
+  const lfc = txn?.late_fee_computed || {};
+  const baseAmount = Number(txn?.amount || 0);
+  const discount = Number(lfc.discount || txn?.discount || 0);
+  const lateTotal = Number(lfc.total || 0);  // multa + juros
+  const valorDevido = Number(lfc.valor_devido ?? (baseAmount - discount + lateTotal));
   const [method, setMethod] = useState(initialMethod || 'pix');
-  const [valor, setValor] = useState(String(totalDevido));
+  const [valor, setValor] = useState(String(valorDevido.toFixed(2)));
   const [confirming, setConfirming] = useState(false);
 
   const handleConfirm = async () => {
@@ -991,7 +1172,7 @@ const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
             <h3 className="text-base font-bold text-slate-900">Dar baixa</h3>
             <p className="text-xs text-slate-500 mt-0.5 truncate">{txn?.description || '—'}</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100">
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100" data-testid="pay-modal-close">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -999,19 +1180,25 @@ const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
           <div className="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
             <div className="flex justify-between">
               <span className="text-slate-500">Valor original</span>
-              <span className="font-mono font-medium">{fmt(txn?.amount)}</span>
+              <span className="font-mono font-medium">{fmt(baseAmount)}</span>
             </div>
-            {txn?.late_fee_computed?.days_overdue > 0 && (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Multa + Juros ({txn.late_fee_computed.days_overdue}d)</span>
-                  <span className="font-mono font-medium text-amber-700">+ {fmt(totalDevido - (txn?.amount || 0))}</span>
-                </div>
-                <div className="flex justify-between pt-1 border-t border-slate-200">
-                  <span className="text-slate-600 font-semibold">Total devido</span>
-                  <span className="font-mono font-bold text-rose-700">{fmt(totalDevido)}</span>
-                </div>
-              </>
+            {discount > 0 && (
+              <div className="flex justify-between">
+                <span className="text-slate-500">Desconto</span>
+                <span className="font-mono font-medium text-emerald-700">− {fmt(discount)}</span>
+              </div>
+            )}
+            {lfc?.days_overdue > 0 && lateTotal > 0 && (
+              <div className="flex justify-between">
+                <span className="text-slate-500">Multa + Juros ({lfc.days_overdue}d)</span>
+                <span className="font-mono font-medium text-amber-700">+ {fmt(lateTotal)}</span>
+              </div>
+            )}
+            {(discount > 0 || (lfc?.days_overdue > 0 && lateTotal > 0)) && (
+              <div className="flex justify-between pt-1 border-t border-slate-200">
+                <span className="text-slate-600 font-semibold">Total devido</span>
+                <span className="font-mono font-bold text-rose-700">{fmt(valorDevido)}</span>
+              </div>
             )}
           </div>
 

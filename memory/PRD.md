@@ -10,6 +10,40 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (FIN-UX) — Pacote completo: bug juros + desconto + observações + UX licenças ✅
+
+**🔴 Bug crítico — Juros aparecia como negativo:**
+- `AdmLancamentosPanel.js:965` usava `late_fee_computed.total` (só multa+juros) em vez de `late_fee_computed.valor_devido` (base + multa + juros - desconto).
+- Sintoma: "Total devido R$ 10.48" + "Multa+Juros +R$ -199.52" para uma fatura de R$ 210.
+- Corrigido em 4 lugares: tabela desktop (linha 378), card mobile (linha 434), badge atrasado (linha 469), e modal "Dar baixa" (PayTxnModal).
+- ✅ Confirmado: multa/juros já era calculada sobre a parcela individual (`base_amount` em `compute_late_fee_amount`), não sobre o total recorrente.
+
+**Backend (`finance_helpers.py`, `super_admin_finance_routes.py`, `models.py`, `scheduler.py`):**
+- `compute_late_fee_amount` agora aceita `discount` e retorna `valor_devido = base - discount + multa + juros`.
+- Endpoint `POST /super-admin/finance/transactions/{id}/observation` cria entradas imutáveis em `transactions.observations[]` (id, text, author_id, author_name, created_at).
+- Modelos `CompanyCreate`/`CompanyUpdate` ganharam `discount: Optional[float]` e `observation: Optional[str]`.
+- Scheduler (`_process_billing_reminders`) propaga `company.discount` e `company.observation` em cada lançamento gerado (a observação vira a 1ª entrada do histórico).
+
+**Frontend — modal Editar Empresa (`SuperAdmin/Dashboard.js`):**
+- Novos campos "Desconto fixo (R$)" e "Observações" logo abaixo do bloco "Data 1º venc. / Representante".
+
+**Frontend — modal Criar/Editar Lançamento (`AdmLancamentosPanel.js`):**
+- Removido campo "Vencimento (se pendente)" — agora `due_date` é igual a `date` (mais simples).
+- Adicionado campo "Desconto (R$)".
+- Quando `status=pago`, o modal abre em modo READ-ONLY com badge verde "Pago" e novo bloco `PaidSummary`:
+  - Linha-a-linha: valor original, desconto, multa+juros (com dias), valor devido, valor recebido, diferença (a mais/a menor)
+  - Data da baixa + método de pagamento
+  - Botão "Estornar baixa" (chama o endpoint `/unpay` já existente)
+  - Histórico de observações com timestamp + autor
+  - Campo "Adicionar observação" para criar nova entrada
+
+**Frontend — `LicenseAssignmentPanel.js`:**
+- Botão "+ Adicionar licença" reposicionado para LOGO ABAIXO do título "LICENCAS E COBRANCA" (era no rodapé). Visual mais intuitivo: clique → nova linha cresce abaixo do botão.
+
+**Para verificar em produção:** Save to GitHub + deploy do backend Emergent (não precisa redeployar microserviço).
+
+
+
 ### 2026-02-18 (FIN+FMT) — Bug 404 no reenvio + formato de data BR ✅
 
 **Bug 1 — "Falha ao reenviar: http 404 - Cannot POST /instances/.../send-text"**

@@ -62,6 +62,7 @@ def compute_late_fee_amount(
     multa_pct: float,
     juros_dia_pct: float,
     today: Optional[date] = None,
+    discount: float = 0.0,
 ) -> dict:
     """Returns a dict with:
         days_overdue: int
@@ -69,12 +70,23 @@ def compute_late_fee_amount(
         juros: float (simple daily, NOT compounded — keeps math predictable
                        for the operator dashboard)
         total: float (multa + juros)
-        valor_devido: float (base_amount + total)
+        discount: float (echo of input)
+        valor_devido: float (base_amount - discount + total)
 
     All values are 0 when the bill isn't overdue or the toggle is off.
+    `discount` is always applied (whether overdue or not) so the operator
+    UI shows the correct "to charge" number from day zero.
     """
-    blank = {"days_overdue": 0, "multa": 0.0, "juros": 0.0, "total": 0.0,
-            "valor_devido": round(float(base_amount or 0.0), 2)}
+    discount = max(0.0, float(discount or 0.0))
+    base_after_discount = max(0.0, float(base_amount or 0.0) - discount)
+    blank = {
+        "days_overdue": 0,
+        "multa": 0.0,
+        "juros": 0.0,
+        "total": 0.0,
+        "discount": round(discount, 2),
+        "valor_devido": round(base_after_discount, 2),
+    }
     due = parse_iso_date(due_date_iso) if due_date_iso else None
     if not due:
         return blank
@@ -82,6 +94,8 @@ def compute_late_fee_amount(
     if today <= due:
         return blank
     days_overdue = (today - due).days
+    # 2026-02-18 — multa/juros sao calculados sobre o `base_amount` da
+    # parcela individual (NAO sobre o total recorrente).
     multa = float(base_amount) * (float(multa_pct or 0) / 100.0)
     juros = float(base_amount) * (float(juros_dia_pct or 0) / 100.0) * days_overdue
     total = max(0.0, multa) + max(0.0, juros)
@@ -90,5 +104,6 @@ def compute_late_fee_amount(
         "multa": round(multa, 2),
         "juros": round(juros, 2),
         "total": round(total, 2),
-        "valor_devido": round(float(base_amount or 0.0) + total, 2),
+        "discount": round(discount, 2),
+        "valor_devido": round(base_after_discount + total, 2),
     }

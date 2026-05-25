@@ -663,6 +663,12 @@ async def create_company(
         extra_billing_set["first_due_date"] = data.first_due_date
     if data.representante is not None:
         extra_billing_set["representante"] = (data.representante or "").strip()[:120]
+    # 2026-02-18 — Desconto + observacao salvos no doc da empresa para
+    # propagacao automatica nos lancamentos gerados pelo scheduler.
+    if data.discount is not None:
+        extra_billing_set["discount"] = float(data.discount or 0)
+    if data.observation is not None:
+        extra_billing_set["observation"] = (data.observation or "").strip()
     if extra_billing_set:
         await db.companies.update_one({"id": company_id}, {"$set": extra_billing_set})
         for k, v in extra_billing_set.items():
