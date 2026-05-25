@@ -337,6 +337,18 @@ const BillingReminderPanel = () => {
           <code className="ml-1 px-1.5 py-0.5 bg-slate-100 rounded text-[11px] font-mono">{'{{valor}}'}</code>
           <code className="ml-1 px-1.5 py-0.5 bg-slate-100 rounded text-[11px] font-mono">{'{{vencimento}}'}</code>
           <code className="ml-1 px-1.5 py-0.5 bg-slate-100 rounded text-[11px] font-mono">{'{{parcela}}'}</code>
+          {/* 2026-02-18 — Variaveis novas */}
+          <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{licencas_conexao}}'}</code>
+          <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{licencas_usuario}}'}</code>
+          <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_venda_total}}'}</code>
+          <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_desconto}}'}</code>
+          <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_devido}}'}</code>
+        </p>
+        <p className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md p-2 mb-3 mt-1 leading-relaxed">
+          <strong>Aviso importante:</strong> mensagens automaticas SO sao enviadas pelo
+          tick periodico do scheduler quando o prazo configurado em &quot;Antes do vencimento&quot;
+          bater. Editar esta mensagem ou salvar uma empresa <strong>NAO</strong> dispara
+          envio (corrigido em 2026-02-18).
         </p>
         <textarea
           rows={5}

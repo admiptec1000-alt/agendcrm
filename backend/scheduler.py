@@ -311,7 +311,14 @@ def _render_reminder(template: str, ctx: dict) -> str:
     return out
 
 
-async def _process_billing_reminders(db):
+async def _process_billing_reminders(db, *, send_messages: bool = True):
+    """2026-02-18 — Nao deve enviar mensagens em edicoes/criacoes de
+    empresa. Quando `send_messages=False`, somente cria/atualiza linhas
+    pendentes em super_admin_transactions (lado materializacao). O envio
+    real eh sempre feito pelo tick periodico do scheduler. Isso evita o
+    bug de operador ver o cliente recebendo cobranca toda vez que ele
+    salva uma edicao de empresa ou ajusta a mensagem padrao.
+    """
     # Global config (2026-02-16 K + L + N) — operator can override via SA UI.
     settings = await db.system_settings.find_one(
         {"key": "billing_reminder"}, {"_id": 0}
@@ -360,6 +367,10 @@ async def _process_billing_reminders(db):
             "_id": 0, "id": 1, "name": 1, "phone": 1, "representante": 1,
             "monthly_price": 1, "billing_cycle": 1, "installments": 1,
             "first_due_date": 1,
+            # 2026-02-18 — Necessarios para as novas variaveis do template
+            # de cobranca.
+            "max_connections": 1, "max_users": 1,
+            "total_sale_price": 1, "discount": 1, "observation": 1,
         },
     )
     sa_conn = await _get_sa_system_connection(db)
@@ -450,6 +461,11 @@ async def _process_billing_reminders(db):
                 # Skip reminders for already-paid parcelas.
                 if (txn.get("status") or "").lower() == "pago":
                     continue
+                # 2026-02-18 — Edicoes/criacoes de empresa chamam este loop
+                # apenas pra materializar Lancamentos pendentes. NUNCA
+                # disparam mensagens — isso eh exclusivo do tick periodico.
+                if not send_messages:
+                    continue
                 # Decide which offset fires today for this parcela.
                 # SMART FALLBACK (2026-02-17 — bug fix): instead of firing
                 # every eligible offset on the same tick (which spammed the
@@ -486,12 +502,25 @@ async def _process_billing_reminders(db):
                 # Fire this single reminder.
                 template = global_default_msg
                 nome = (c.get("representante") or c.get("name") or "")
+                # 2026-02-18 — Variaveis adicionais para o template:
+                #   {{licencas_conexao}}  → total de conexoes liberadas
+                #   {{licencas_usuario}}  → total de usuarios liberados
+                #   {{valor_venda_total}} → soma de venda das licencas
+                #   {{valor_desconto}}    → desconto fixo da empresa
+                #   {{valor_devido}}      → valor da parcela menos desconto
+                _disc = float(c.get("discount") or 0)
+                _valor_devido = max(0.0, float(price) - _disc)
                 ctx = {
                     "nome": nome,
                     "empresa": c.get("name") or "",
                     "valor": f"{price:.2f}".replace(".", ","),
                     "vencimento": due.strftime("%d/%m/%Y"),
                     "parcela": f"{i + 1}/{installments}",
+                    "licencas_conexao": str(c.get("max_connections") or 0),
+                    "licencas_usuario": str(c.get("max_users") or 0),
+                    "valor_venda_total": f"{float(c.get('total_sale_price') or 0):.2f}".replace(".", ","),
+                    "valor_desconto": f"{_disc:.2f}".replace(".", ","),
+                    "valor_devido": f"{_valor_devido:.2f}".replace(".", ","),
                 }
                 text = _render_reminder(template, ctx)
                 phone = c.get("phone") or ""

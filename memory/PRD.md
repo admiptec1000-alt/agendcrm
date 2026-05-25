@@ -10,6 +10,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (BILL-NO-SEND) — Edicao/criacao de empresa nao envia mais mensagens ✅
+
+**Problemas reportados:**
+1. Editar mensagem em "Notificacoes de Cobranca" → cliente recebia WhatsApp na hora do salvar
+2. Editar empresa → mesmo bug + as vezes mandava 2 mensagens em sequencia
+
+**Causa raiz** (`/app/backend/routes/super_admin_routes.py`):
+- `create_company` (linha 681) e `update_company` (linha 802) chamavam `_process_billing_reminders(db)` que executava as DUAS responsabilidades juntas: (a) materializar parcelas pendentes + (b) **enviar mensagens** quando o offset batia. Bastava uma edicao recair no offset para disparar envio instantaneo.
+
+**Solucao** (`/app/backend/scheduler.py` + `super_admin_routes.py`):
+- Adicionado parametro `send_messages: bool = True` em `_process_billing_reminders`.
+- `create_company` e `update_company` agora chamam com `send_messages=False` — somente materializam parcelas, nunca enviam.
+- O envio real fica exclusivo do tick periodico do scheduler (rodando a cada N minutos).
+- Resultado: editar/criar empresa NUNCA dispara WhatsApp; mensagens so saem quando o scheduler bate o offset configurado.
+
+**Novas variaveis para o template** (`scheduler.py` linha ~496 + `BillingReminderPanel.js`):
+- `{{licencas_conexao}}` → `company.max_connections`
+- `{{licencas_usuario}}` → `company.max_users`
+- `{{valor_venda_total}}` → `company.total_sale_price` (formato `1.234,56`)
+- `{{valor_desconto}}` → `company.discount` (formato BR)
+- `{{valor_devido}}` → `price - discount` da parcela (ja descontado)
+- Painel UI mostra todas em badges roxas + aviso verde explicando o novo comportamento (sem auto-envio na edicao).
+
+**Testes** (`/app/backend/tests/test_billing_send_messages_flag.py`): 2/2 passando.
+- `test_send_messages_false_does_not_call_send` — confirma que edicao NAO envia
+- `test_send_messages_true_sends_when_offset_matches` — confirma que tick periodico envia E renderiza as novas variaveis
+
+**Para verificar em producao:** Save to GitHub + deploy do backend Emergent.
+
+
+
 ### 2026-02-18 (FIN-UX) — Pacote completo: bug juros + desconto + observações + UX licenças ✅
 
 **🔴 Bug crítico — Juros aparecia como negativo:**

@@ -677,9 +677,13 @@ async def create_company(
     # 2026-02-16 (N) — Se a empresa esta cadastrada com first_due_date dentro
     # da janela de geracao (lancamento_gen_days), ja lanca o proximo vencimento
     # no financeiro imediatamente em vez de esperar o proximo tick do scheduler.
+    # 2026-02-18 — `send_messages=False`: criacao/edicao de empresa NUNCA
+    # dispara envio de mensagens. O envio fica a cargo exclusivo do tick
+    # periodico do scheduler. Isso evita o bug em que o operador via o
+    # cliente receber WhatsApp todo vez que salvava o cadastro.
     try:
         from scheduler import _process_billing_reminders
-        await _process_billing_reminders(db)
+        await _process_billing_reminders(db, send_messages=False)
     except Exception as _e:
         import logging
         logging.getLogger(__name__).warning(
@@ -798,9 +802,11 @@ async def update_company(
             )
         # 2026-02-16 (N) — Apos limpar pendentes, ja regera as parcelas
         # que estao dentro da janela de geracao (lancamento_gen_days).
+        # 2026-02-18 — `send_messages=False`: ao editar empresa, NAO
+        # enviar mensagens. So materializar parcelas pendentes.
         try:
             from scheduler import _process_billing_reminders
-            await _process_billing_reminders(db)
+            await _process_billing_reminders(db, send_messages=False)
         except Exception as _e:
             import logging
             logging.getLogger(__name__).warning(
