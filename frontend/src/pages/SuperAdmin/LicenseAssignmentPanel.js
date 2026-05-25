@@ -13,8 +13,12 @@ const money = (v) => `R$ ${Number(v || 0).toFixed(2)}`;
  *   onChange:  (newValue) => void
  *   companyId: optional. If present, also fetches usage and renders the
  *              "X usadas / Y permitidas" counters next to each total.
+ *   discount:  optional. Numero (R$) que reduz `Valor venda total` exibido
+ *              no card. 2026-02-18.
+ *   onDiscountChange: (value) => void. Setter do desconto. Quando ausente,
+ *              o input de desconto nao eh renderizado.
  */
-export const LicenseAssignmentPanel = ({ value, onChange, companyId }) => {
+export const LicenseAssignmentPanel = ({ value, onChange, companyId, discount = 0, onDiscountChange }) => {
   const assignments = value || [];
   const [licenses, setLicenses] = useState([]);
   const [usage, setUsage] = useState(null);
@@ -152,6 +156,31 @@ export const LicenseAssignmentPanel = ({ value, onChange, companyId }) => {
         );
       })}
 
+      {/* 2026-02-18 — Campo "Desconto fixo (R$)" ANTES dos cards de totais
+          para que o card "Valor venda total" ja mostre o valor liquido
+          (sale - discount). So renderizado quando `onDiscountChange` for
+          fornecido (modo Editar/Criar Empresa). */}
+      {onDiscountChange && (
+        <div className="mt-3 max-w-xs">
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Desconto fixo (R$) <span className="text-slate-400">(opcional)</span>
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={discount ?? ''}
+            onChange={e => onDiscountChange(e.target.value)}
+            placeholder="0.00"
+            className="input-field text-sm w-full"
+            data-testid="company-discount"
+          />
+          <p className="text-[11px] text-slate-500 mt-1">
+            Subtrai do "Valor venda total" e de cada lancamento gerado para esta empresa.
+          </p>
+        </div>
+      )}
+
       {/* Totals + usage counters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
         <CounterCard
@@ -169,14 +198,24 @@ export const LicenseAssignmentPanel = ({ value, onChange, companyId }) => {
           testid="counter-users"
         />
         <CounterCard label="Custo total" value={money(localTotals.cost)} testid="counter-cost" />
-        <CounterCard label="Valor venda total" value={money(localTotals.sale)} testid="counter-sale" emphasis />
+        <CounterCard
+          label="Valor venda total"
+          value={money(Math.max(0, localTotals.sale - (Number(discount) || 0)))}
+          subtitle={
+            Number(discount) > 0
+              ? `bruto ${money(localTotals.sale)} − desconto ${money(Number(discount))}`
+              : null
+          }
+          testid="counter-sale"
+          emphasis
+        />
       </div>
     </div>
   );
 };
 
 
-const CounterCard = ({ label, used, total, value, warn, emphasis, testid }) => (
+const CounterCard = ({ label, used, total, value, warn, emphasis, testid, subtitle }) => (
   <div className={`rounded-lg border ${warn ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white'} p-3`} data-testid={testid}>
     <p className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">{label}</p>
     {value !== undefined ? (
@@ -185,6 +224,9 @@ const CounterCard = ({ label, used, total, value, warn, emphasis, testid }) => (
       <p className={`text-base font-bold ${warn ? 'text-amber-700' : 'text-slate-900'}`}>
         {used !== undefined ? `${used} / ${total}` : `${total}`}
       </p>
+    )}
+    {subtitle && (
+      <p className="text-[10px] text-slate-500 mt-0.5 font-normal">{subtitle}</p>
     )}
     {warn && (
       <p className="text-[10px] text-amber-700 flex items-center gap-1 mt-1">

@@ -2702,6 +2702,8 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               value={form.licenses}
               onChange={(licenses) => setForm({...form, licenses})}
               companyId={isEditing ? company?.id : null}
+              discount={Number(form.discount) || 0}
+              onDiscountChange={(v) => setForm({...form, discount: v})}
             />
             <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mt-4">
               <div>
@@ -2770,43 +2772,22 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
               eh usado o nome da empresa.
             </p>
 
-            {/* 2026-02-18 — Desconto + Observacao da empresa.
-                Ambos sao propagados para cada lancamento gerado a partir
-                das licencas. O desconto subtrai do valor devido na hora
-                da baixa; a observacao vira a primeira entrada do
-                historico do lancamento. */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 pt-4 border-t border-slate-200">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Desconto fixo (R$) <span className="text-slate-400">(opcional)</span>
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={form.discount}
-                  onChange={e => setForm({...form, discount: e.target.value})}
-                  placeholder="0.00"
-                  className="input-field text-sm w-full"
-                  data-testid="company-discount"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Subtrai automaticamente do valor de cada lancamento desta empresa.
-                </p>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Observacoes <span className="text-slate-400">(sincroniza com cada lancamento)</span>
-                </label>
-                <textarea
-                  value={form.observation}
-                  onChange={e => setForm({...form, observation: e.target.value})}
-                  rows={2}
-                  placeholder="Ex: Cliente preferencial — pode estender 5d em caso de atraso"
-                  className="input-field text-sm w-full"
-                  data-testid="company-observation"
-                />
-              </div>
+            {/* 2026-02-18 — Observacoes da empresa (sincroniza com cada lancamento gerado).
+                O campo "Desconto fixo" foi movido para dentro do LicenseAssignmentPanel,
+                logo antes do card "Valor venda total" para que o valor exibido ja
+                reflita o desconto aplicado. */}
+            <div className="mt-4 pt-4 border-t border-slate-200">
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                Observacoes <span className="text-slate-400">(sincroniza com cada lancamento)</span>
+              </label>
+              <textarea
+                value={form.observation}
+                onChange={e => setForm({...form, observation: e.target.value})}
+                rows={2}
+                placeholder="Ex: Cliente preferencial — pode estender 5d em caso de atraso"
+                className="input-field text-sm w-full"
+                data-testid="company-observation"
+              />
             </div>
           </div>
 
