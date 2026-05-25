@@ -44,7 +44,93 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-const logger = pino({ level: 'warn' });
+// 2026-02-18 (v2.1.18) — Custom pino logger that intercepts libsignal's
+// `Bad MAC` and `No matching sessions found` errors at the WARN level and
+// triggers a session wipe + force-assert on the offending JID.
+//
+// Background: when a customer device rotates its identity key (e.g. they
+// re-installed WhatsApp, switched devices, or our local session record
+// drifted from theirs), our libsignal copy cannot decrypt their inbound
+// messages. Baileys eventually recovers via prekey-bundle exchange — but
+// that recovery requires the customer to retry SEVERAL times and can take
+// 5-10 minutes (observed in prod). Meanwhile every send WE attempt to that
+// JID also goes out with the stale session, producing "Aguardando
+// mensagem" on the customer's screen.
+//
+// libsignal does NOT emit these errors via a public event — they bubble
+// up via the pino logger as level=50 entries. We intercept them by
+// wrapping pino's write stream and pattern-matching the message body. On
+// match, we extract the JID and flag it for an immediate session wipe +
+// fresh prekey bundle fetch. The next inbound or outbound to that JID
+// will rebuild from scratch.
+const sessionErrorJids = new Set();
+function noteSessionError(rawObj) {
+  try {
+    // The error object passed by Baileys/libsignal has shape:
+    //   {key: {remoteJid, senderPn, fromMe, id}, err: {type:'SessionError'...}}
+    const jid =
+      rawObj?.key?.remoteJid ||
+      rawObj?.remoteJid ||
+      rawObj?.jid ||
+      null;
+    if (jid) sessionErrorJids.add(jid);
+    // ALSO add the senderPn variant — for @lid messages, the actual phone
+    // JID may differ from the @lid JID and we should wipe both records.
+    const senderPn = rawObj?.key?.senderPn || rawObj?.senderPn;
+    if (senderPn) sessionErrorJids.add(senderPn);
+  } catch (_) { /* defensive — never let logging break the app */ }
+}
+const _pinoStream = {
+  write(chunk) {
+    try {
+      const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      // Cheap substring match before bothering to JSON.parse.
+      if (s.indexOf('SessionError') !== -1
+          || s.indexOf('Bad MAC') !== -1
+          || s.indexOf('No matching sessions') !== -1
+          || s.indexOf('failed to decrypt') !== -1) {
+        try {
+          const obj = JSON.parse(s);
+          noteSessionError(obj);
+        } catch (_) {
+          // Plain text log — still useful for the substring detection
+          // above; we just don't have a JID to extract.
+        }
+      }
+    } catch (_) {}
+    // Always forward to stdout so the original logs remain visible.
+    process.stdout.write(chunk);
+  },
+};
+const logger = pino({ level: 'warn' }, _pinoStream);
+
+// Sweep flagged JIDs every 8s. For each one, wipe the local Signal session
+// record across ALL connected instances so the next exchange rebuilds
+// from a fresh prekey bundle. Conservative: max 5 wipes per cycle to
+// avoid hammering the WA server when there's a burst.
+setInterval(async () => {
+  if (sessionErrorJids.size === 0) return;
+  const toProcess = Array.from(sessionErrorJids).slice(0, 5);
+  for (const jid of toProcess) sessionErrorJids.delete(jid);
+  for (const [instanceId, inst] of Object.entries(connections)) {
+    if (!inst?.sock || inst.status !== 'connected') continue;
+    for (const jid of toProcess) {
+      try {
+        await inst.sock.authState.keys.set({ session: { [jid]: null } });
+        jidNeedsForceAssert.add(jid);
+        console.warn(
+          `[${instanceId}] [SESSION-HEAL] wiped local session for ${jid} ` +
+          `(libsignal reported Bad MAC / No matching sessions) — next ` +
+          `exchange will rebuild from fresh prekey bundle`
+        );
+      } catch (e) {
+        console.warn(
+          `[${instanceId}] [SESSION-HEAL] wipe failed for ${jid}: ${e.message}`
+        );
+      }
+    }
+  }
+}, 8 * 1000);
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8001';
 const PORT = process.env.PORT || process.env.WA_PORT || 3002;
 // Allow overriding with AUTH_DIR so operators can point to a persistent disk

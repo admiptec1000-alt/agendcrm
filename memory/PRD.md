@@ -10,6 +10,50 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (v2.1.18) — SESSION-HEAL: detector inbound de Bad MAC / No matching sessions ✅
+
+**Problema confirmado via logs do Render (2026-05-24 23:08):**
+- Cliente envia "1" → Nosso Baileys recebe MAS falha em descriptografar (`SessionError: No matching sessions found` + `Bad MAC Error`)
+- Cliente fica re-enviando até libsignal eventualmente disparar `Closing open session in favor of incoming prekey bundle` (5-10 minutos depois)
+- Após isso tudo volta ao normal
+- Sintoma no celular: "Aguardando mensagem" persistente até o auto-recovery do WhatsApp protocol acontecer
+
+**Causa raiz:** sessão Signal local dessincronizada da do cliente (identity key rotation, multi-device drift, ou corrupção da `currentRatchet`). libsignal NÃO emite evento público para isso — esses erros bubble up via pino logger como `level=50`.
+
+**Solução (`/app/whatsapp-service/index.js` v2.1.18):**
+
+1. **Pino logger custom** envolvendo `process.stdout.write`:
+   - Lê toda linha de log
+   - Matcher cheap (`indexOf`) busca `SessionError`, `Bad MAC`, `No matching sessions`, `failed to decrypt`
+   - Quando bate, parseia o JSON e extrai `key.remoteJid` + `key.senderPn` (cobre @lid + @s.whatsapp.net)
+   - Adiciona ao `sessionErrorJids: Set<string>`
+
+2. **Sweep a cada 8s**:
+   - Para cada JID flagrado (máx 5 por ciclo, evita burst):
+     - `sock.authState.keys.set({ session: { [jid]: null } })` — WIPE local session
+     - `jidNeedsForceAssert.add(jid)` — próximo outbound vai fazer assertSessions(force=true) → busca fresh prekey bundle
+   - Loga `[SESSION-HEAL] wiped local session for ${jid}` para auditoria
+
+3. **Stream stdout preservado** — todos os logs continuam visíveis no Render. O detector é PASSIVO (não engole nada).
+
+**Testes (`/app/whatsapp-service/tests/test_session_heal.js`):** 4/4 passando.
+
+**Combinado com o auto-recovery (v2.1.17, outbound):**
+- **Outbound stuck** → Auto-recovery wipa sessão + re-envia em 20s
+- **Inbound Bad MAC** → Session-heal wipa sessão em 8s → próxima troca rebuild fresh
+- Resultado esperado: "Aguardando mensagem" deve sumir em segundos, não minutos.
+
+**Para verificar em produção:**
+1. **Save to GitHub** + deploy **APENAS** do `whatsapp-service` no Render (Clear build cache & deploy).
+2. Nos logs do Render, depois de uma sessão problemática, deve aparecer:
+   ```
+   [INST_ID] [SESSION-HEAL] wiped local session for 242158913192070@lid (libsignal reported Bad MAC / No matching sessions) — next exchange will rebuild from fresh prekey bundle
+   [INST_ID] [SESSION-HEAL] wiped local session for 556294320308@s.whatsapp.net ...
+   ```
+3. Teste real: cliente manda "Opa", "1", CPF — fluxo completo deve fluir sem "Aguardando mensagem" persistir.
+
+
+
 ### 2026-02-18 (v2.1.17) — Auto-recovery contra "Aguardando mensagem" ✅
 
 **Contexto:** Mesmo após self-echo dedup (AC2), o cliente final ainda via "Aguardando mensagem. Essa ação pode levar alguns instantes." no celular. CRM mostrava o fluxo executando perfeitamente (welcome, menu, CPF, contratos, Pix) — mas as mensagens chegavam ao WhatsApp do cliente como placeholders criptografados que ele não conseguia decifrar (sessão Signal corrompida).
