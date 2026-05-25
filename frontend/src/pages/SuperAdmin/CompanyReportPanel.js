@@ -57,6 +57,16 @@ export const CompanyReportPanel = () => {
   const [q, setQ] = useState('');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  // 2026-02-18 — Tipos de BD: carregados dinamicamente para refletir os
+  // mesmos valores cadastrados na tela "Empresas" (ex: "Base Nova | Alvotec",
+  // "Base antiga | Alvotec", "Padrao"). Antes vinha hardcoded.
+  const [dbTypeOptions, setDbTypeOptions] = useState([]);
+
+  useEffect(() => {
+    api.get('/super-admin/companies/database-types')
+      .then(r => setDbTypeOptions(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setDbTypeOptions(['Padrao']));
+  }, []);
 
   const fetchReport = useCallback(async () => {
     setLoading(true);
@@ -151,8 +161,9 @@ export const CompanyReportPanel = () => {
             <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1">Tipo BD</label>
             <select value={dbType} onChange={e => setDbType(e.target.value)} className="input-field text-sm w-full" data-testid="report-db-type">
               <option value="">Todos</option>
-              <option value="Padrao">Padrao</option>
-              <option value="Externo">Externo</option>
+              {dbTypeOptions.map(opt => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
             </select>
           </div>
           <div className={period === 'custom' ? 'sm:col-span-2 lg:col-span-4' : ''}>
