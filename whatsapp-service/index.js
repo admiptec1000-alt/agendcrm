@@ -1634,7 +1634,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.16',
+    version: 'v2.1.18',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1647,8 +1647,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.16',
-    built_at: '2026-02-17',
+    version: 'v2.1.18',
+    built_at: '2026-02-18',
     features: {
       sent_message_store: true,
       multi_message_types: true,
@@ -1678,18 +1678,27 @@ app.get('/version', (req, res) => {
       smart_stale_session_force_assert: true,
       prekey_periodic_upload: true,
       failed_jid_recovery: true,
-      // v2.1.14 — when customer sends us a message, mark their JID for
-      // force-assert on next outbound. Fixes the post-inbound stale window
-      // observed in prod (msg arrives as "Aguardando" even with 2-min gap).
       force_assert_on_inbound: true,
-      // v2.1.15 — the REAL root cause: Baileys needs msgRetryCounterCache to
-      // honor retry-receipts. Without it, "Aguardando mensagem" never clears
-      // because retries are silently dropped. node-cache added as dependency.
       msg_retry_counter_cache: true,
       cached_group_metadata: true,
-      // v2.1.16 — manual session reset endpoint per-JID (nuclear option for
-      // recipients stuck in "Aguardando mensagem" indefinitely).
       manual_session_reset: true,
+      // v2.1.17 — auto-recovery: messages stuck without DELIVERY_ACK
+      // (recipient "Aguardando mensagem") trigger an automatic
+      // session wipe + re-send within ~25s. No operator action needed.
+      auto_recovery_stuck_delivery: true,
+      // v2.1.17 — fixed WAMessageStatus enum mapping (was off-by-one;
+      // PENDING was being treated as 'failed', flagging every send for
+      // force-assert).
+      wa_message_status_enum_fixed: true,
+      // v2.1.18 — session-heal: detects libsignal Bad MAC / SessionError
+      // on INBOUND decryption failures and proactively wipes the local
+      // session for the offending JID so the next exchange rebuilds
+      // from a fresh prekey bundle. Cuts "Aguardando mensagem" recovery
+      // from 5-10 minutes to seconds.
+      session_heal_inbound: true,
+      // v2.1.18 — bumped Baileys to 6.7.22 to patch the zero-day
+      // message-spoofing vulnerability in 6.7.21.
+      baileys_6_7_22_security_patch: true,
     },
     fastapi_url: FASTAPI_URL,
   });

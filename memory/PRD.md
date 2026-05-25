@@ -10,6 +10,32 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (v2.1.18-final) — Bump de versão + patch de segurança Baileys ✅
+
+**Deploy no Render foi feito mas painel SA continuava mostrando "v2.1.16":**
+- Eu havia esquecido de bumpar as constantes `version: 'v2.1.16'` em `/health` e `/version` quando criei v2.1.17 e v2.1.18. Código novo estava rodando, só a etiqueta era antiga.
+
+**Correção:**
+- `/app/whatsapp-service/index.js`: constantes `version: 'v2.1.18'` + `built_at: '2026-02-18'` em ambos endpoints.
+- Novos flags adicionados ao `/version`:
+  - `auto_recovery_stuck_delivery: true` (v2.1.17)
+  - `wa_message_status_enum_fixed: true` (v2.1.17)
+  - `session_heal_inbound: true` (v2.1.18)
+  - `baileys_6_7_22_security_patch: true` (v2.1.18)
+
+**🔴 Security patch — Baileys 6.7.21 → 6.7.22:**
+- Render emitiu warning durante o build: *"This version is affected by a zero-day vulnerability that allows spoofing of messages"* (advisory GHSA-qvv5-jq5g-4cgg).
+- `yarn add @whiskeysockets/baileys@6.7.22` aplicou o patch (lockfile atualizado).
+- libsignal incluso 6.0.0 — sem breaking changes na API que usamos.
+
+**Para verificar em produção:**
+1. Save to GitHub + Manual Deploy do whatsapp-service no Render (Clear build cache & deploy).
+2. Painel SA → "WhatsApp Service" deve mostrar **v2.1.18**.
+3. No build do Render: o warning de Baileys 6.7.21 NÃO deve aparecer mais.
+4. Cliente faz teste — logs do Render mostram `[SESSION-HEAL]` e/ou `[AUTO-RECOVERY]` quando preciso.
+
+
+
 ### 2026-02-18 (v2.1.18) — SESSION-HEAL: detector inbound de Bad MAC / No matching sessions ✅
 
 **Problema confirmado via logs do Render (2026-05-24 23:08):**
