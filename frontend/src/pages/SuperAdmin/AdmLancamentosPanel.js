@@ -65,6 +65,15 @@ const PAYMENT_METHODS = [
 ];
 const labelForMethod = (m) => (PAYMENT_METHODS.find(x => x.value === m)?.label || m || '—');
 
+// 2026-02-18 — Render ISO/YYYY-MM-DD dates as DD-MM-YYYY for the operator
+// UI (matches the locale convention used everywhere else in the system).
+const fmtBrDate = (iso) => {
+  if (!iso) return '';
+  const s = String(iso).slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
+};
+
 /**
  * Financeiro ADM — Lancamentos
  * Mirrors the company-level Financial > Lançamentos tab but stored in the
@@ -333,7 +342,7 @@ export const AdmLancamentosPanel = () => {
                         </div>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-slate-700 font-mono text-xs whitespace-nowrap">{(t.due_date || t.date || '').slice(0,10)}</td>
+                    <td className="px-3 py-2 text-slate-700 font-mono text-xs whitespace-nowrap">{fmtBrDate(t.due_date || t.date || '')}</td>
                     <td className="px-3 py-2">
                       {t.kind === 'licenca' ? (
                         <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded font-medium">
@@ -436,7 +445,7 @@ export const AdmLancamentosPanel = () => {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Data</div>
-                      <div className="text-slate-700 font-mono">{(t.due_date || t.date || '').slice(0,10)}</div>
+                      <div className="text-slate-700 font-mono">{fmtBrDate(t.due_date || t.date || '')}</div>
                     </div>
                     <div>
                       <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Tipo</div>

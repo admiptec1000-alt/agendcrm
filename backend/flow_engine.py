@@ -638,10 +638,23 @@ def _flatten_sgp_response(action: str, data: Any) -> dict:
                 or data.get("linhadigitavel") or ""
             )
             out["valor_fatura"] = str(f.get("valor") or f.get("valor_original") or "")
-            out["vencimento_fatura"] = (
+            # 2026-02-18 — Format `vencimento` from SGP (always ISO AAAA-MM-DD)
+            # to BR DD-MM-AAAA so customer-facing messages read naturally
+            # in Portuguese. SGP also occasionally returns it already
+            # formatted; we detect by regex and pass-through in that case.
+            _venc_raw = (
                 f.get("vencimento") or f.get("vencimento_original")
                 or f.get("datavencimento") or ""
             )
+            try:
+                import re as _re
+                if _venc_raw and _re.match(r"^\d{4}-\d{2}-\d{2}", _venc_raw):
+                    y, m, d = _venc_raw[:10].split("-")
+                    out["vencimento_fatura"] = f"{d}-{m}-{y}"
+                else:
+                    out["vencimento_fatura"] = _venc_raw
+            except Exception:
+                out["vencimento_fatura"] = _venc_raw
             out["pix_copia_e_cola"] = f.get("codigopix") or f.get("pix_copia_e_cola") or ""
             # Several SGP tenants expose the Pix payment URL under different
             # field names — keep them ALL as aliases so the operator can use

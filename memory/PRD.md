@@ -10,6 +10,23 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (FIN+FMT) — Bug 404 no reenvio + formato de data BR ✅
+
+**Bug 1 — "Falha ao reenviar: http 404 - Cannot POST /instances/.../send-text"**
+- `/app/backend/scheduler.py` chamava o endpoint `/send-text` que NÃO existe no microserviço Baileys. Endpoint correto é `/send`.
+- Também usava `{"to":phone}` quando o microserviço aceita `{"phone":...}`.
+- 2 ocorrências corrigidas: linha 182 (auto-close goodbye) e linha 282 (`_send_billing_reminder`).
+- Botão "Reenviar lembrete" no Financeiro Adm agora envia normalmente.
+
+**Bug 2 — Data no formato AAAA-MM-DD em vez de DD-MM-AAAA**
+- **No fluxo / mensagem do Pix**: `vencimento_fatura` em `/app/backend/flow_engine.py` linha 641-659 vinha cru do SGP (sempre ISO). Adicionada conversão regex AAAA-MM-DD → DD-MM-AAAA preservando passthrough para outros formatos.
+- **Na tabela Financeiro Adm**: 2 lugares em `/app/frontend/src/pages/SuperAdmin/AdmLancamentosPanel.js` (linhas 345 e 448) chamavam `.slice(0,10)`. Substituídos por helper `fmtBrDate(iso)` (regex match → DD-MM-AAAA).
+- Não tocados: `<input type="date">` (formato ISO é exigência do browser) e Dashboard da empresa (já usava `split('-').reverse().join('/')`).
+
+**Para verificar em produção:** Save to GitHub + deploy do backend Emergent (microserviço NÃO precisa redeploy).
+
+
+
 ### 2026-02-18 (v2.1.18-final) — Bump de versão + patch de segurança Baileys ✅
 
 **Deploy no Render foi feito mas painel SA continuava mostrando "v2.1.16":**

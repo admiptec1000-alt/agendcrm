@@ -179,8 +179,8 @@ async def _process_ticket_auto_close(db):
                     )
                     async with httpx.AsyncClient(timeout=10.0) as client:
                         await client.post(
-                            f"{wa_service_url}/instances/{channel['id']}/send-text",
-                            json={"to": contact["phone"], "message": msg},
+                            f"{wa_service_url}/instances/{channel['id']}/send",
+                            json={"phone": contact["phone"], "message": msg},
                         )
                     # Persist in ticket message history.
                     await db.tickets.update_one(
@@ -279,8 +279,8 @@ async def _send_billing_reminder(conn_id: str, phone: str, text: str):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
-                f"{WA_SERVICE_URL}/instances/{conn_id}/send-text",
-                json={"to": phone, "message": text},
+                f"{WA_SERVICE_URL}/instances/{conn_id}/send",
+                json={"phone": phone, "message": text},
             )
         if r.status_code >= 400:
             body_preview = (r.text or "")[:200].replace("\n", " ")
