@@ -517,8 +517,14 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
                 #   {{valor_venda_total}} → soma de venda das licencas
                 #   {{valor_desconto}}    → desconto fixo da empresa
                 #   {{valor_devido}}      → valor da parcela menos desconto
+                # 2026-05-26 — {{valor_total_liquido}} → valor_venda_total
+                #              menos valor_desconto (total da venda ja
+                #              descontado, util pra exibir "Total a pagar"
+                #              no template alem do per-parcela).
                 _disc = float(c.get("discount") or 0)
                 _valor_devido = max(0.0, float(price) - _disc)
+                _venda_total = float(c.get("total_sale_price") or 0)
+                _total_liquido = max(0.0, _venda_total - _disc)
                 ctx = {
                     "nome": nome,
                     "empresa": c.get("name") or "",
@@ -527,9 +533,10 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
                     "parcela": f"{i + 1}/{installments}",
                     "licencas_conexao": str(c.get("max_connections") or 0),
                     "licencas_usuario": str(c.get("max_users") or 0),
-                    "valor_venda_total": f"{float(c.get('total_sale_price') or 0):.2f}".replace(".", ","),
+                    "valor_venda_total": f"{_venda_total:.2f}".replace(".", ","),
                     "valor_desconto": f"{_disc:.2f}".replace(".", ","),
                     "valor_devido": f"{_valor_devido:.2f}".replace(".", ","),
+                    "valor_total_liquido": f"{_total_liquido:.2f}".replace(".", ","),
                 }
                 text = _render_reminder(template, ctx)
                 phone = c.get("phone") or ""

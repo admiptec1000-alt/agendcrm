@@ -515,6 +515,7 @@ async def resend_transaction_reminder(
         else ((company or {}).get("total_sale_price") or 0)
     )
     _valor_devido = max(0.0, _amount - _disc)
+    _total_liquido = max(0.0, _venda_total - _disc)
     ctx = {
         "nome": nome,
         "empresa": (company or {}).get("name") or "",
@@ -526,6 +527,7 @@ async def resend_transaction_reminder(
         "valor_venda_total": f"{_venda_total:.2f}".replace(".", ","),
         "valor_desconto": f"{_disc:.2f}".replace(".", ","),
         "valor_devido": f"{_valor_devido:.2f}".replace(".", ","),
+        "valor_total_liquido": f"{_total_liquido:.2f}".replace(".", ","),
     }
     text = _render_reminder(template, ctx)
     sa_conn = await _get_sa_system_connection(db)
