@@ -786,9 +786,16 @@ async def update_company(
     # auto-generated Lancamentos so the scheduler can re-create them under
     # the new monthly_price / installments / first_due_date. PAID rows are
     # preserved for audit.
+    # 2026-02-18 — Estendido para incluir `total_sale_price`, `discount` e
+    # `licenses`. Sem isso, alterar o desconto ou mudar a venda das licencas
+    # NAO refletia nas parcelas pendentes, fazendo o "Valor original" do
+    # Financeiro divergir do "Valor venda total" do cadastro da empresa.
     billing_changed = any(
         k in update_data
-        for k in ("monthly_price", "installments", "billing_cycle", "first_due_date")
+        for k in (
+            "monthly_price", "installments", "billing_cycle", "first_due_date",
+            "total_sale_price", "discount", "licenses",
+        )
     )
     if billing_changed:
         try:

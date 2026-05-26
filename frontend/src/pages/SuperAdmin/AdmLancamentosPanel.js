@@ -1051,7 +1051,7 @@ const PaidSummary = ({ txn, onReversed }) => {
         </button>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-        <SummaryCell label="Valor original" value={fmt(orig)} />
+        <SummaryCell label="Valor venda total" value={fmt(orig)} />
         {desc > 0 && <SummaryCell label="Desconto" value={`− ${fmt(desc)}`} tone="emerald" />}
         {lateTotal > 0 && (
           <SummaryCell
@@ -1179,7 +1179,7 @@ const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
         <div className="p-4 sm:p-5 space-y-4">
           <div className="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
             <div className="flex justify-between">
-              <span className="text-slate-500">Valor original</span>
+              <span className="text-slate-500">Valor venda total</span>
               <span className="font-mono font-medium">{fmt(baseAmount)}</span>
             </div>
             {discount > 0 && (

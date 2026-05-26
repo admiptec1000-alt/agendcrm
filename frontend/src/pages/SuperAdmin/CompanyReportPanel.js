@@ -64,7 +64,11 @@ export const CompanyReportPanel = () => {
 
   useEffect(() => {
     api.get('/super-admin/companies/database-types')
-      .then(r => setDbTypeOptions(Array.isArray(r.data) ? r.data : []))
+      .then(r => {
+        // Endpoint retorna {types: [...]} (nao um array direto).
+        const list = Array.isArray(r.data) ? r.data : (r.data?.types || []);
+        setDbTypeOptions(list);
+      })
       .catch(() => setDbTypeOptions(['Padrao']));
   }, []);
 
