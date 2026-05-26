@@ -102,9 +102,11 @@ export const CompanyReportPanel = () => {
 
   const exportCsv = () => {
     if (!rows.length) return;
-    const headers = ['Empresa', 'Representante', 'BD', 'Custo', 'Venda', 'Desconto', 'Devido', 'Lucro', 'Vencimento', 'Status'];
+    // 2026-02-18 — Removida coluna "BD"; adicionadas "Conexao/Empresa" e "Usuario".
+    const headers = ['Empresa', 'Representante', 'Conexao/Empresa', 'Usuario', 'Custo', 'Venda', 'Desconto', 'Devido', 'Lucro', 'Vencimento', 'Status'];
     const csvRows = rows.map(r => [
-      r.company_name, r.representante, r.database_type,
+      r.company_name, r.representante,
+      r.max_connections, r.max_users,
       r.custo, r.venda, r.desconto, r.valor_devido, r.lucro,
       r.due_date || '', r.status + (r.days_to_due != null ? ` ${r.days_to_due}d` : ''),
     ]);
@@ -250,7 +252,8 @@ export const CompanyReportPanel = () => {
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
                     <Th>Empresa</Th>
-                    <Th>BD</Th>
+                    <Th right>Conexao/Empresa</Th>
+                    <Th right>Usuario</Th>
                     <Th right>Custo</Th>
                     <Th right>Venda</Th>
                     <Th right>Lucro</Th>
@@ -267,7 +270,8 @@ export const CompanyReportPanel = () => {
                           <div className="text-[10px] text-slate-500 truncate max-w-[200px]">{r.representante}</div>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-xs text-slate-500">{r.database_type}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs text-slate-600">{r.max_connections}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs text-slate-600">{r.max_users}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs">{fmtBRL(r.custo)}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs">{fmtBRL(r.venda)}</td>
                       <td className={`px-3 py-2.5 text-right font-mono text-xs font-semibold ${r.lucro >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
@@ -296,7 +300,10 @@ export const CompanyReportPanel = () => {
                     {r.representante && (
                       <p className="text-[11px] text-slate-500 truncate">{r.representante}</p>
                     )}
-                    <p className="text-[10px] text-slate-400 mt-0.5">{r.database_type}</p>
+                    {/* 2026-02-18 — Mostra conexao/usuario em vez do BD */}
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {r.max_connections} conexao(oes) · {r.max_users} usuario(s)
+                    </p>
                   </div>
                   <StatusBadge status={r.status} days={r.days_to_due} />
                 </div>
