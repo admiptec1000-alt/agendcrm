@@ -488,7 +488,10 @@ async def resend_transaction_reminder(
     company = None
     if txn.get("company_id"):
         company = await db.companies.find_one(
-            {"id": txn["company_id"]}, {"_id": 0, "name": 1, "phone": 1, "representante": 1, "id": 1},
+            {"id": txn["company_id"]},
+            {"_id": 0, "name": 1, "phone": 1, "representante": 1, "id": 1,
+             "max_connections": 1, "max_users": 1, "total_sale_price": 1,
+             "discount": 1},
         )
     settings = await db.system_settings.find_one(
         {"key": "billing_reminder"}, {"_id": 0}
@@ -499,12 +502,30 @@ async def resend_transaction_reminder(
     )
     phone = (company or {}).get("phone") or ""
     nome = (company or {}).get("representante") or (company or {}).get("name") or ""
+    # 2026-05-26 — Manual resend tambem precisa expandir as variaveis novas
+    # (`licencas_conexao`, `licencas_usuario`, `valor_venda_total`,
+    # `valor_desconto`, `valor_devido`). Antes ficavam literais no envio.
+    _amount = float(txn.get("amount") or 0)
+    _disc = float(
+        txn.get("discount") if txn.get("discount") is not None
+        else ((company or {}).get("discount") or 0)
+    )
+    _venda_total = float(
+        txn.get("total_sale_price") if txn.get("total_sale_price") is not None
+        else ((company or {}).get("total_sale_price") or 0)
+    )
+    _valor_devido = max(0.0, _amount - _disc)
     ctx = {
         "nome": nome,
         "empresa": (company or {}).get("name") or "",
-        "valor": f"{float(txn.get('amount') or 0):.2f}".replace(".", ","),
+        "valor": f"{_amount:.2f}".replace(".", ","),
         "vencimento": _fmt_br_date(txn.get("due_date") or txn.get("date") or ""),
         "parcela": f"{int(txn.get('recurrence_index') or 0) + 1}/{int(txn.get('recurrence_total') or 1)}",
+        "licencas_conexao": str((company or {}).get("max_connections") or 0),
+        "licencas_usuario": str((company or {}).get("max_users") or 0),
+        "valor_venda_total": f"{_venda_total:.2f}".replace(".", ","),
+        "valor_desconto": f"{_disc:.2f}".replace(".", ","),
+        "valor_devido": f"{_valor_devido:.2f}".replace(".", ","),
     }
     text = _render_reminder(template, ctx)
     sa_conn = await _get_sa_system_connection(db)
