@@ -414,6 +414,12 @@ class AdmTxnUpdate(BaseModel):
     license_users: Optional[int] = None
     license_cost: Optional[float] = None
     license_sale_price: Optional[float] = None
+    # 2026-05-26 — Permite editar varias parcelas em lote ("alterar todas
+    # as proximas em aberto"). Valores: "this" (default, so a parcela
+    # atual) ou "all" (esta + todas as pendentes da mesma serie de
+    # recorrencia OU, na ausencia de recurrence_group_id, todas as
+    # pendentes da mesma empresa + mesmo kind).
+    scope: Optional[str] = None
 
 
 @router.get("/finance/transactions")
@@ -553,6 +559,7 @@ async def adm_update_transaction(
     _: dict = Depends(require_super_admin),
 ):
     update = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    scope = (update.pop("scope", None) or "this").lower()
     if "amount" in update:
         update["amount"] = float(update["amount"] or 0)
     if "status" in update and update["status"] == "pago":
@@ -566,7 +573,35 @@ async def adm_update_transaction(
     r = await db.super_admin_transactions.update_one({"id": txn_id}, {"$set": update})
     if r.matched_count == 0:
         raise HTTPException(404, "Lancamento nao encontrado")
-    return await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
+    siblings_updated = 0
+    # 2026-05-26 — scope=all: replica a edicao para todas as PENDENTES da
+    # mesma serie. Campos especificos de cada parcela (date, due_date,
+    # status, paid_at, valor_recebido) sao removidos do payload de replica.
+    if scope == "all":
+        bulk_payload = {
+            k: v for k, v in update.items()
+            if k not in ("date", "due_date", "status", "paid_at", "valor_recebido")
+        }
+        if bulk_payload:
+            current = await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
+            sibling_q: dict = {"status": "pendente", "id": {"$ne": txn_id}}
+            if current and current.get("recurrence_group_id"):
+                sibling_q["recurrence_group_id"] = current["recurrence_group_id"]
+            elif current and current.get("company_id"):
+                sibling_q["company_id"] = current["company_id"]
+                if current.get("kind"):
+                    sibling_q["kind"] = current["kind"]
+            else:
+                sibling_q = None  # sem chave segura para identificar irmaos
+            if sibling_q is not None:
+                br = await db.super_admin_transactions.update_many(
+                    sibling_q, {"$set": bulk_payload}
+                )
+                siblings_updated = br.modified_count
+    out = await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
+    if out is not None:
+        out["_siblings_updated"] = siblings_updated
+    return out
 
 
 @router.post("/finance/transactions/{txn_id}/pay")
@@ -707,29 +742,31 @@ async def adm_finance_summary(
 # ────────────────────────────────────────────────────────────────────────
 @router.post("/finance/resync-pending-parcelas")
 async def adm_resync_pending_parcelas(
+    company_id: Optional[str] = None,
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
-    """Deleta TODAS as parcelas pendentes auto-geradas e re-cria via scheduler
-    com os valores atualizados (`total_sale_price - discount`).
+    """Deleta parcelas pendentes auto-geradas e re-cria via scheduler com
+    os valores atualizados (`total_sale_price - discount`).
 
-    Use quando uma alteracao em massa de valores foi feita (ex: ajuste do
-    cadastro de varias empresas) e voce nao quer abrir cada uma manualmente.
+    Quando `company_id` eh informado, o resync afeta SOMENTE a empresa
+    referenciada — usado pelo fluxo "Editar empresa → atualizar lancamentos
+    em aberto". Sem `company_id`, faz o resync global (todas as empresas).
 
     Parcelas com status=pago sao PRESERVADAS — somente as pendentes geradas
     automaticamente sao recriadas. Lancamentos manuais avulsos (kind=diversos)
     tambem sao preservados.
     """
+    base_q: dict = {
+        "status": "pendente",
+        "auto_company_billing": True,
+    }
+    if company_id:
+        base_q["company_id"] = company_id
     # Conta antes pra logging
-    pre_count = await db.super_admin_transactions.count_documents({
-        "status": "pendente",
-        "auto_company_billing": True,
-    })
+    pre_count = await db.super_admin_transactions.count_documents(base_q)
     # Deleta pendentes auto-geradas (preservando pagas e lancamentos manuais)
-    res = await db.super_admin_transactions.delete_many({
-        "status": "pendente",
-        "auto_company_billing": True,
-    })
+    res = await db.super_admin_transactions.delete_many(base_q)
     # Recria via scheduler (send_messages=False — esta operacao NAO envia
     # mensagem, so materializa parcelas)
     try:
@@ -737,10 +774,13 @@ async def adm_resync_pending_parcelas(
         await _process_billing_reminders(db, send_messages=False)
     except Exception as e:
         raise HTTPException(500, f"Falha ao regerar parcelas: {e}")
-    post_count = await db.super_admin_transactions.count_documents({
+    post_q: dict = {
         "status": "pendente",
         "auto_company_billing": True,
-    })
+    }
+    if company_id:
+        post_q["company_id"] = company_id
+    post_count = await db.super_admin_transactions.count_documents(post_q)
     return {
         "ok": True,
         "deleted": res.deleted_count,

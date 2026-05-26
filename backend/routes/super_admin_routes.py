@@ -756,6 +756,8 @@ async def update_company(
 
     update_data = {}
     for k, v in data.model_dump(exclude_unset=True).items():
+        if k == "resync_pending":
+            continue  # 2026-05-26 — flag de controle, nao persistir
         if v is not None:
             if k == "theme_colors":
                 update_data[k] = v.model_dump() if hasattr(v, 'model_dump') else v
@@ -811,6 +813,9 @@ async def update_company(
     # `licenses`. Sem isso, alterar o desconto ou mudar a venda das licencas
     # NAO refletia nas parcelas pendentes, fazendo o "Valor original" do
     # Financeiro divergir do "Valor venda total" do cadastro da empresa.
+    # 2026-05-26 — Agora controlado pelo flag `resync_pending` enviado pelo
+    # frontend ("Deseja atualizar lancamentos em aberto?"). Sem o flag, a
+    # edicao da empresa NAO mexe no financeiro.
     billing_changed = any(
         k in update_data
         for k in (
@@ -818,7 +823,7 @@ async def update_company(
             "total_sale_price", "discount", "licenses",
         )
     )
-    if billing_changed:
+    if billing_changed and bool(getattr(data, "resync_pending", False)):
         try:
             await db.super_admin_transactions.delete_many({
                 "company_id": company_id,

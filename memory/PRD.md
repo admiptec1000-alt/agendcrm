@@ -2740,3 +2740,12 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 ## Test Credentials
 - Boss admin: `admin@boss.com.br` / `boss123` (via /boss/login)
 - Super admin: `admin@agentcrm.com` / `admin123` (via /admin-login)
+
+## 2026-05-26 — Resync pendentes redesenhado + Próximo mês + Editar parcela em lote
+- Backend: `/super-admin/finance/resync-pending-parcelas` agora aceita `?company_id=` (resync escopado por empresa). Sem o param mantém comportamento global (uso interno/test).
+- Backend: `PUT /super-admin/finance/transactions/{id}` aceita `scope: "this"|"all"`. Quando `all`, propaga `amount/description/notes/late_fee/discount/payment_method/category` para todas as parcelas PENDENTES da mesma `recurrence_group_id` (ou mesma empresa+kind quando não há series). Retorna `_siblings_updated`.
+- Backend: `CompanyUpdate` ganhou flag `resync_pending`. Edição de empresa NÃO mexe mais no financeiro automaticamente — só quando o operador confirma "Sim" no diálogo.
+- Backend: variáveis novas ({{licencas_conexao/usuario/valor_venda_total/valor_desconto/valor_devido}}) agora também expandem no reenvio manual via SA (`/finance/transactions/{id}/resend-reminder`).
+- Frontend (AdmLancamentosPanel.js): botão "Resync pendentes" removido; filtro de data ganhou "Proximo mes" (mês seguinte ao atual); modal de edição de parcela ganhou seletor "Aplicar em: Somente esta / Esta + todas em aberto".
+- Frontend (Dashboard.js — modal Editar Empresa): após salvar com mudança financeira/descritiva, pergunta "Deseja atualizar todos os lançamentos em aberto desta empresa?". Se sim, chama resync escopado.
+- Testado via curl: scope=all propagou 2 irmãs; scope=this manteve siblings intactos; resync com company_id inexistente retornou 0/0; flow completo de criação→edit em lote→cleanup OK.

@@ -2423,6 +2423,22 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
 
   const handleSave = async () => {
     setSaving(true);
+    // 2026-05-26 — Calcula se algum campo financeiro/descritivo MUDOU em
+    // relacao ao snapshot original da empresa. Se sim, perguntaremos ao
+    // operador (apos salvar com sucesso) se ele quer atualizar os
+    // lancamentos em aberto desta empresa.
+    const _origLic = JSON.stringify(company?.licenses || []);
+    const _newLic = JSON.stringify(form.licenses || []);
+    const _financeChanged = isEditing && (
+      _origLic !== _newLic ||
+      Number(company?.discount || 0) !== Number(form.discount || 0) ||
+      String(company?.installments ?? '') !== String(form.installments ?? '') ||
+      String(company?.billing_cycle || '') !== String(form.billing_cycle || '') ||
+      String(company?.first_due_date || '') !== String(form.first_due_date || '') ||
+      String(company?.name || '') !== String(form.name || '') ||
+      String(company?.database_type || '') !== String(form.database_type || '') ||
+      String(company?.observation || '') !== String(form.observation || '')
+    );
     try {
       // 2026-02-18 — `monthly_price` agora eh sempre computado:
       //   total venda das licencas - desconto fixo da empresa.
@@ -2475,6 +2491,26 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           await superAdminAPI.updateCompanyFeatures(company.id, customFeatures);
         }
         toast.success('Empresa atualizada!');
+        // 2026-05-26 — Apos salvar com mudanca financeira, pergunta se
+        // operador quer atualizar os lancamentos em aberto desta empresa
+        // com os novos valores. Confirmou → chama resync escopado.
+        if (_financeChanged) {
+          const ok = window.confirm(
+            'Deseja atualizar todos os lancamentos em aberto desta empresa no Financeiro com os novos valores?'
+          );
+          if (ok) {
+            try {
+              const r = await api.post(
+                `/super-admin/finance/resync-pending-parcelas?company_id=${encodeURIComponent(company.id)}`
+              );
+              toast.success(
+                `Lancamentos em aberto atualizados: ${r.data.deleted} → ${r.data.created}`
+              );
+            } catch (re) {
+              toast.error(re?.response?.data?.detail || 'Falha ao atualizar lancamentos em aberto');
+            }
+          }
+        }
       } else {
         // External (BD != Padrao) companies don't need admin login. They
         // are billed/managed in the SA but never authenticate.

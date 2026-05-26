@@ -29,6 +29,7 @@ const _isoDate = (d) => d.toISOString().slice(0, 10);
 const PERIOD_PRESETS = [
   { key: 'this_week', label: 'Esta semana' },
   { key: 'this_month', label: 'Este mes' },
+  { key: 'next_month', label: 'Proximo mes' },
   { key: 'last_3_months', label: 'Ult. 3 meses' },
   { key: 'custom', label: 'Mes especifico' },
 ];
@@ -44,6 +45,12 @@ const _periodRange = (preset, customMonth) => {
   }
   if (preset === 'this_month') {
     return _monthRange(_currentMonth());
+  }
+  if (preset === 'next_month') {
+    // 2026-05-26 — Mes calendario seguinte ao atual.
+    const start = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const end = new Date(today.getFullYear(), today.getMonth() + 2, 1);
+    return [_isoDate(start), _isoDate(end)];
   }
   if (preset === 'last_3_months') {
     const start = new Date(today.getFullYear(), today.getMonth() - 2, 1);
@@ -299,27 +306,10 @@ export const AdmLancamentosPanel = () => {
         <button onClick={load} className="px-3 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 flex items-center justify-center gap-1" data-testid="adm-refresh-btn">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> <span className="hidden sm:inline">Atualizar</span>
         </button>
-        {/* 2026-02-18 — Forca resync de TODAS as parcelas pendentes auto-geradas,
-            usando os valores atuais de total_sale_price/discount/licenses das
-            empresas. Util quando o cadastro foi alterado depois das parcelas
-            ja terem sido criadas. */}
-        <button
-          onClick={async () => {
-            if (!window.confirm('Forcar resync? Todas as parcelas PENDENTES (nao pagas) auto-geradas serao recriadas com os valores atuais das empresas. Pagamentos ja registrados nao sao afetados.')) return;
-            try {
-              const r = await api.post('/super-admin/finance/resync-pending-parcelas');
-              toast.success(`Resync: ${r.data.deleted} apagadas → ${r.data.created} recriadas`);
-              load();
-            } catch (e) {
-              toast.error(e?.response?.data?.detail || 'Falha no resync');
-            }
-          }}
-          className="px-3 py-2 text-sm rounded border border-amber-300 text-amber-700 hover:bg-amber-50 flex items-center justify-center gap-1"
-          data-testid="adm-resync-pending-btn"
-          title="Recria todas as parcelas pendentes com os valores atuais"
-        >
-          <RefreshCw className="w-4 h-4" /> <span className="hidden sm:inline">Resync pendentes</span>
-        </button>
+        {/* 2026-05-26 — Botao "Resync pendentes" foi removido. O resync
+            agora eh acionado via "Editar Empresa → Salvar → Confirmar
+            atualizar lancamentos em aberto", escopado para uma empresa
+            por vez. */}
         <button
           onClick={() => setShowForm(true)}
           className="sm:ml-auto w-full sm:w-auto px-4 py-2 bg-primary text-white rounded text-sm font-semibold flex items-center justify-center gap-1.5"
@@ -701,6 +691,12 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
   const [lateFee, setLateFee] = useState({ enabled: false, multa_pct: 2.0, juros_dia_pct: 0.033 });
   const [saving, setSaving] = useState(false);
   const [companies, setCompanies] = useState([]);
+  // 2026-05-26 — Em edicao, operador escolhe se alteracoes valem so para
+  // ESTA parcela ou para TODAS as proximas em aberto (mesma serie).
+  const [scope, setScope] = useState('this');
+  const canScopeAll = isEdit && !isReadOnly && (
+    !!initial?.recurrence_group_id || !!initial?.company_id
+  );
 
   // Load companies once when the modal opens (only needed when kind=licenca
   // & client_kind=native, but we cache eagerly — list is small).
@@ -783,9 +779,18 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
         };
       }
       if (isEdit) {
-        // Edit mode — PUT existing txn (does NOT propagate to siblings).
-        await api.put(`/super-admin/finance/transactions/${initial.id}`, payload);
-        toast.success('Lancamento atualizado');
+        // Edit mode — PUT existing txn. 2026-05-26: envia `scope` quando
+        // operador escolhe "alterar todas as proximas em aberto".
+        if (canScopeAll && scope === 'all') {
+          payload.scope = 'all';
+        }
+        const { data: out } = await api.put(`/super-admin/finance/transactions/${initial.id}`, payload);
+        const upd = out?._siblings_updated || 0;
+        if (upd > 0) {
+          toast.success(`Lancamento atualizado + ${upd} parcelas em aberto`);
+        } else {
+          toast.success('Lancamento atualizado');
+        }
       } else {
         const { data } = await api.post('/super-admin/finance/transactions', payload);
         if (data._siblings_created > 0) {
@@ -981,6 +986,24 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
           )}
         </div>
         </fieldset>
+
+        {/* 2026-05-26 — Escopo da edicao: alterar so esta parcela ou
+            propagar para todas as proximas em aberto da mesma serie. */}
+        {canScopeAll && (
+          <div className="mt-4 p-3 rounded-lg border border-indigo-200 bg-indigo-50/50" data-testid="adm-form-scope-box">
+            <p className="text-xs font-semibold text-indigo-900 mb-2">Aplicar alteracoes em:</p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <label className={`flex-1 flex items-start gap-2 p-2 rounded border cursor-pointer ${scope === 'this' ? 'border-indigo-500 bg-white' : 'border-slate-200 bg-white/60'}`} data-testid="adm-form-scope-this">
+                <input type="radio" name="scope" value="this" checked={scope === 'this'} onChange={() => setScope('this')} className="mt-0.5" />
+                <span className="text-xs text-slate-700"><strong>Somente esta parcela</strong><br/><span className="text-slate-500">Altera apenas o lancamento atual.</span></span>
+              </label>
+              <label className={`flex-1 flex items-start gap-2 p-2 rounded border cursor-pointer ${scope === 'all' ? 'border-indigo-500 bg-white' : 'border-slate-200 bg-white/60'}`} data-testid="adm-form-scope-all">
+                <input type="radio" name="scope" value="all" checked={scope === 'all'} onChange={() => setScope('all')} className="mt-0.5" />
+                <span className="text-xs text-slate-700"><strong>Esta + todas em aberto</strong><br/><span className="text-slate-500">Propaga para todas as parcelas pendentes da mesma serie. Pagas nao sao afetadas.</span></span>
+              </label>
+            </div>
+          </div>
+        )}
 
         <div className="flex gap-2 mt-5">
           <button type="button" onClick={onClose} className="flex-1 px-4 py-2 border border-slate-300 rounded text-sm font-semibold hover:bg-slate-50">

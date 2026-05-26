@@ -213,6 +213,12 @@ class CompanyUpdate(BaseModel):
     discount: Optional[float] = None  # 2026-02-18
     observation: Optional[str] = None  # 2026-02-18
     total_sale_price: Optional[float] = None  # 2026-02-18
+    # 2026-05-26 — Quando True, o backend recria as parcelas PENDENTES auto-
+    # geradas desta empresa com os novos valores (total_sale_price/discount/
+    # licenses). Quando False/ausente, edicao de empresa NAO mexe no
+    # financeiro — operador decide via UI ("Deseja atualizar lancamentos
+    # em aberto?").
+    resync_pending: Optional[bool] = None
 
 class CompanyResponse(BaseModel):
     id: str
