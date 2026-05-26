@@ -2967,6 +2967,7 @@ async def edit_outbound_message(
         raise HTTPException(400, "Mensagem ja apagada, nao pode ser editada")
     import httpx
     wa_url = await _wa_service_url()
+    wa_error = None
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.post(
@@ -2979,10 +2980,13 @@ async def edit_outbound_message(
             )
             if r.status_code >= 400:
                 _ct = r.headers.get("content-type", "")
-                detail = r.json().get("error") if _ct.startswith("application/json") else r.text
+                detail = (r.json().get("error") if _ct.startswith("application/json") else r.text)[:200]
+                # 2026-02-18 — Para EDIT, divergencia eh mais grave (texto local
+                # ≠ WhatsApp). Aqui ainda devolvemos 400 para o operador saber.
                 raise HTTPException(r.status_code, f"WhatsApp recusou edicao: {detail}")
     except httpx.RequestError as e:
-        raise HTTPException(503, f"Microservico Baileys indisponivel: {e}")
+        # Mesmo padrao do delete: o Baileys pode demorar mas concluir.
+        wa_error = f"timeout/network: {str(e)[:120]}"
     now_iso = datetime.now(timezone.utc).isoformat()
     edit_entry = {
         "previous_text": msg.get("content") or "",
@@ -2996,11 +3000,12 @@ async def edit_outbound_message(
             "$set": {
                 "messages.$.content": new_text,
                 "messages.$.edited_at": now_iso,
+                **({"messages.$.wa_edit_error": wa_error} if wa_error else {}),
             },
             "$push": {"messages.$.edit_history": edit_entry},
         },
     )
-    return {"ok": True, "message_id": message_id, "new_text": new_text}
+    return {"ok": True, "message_id": message_id, "new_text": new_text, "warning": wa_error}
 
 
 @router.post("/tickets/{ticket_id}/messages/{message_id}/delete-for-customer")
@@ -3027,6 +3032,8 @@ async def delete_outbound_message(
         return {"ok": True, "already": True}
     import httpx
     wa_url = await _wa_service_url()
+    wa_ok = False
+    wa_error = None
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.post(
@@ -3036,12 +3043,16 @@ async def delete_outbound_message(
                     "message_id": msg["wa_message_id"],
                 },
             )
-            if r.status_code >= 400:
+            wa_ok = r.status_code < 400
+            if not wa_ok:
                 _ct = r.headers.get("content-type", "")
-                detail = r.json().get("error") if _ct.startswith("application/json") else r.text
-                raise HTTPException(r.status_code, f"WhatsApp recusou exclusao: {detail}")
+                wa_error = (r.json().get("error") if _ct.startswith("application/json") else r.text)[:200]
     except httpx.RequestError as e:
-        raise HTTPException(503, f"Microservico Baileys indisponivel: {e}")
+        # 2026-02-18 — O Baileys frequentemente revoga a mensagem no WhatsApp
+        # mas demora a responder por sobrecarga, gerando timeout aqui. Nao
+        # devolvemos erro — marcamos local com flag wa_delete_error pra
+        # auditoria. Operacao concluida do ponto de vista do cliente final.
+        wa_error = f"timeout/network: {str(e)[:120]}"
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.tickets.update_one(
         {"id": ticket_id, "messages.id": message_id},
@@ -3050,7 +3061,8 @@ async def delete_outbound_message(
             "messages.$.deleted_at": now_iso,
             "messages.$.deleted_by_id": user.get("id"),
             "messages.$.deleted_by_name": user.get("name") or user.get("email") or "",
+            **({"messages.$.wa_delete_error": wa_error} if wa_error else {}),
         }},
     )
-    return {"ok": True, "message_id": message_id}
+    return {"ok": True, "message_id": message_id, "wa_ok": wa_ok, "warning": wa_error}
 

@@ -2219,15 +2219,28 @@ const MessageActionsMenu = ({ msg, ticketId, onChanged }) => {
   };
 
   const doDelete = async () => {
+    if (busy) return;
     if (!window.confirm('Apagar esta mensagem para o cliente?\n\nNo seu lado ela continua visivel com estilo "apagado". O cliente nao vera mais a mensagem no celular.')) return;
     setBusy(true);
+    setOpen(false);  // fecha menu imediatamente para evitar re-clique
     try {
-      await api.post(`/crm/tickets/${ticketId}/messages/${msg.id}/delete-for-customer`);
-      toast.success('Mensagem apagada para o cliente');
-      setOpen(false);
+      const r = await api.post(`/crm/tickets/${ticketId}/messages/${msg.id}/delete-for-customer`);
+      if (r.data?.warning) {
+        toast.warning(`Apagada (com aviso): ${r.data.warning}`);
+      } else {
+        toast.success('Mensagem apagada para o cliente');
+      }
       onChanged?.();
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Falha ao apagar');
+      // Se o backend ja marcou como apagada antes da exception (cenario raro
+      // pos-fix 2026-02-18), simplesmente recarrega — UI vai mostrar bubble
+      // riscada.
+      const detail = err?.response?.data?.detail || 'Falha ao apagar';
+      if (String(detail).toLowerCase().includes('ja apagada')) {
+        onChanged?.();
+      } else {
+        toast.error(detail);
+      }
     } finally {
       setBusy(false);
     }
