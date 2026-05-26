@@ -2749,3 +2749,10 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Frontend (AdmLancamentosPanel.js): botão "Resync pendentes" removido; filtro de data ganhou "Proximo mes" (mês seguinte ao atual); modal de edição de parcela ganhou seletor "Aplicar em: Somente esta / Esta + todas em aberto".
 - Frontend (Dashboard.js — modal Editar Empresa): após salvar com mudança financeira/descritiva, pergunta "Deseja atualizar todos os lançamentos em aberto desta empresa?". Se sim, chama resync escopado.
 - Testado via curl: scope=all propagou 2 irmãs; scope=this manteve siblings intactos; resync com company_id inexistente retornou 0/0; flow completo de criação→edit em lote→cleanup OK.
+
+## 2026-05-26 — FIX duplicate messages bug (Baileys v2.1.18) + variavel {{valor_total_liquido}}
+- **CRITICAL BUG FIX**: Mensagens enviadas pelo atendimento CRM duplicavam/triplicavam no celular do cliente (mas nao no painel do atendente). Causa raiz: auto-recovery v2.1.17 reenviava a mensagem sempre que `DELIVERY_ACK` nao chegava em 20s, mas o ACK depende do destinatario estar ONLINE. Cliente offline / sinal ruim → ACK demora minutos legitimamente → re-send disparava.
+- **Correcao** (`/app/whatsapp-service/index.js`): re-send agora eh gated por sinal REAL de falha (`messages.update` com status=0/ERROR). Ausencia de ACK apenas faz o entry decair silenciosamente apos 60s. STUCK_TIMEOUT_MS=60s (era 20s), MAX_AUTO_RETRIES=1 (era 2).
+- Microservico reiniciado em preview. Sintaxe validada via `node -c`.
+- **Variavel nova**: `{{valor_total_liquido}}` = `valor_venda_total - valor_desconto`. Disponivel no envio automatico (scheduler) e no reenvio manual SA. UI atualizada em `BillingReminderPanel.js`.
+- **ATENCAO PRODUCAO**: Para a correcao do Baileys chegar em `agentcrm.8ip.com.br`, eh preciso REDEPLOY DO MICROSERVICO NODE no Render (nao basta o git push do main backend/frontend — o whatsapp-service eh um servico separado no Render).

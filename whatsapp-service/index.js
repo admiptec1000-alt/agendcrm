@@ -208,14 +208,17 @@ const jidNeedsForceAssert = new Set();
 // DELIVERY_ACK. The customer sees a placeholder "Aguardando mensagem.
 // Essa ação pode levar alguns instantes." and the bot looks dead.
 //
-// Strategy: track every outbound msgId; if it does not reach DELIVERY_ACK
-// (status≥3) within STUCK_TIMEOUT_MS, we:
-//   1. WIPE the local Signal session record for that JID,
-//   2. Force-assert (fetches a fresh pre-key bundle from WA),
-//   3. Re-encrypt+re-send the original text.
-// Bounded retries (MAX_AUTO_RETRIES) prevent infinite loops.
-// Backend webhook is notified each time so the SA "Log de envios" reflects
-// the recovery attempts in real time.
+// 2026-05-26 (v2.1.18) — FIX duplicate-send bug. Previous version re-sent
+// the message whenever DELIVERY_ACK didn't arrive in 20s, but ACK arrival
+// depends on the *recipient* being online (WhatsApp closed/no signal →
+// ack can take minutes, legitimately). That caused duplicates/triplicates
+// observed in prod (2026-05-26 reports). The fix is to gate the re-send
+// on a REAL failure signal:
+//   • `messages.update` with status=0 (ERROR) for the wamId, OR
+//   • The watchdog `force_resend` flag was explicitly raised by the
+//     "Aguardando mensagem" backend probe (out of scope here).
+// Without any of those signals, the entry just decays silently after
+// STUCK_TIMEOUT_MS — no re-send, no duplicate.
 //
 // Standard Baileys WAMessageStatus enum (verified at runtime against
 // proto.WebMessageInfo.Status on 2026-02-18 / Baileys 6.7.21):
@@ -223,9 +226,9 @@ const jidNeedsForceAssert = new Set();
 // Anything ≥3 means the recipient device received and decrypted the
 // ciphertext — at which point we are safe and the entry is dropped.
 const pendingDeliveries = new Map(); // outbound msgId -> tracking entry
-const STUCK_TIMEOUT_MS = 20 * 1000;
-const MAX_AUTO_RETRIES = 2;
-const STUCK_CHECK_INTERVAL_MS = 5 * 1000;
+const STUCK_TIMEOUT_MS = 60 * 1000;   // 2026-05-26: was 20s, bumped to 60s
+const MAX_AUTO_RETRIES = 1;            // 2026-05-26: was 2, single retry is enough
+const STUCK_CHECK_INTERVAL_MS = 10 * 1000;  // 2026-05-26: was 5s
 const PENDING_DELIVERIES_MAX = 1000;  // cap memory
 
 function trackOutboundForRecovery(instanceId, jid, msgId, text) {
@@ -240,13 +243,26 @@ function trackOutboundForRecovery(instanceId, jid, msgId, text) {
     sentAt: Date.now(),
     retries: 0,
     msgId,
+    // 2026-05-26 — Re-send no longer fires on simple timeout. Set to true
+    // only when `messages.update` reports status=ERROR (0). See
+    // messages.update handler.
+    needsResend: false,
   });
 }
 
 setInterval(async () => {
   const now = Date.now();
   for (const [msgId, info] of pendingDeliveries.entries()) {
-    if (now - info.sentAt < STUCK_TIMEOUT_MS) continue;
+    const age = now - info.sentAt;
+    // 2026-05-26 (v2.1.18) — Decay silently after STUCK_TIMEOUT_MS unless a
+    // REAL failure signal (`needsResend=true`) raised the flag. This avoids
+    // duplicate sends caused by legit ACK delays (recipient offline / poor
+    // signal / closed WA).
+    if (age >= STUCK_TIMEOUT_MS && !info.needsResend) {
+      pendingDeliveries.delete(msgId);
+      continue;
+    }
+    if (!info.needsResend) continue;
     if (info.retries >= MAX_AUTO_RETRIES) {
       console.error(
         `[${info.instanceId}] [AUTO-RECOVERY] giving up msgId=${msgId} ` +
@@ -259,11 +275,11 @@ setInterval(async () => {
     if (!inst?.sock || inst.status !== 'connected') continue;
     info.retries += 1;
     info.sentAt = Date.now();  // delay the NEXT recovery cycle
-    const ageSec = Math.round((now - info.sentAt) / 1000);
+    info.needsResend = false;  // require new ERROR signal to retry again
     console.warn(
       `[${info.instanceId}] [AUTO-RECOVERY] msgId=${msgId} jid=${info.jid} ` +
-      `stuck >${Math.round(STUCK_TIMEOUT_MS/1000)}s; wiping session + ` +
-      `re-sending (retry #${info.retries}/${MAX_AUTO_RETRIES})`
+      `flagged ERROR; wiping session + re-sending ` +
+      `(retry #${info.retries}/${MAX_AUTO_RETRIES})`
     );
     try {
       // 1. Wipe local Signal session record for the JID.
@@ -899,6 +915,14 @@ async function createConnection(instanceId) {
           if (num === 0 /* ERROR */) {
             jidNeedsForceAssert.add(jid);
             console.warn(`[${instanceId}] [STALE FIX] flagged ${jid} for force-assert (msg status=ERROR)`);
+            // 2026-05-26 (v2.1.18) — Raise needsResend so the next recovery
+            // tick re-sends this specific msgId. Real failure signal —
+            // distinct from a slow DELIVERY_ACK (was over-triggering and
+            // causing duplicates in prod).
+            if (wamId && pendingDeliveries.has(wamId)) {
+              const entry = pendingDeliveries.get(wamId);
+              entry.needsResend = true;
+            }
           } else if (num >= 3 /* DELIVERY_ACK or higher */) {
             jidNeedsForceAssert.delete(jid);
           }
