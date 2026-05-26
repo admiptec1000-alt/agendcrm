@@ -763,7 +763,7 @@ async def adm_report_companies(
         "_id": 0, "id": 1, "name": 1, "representante": 1, "email": 1,
         "database_type": 1, "licenses": 1, "discount": 1,
         "total_sale_price": 1, "monthly_price": 1, "first_due_date": 1,
-        "status": 1,
+        "status": 1, "max_connections": 1, "max_users": 1,
     }):
         custo = 0.0
         venda = 0.0
@@ -826,6 +826,10 @@ async def adm_report_companies(
             "due_date": parcela.get("due_date") if parcela else None,
             "status": status_label,
             "days_to_due": days_to_due,
+            # 2026-02-18 — Totais de licenca por empresa, alimentam cards
+            # "Conexoes / Empresa" e "Usuarios / Empresa" no relatorio.
+            "max_connections": int(c.get("max_connections") or 0),
+            "max_users": int(c.get("max_users") or 0),
         })
 
     rows.sort(key=lambda r: (
@@ -840,6 +844,10 @@ async def adm_report_companies(
         "atrasado_count": sum(1 for r in rows if r["status"] == "atrasado"),
         "em_dia_count": sum(1 for r in rows if r["status"] == "em_dia"),
         "pago_count": sum(1 for r in rows if r["status"] == "pago"),
+        # 2026-02-18 — Totais agregados de licencas
+        "company_count": len(rows),
+        "connections_total": sum(r["max_connections"] for r in rows),
+        "users_total": sum(r["max_users"] for r in rows),
     }
     return {
         "period": period,

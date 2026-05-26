@@ -199,8 +199,11 @@ export const CompanyReportPanel = () => {
         )}
       </div>
 
-      {/* Totalizadores */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {/* Totalizadores
+          2026-02-18 — 6 cards: Custo / Venda / Lucro / Atrasados +
+          Conexoes (total/empresas) e Usuarios (total/empresas).
+          Mobile: 2 cols → tablet: 3 cols → desktop: 6 cols. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         <TotalCard label="Custo total" value={fmtBRL(totals.custo_total)} tone="slate" testid="report-total-cost" />
         <TotalCard label="Venda total" value={fmtBRL(totals.venda_total)} tone="indigo" testid="report-total-sale" />
         <TotalCard
@@ -214,6 +217,18 @@ export const CompanyReportPanel = () => {
           value={`${totals.atrasado_count || 0} empresas`}
           tone={totals.atrasado_count ? 'rose' : 'slate'}
           testid="report-total-atrasado"
+        />
+        <TotalCard
+          label="Conexoes / Empresas"
+          value={`${totals.connections_total || 0} / ${totals.company_count || 0}`}
+          tone="amber"
+          testid="report-total-connections"
+        />
+        <TotalCard
+          label="Usuarios / Empresas"
+          value={`${totals.users_total || 0} / ${totals.company_count || 0}`}
+          tone="rose"
+          testid="report-total-users"
         />
       </div>
 
@@ -327,6 +342,7 @@ const TotalCard = ({ label, value, tone = 'slate', testid }) => {
     indigo:  'bg-indigo-50 border-indigo-200 text-indigo-900',
     emerald: 'bg-emerald-50 border-emerald-200 text-emerald-900',
     rose:    'bg-rose-50 border-rose-200 text-rose-900',
+    amber:   'bg-amber-50 border-amber-200 text-amber-900',
   }[tone];
   return (
     <div className={`rounded-xl border p-3 ${toneClasses}`} data-testid={testid}>
