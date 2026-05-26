@@ -1056,58 +1056,29 @@ const AtendimentosPage = () => {
             {selectedTicket.messages?.map((msg) => {
               const isDeleted = !!msg.deleted_for_customer;
               const isEdited = !!msg.edited_at;
+              const isMine = msg.sender_type === 'agent';
+              const showActions = isMine && msg.wa_message_id && !isDeleted;
               return (
-              <div key={msg.id} className={`flex mb-3 group ${msg.sender_type === 'agent' ? 'justify-end' : 'justify-start'}`}>
+              <div key={msg.id} className={`flex mb-3 group ${isMine ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[75%] rounded-xl px-4 py-2.5 shadow-sm relative ${
                   isDeleted
                     ? 'bg-slate-100 border border-dashed border-slate-300 text-slate-400 italic rounded-tr-sm'
                     : isEdited
                       ? 'bg-amber-50 border border-amber-200 text-slate-800 rounded-tr-sm'
-                      : msg.sender_type === 'agent'
+                      : isMine
                         ? 'bg-[#D9FDD3] text-slate-800 rounded-tr-sm'
                         : 'bg-white text-slate-800 rounded-tl-sm'
                 }`}>
-                  {msg.sender_type === 'agent' && !isDeleted && (
+                  {isMine && !isDeleted && (
                     <p className="text-[10px] font-bold text-emerald-700 mb-0.5">{msg.sender_name || 'Admin'}</p>
                   )}
-                  {/* 2026-02-18 — Menu de acoes (Editar/Apagar) para mensagens
-                      enviadas pelo operador com wa_message_id (ja chegaram no
-                      WhatsApp). NAO mostra para mensagens apagadas. */}
-                  {msg.sender_type === 'agent' && msg.wa_message_id && !isDeleted && (
-                    <button
-                      type="button"
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        const choice = window.prompt(
-                          'Acao para esta mensagem:\n\n1 - Editar\n2 - Apagar para o cliente\n\nDigite 1 ou 2:'
-                        );
-                        if (choice === '1') {
-                          const newText = window.prompt('Novo texto:', msg.content || '');
-                          if (!newText || newText === msg.content) return;
-                          try {
-                            await api.post(`/tickets/${selectedTicket.id}/messages/${msg.id}/edit`, { text: newText });
-                            toast.success('Mensagem editada');
-                            loadMessages(selectedTicket.id);
-                          } catch (err) {
-                            toast.error(err?.response?.data?.detail || 'Falha ao editar');
-                          }
-                        } else if (choice === '2') {
-                          if (!window.confirm('Apagar esta mensagem para o cliente? O texto continuara visivel para voce com estilo "apagado".')) return;
-                          try {
-                            await api.post(`/tickets/${selectedTicket.id}/messages/${msg.id}/delete-for-customer`);
-                            toast.success('Mensagem apagada para o cliente');
-                            loadMessages(selectedTicket.id);
-                          } catch (err) {
-                            toast.error(err?.response?.data?.detail || 'Falha ao apagar');
-                          }
-                        }
-                      }}
-                      className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-white border border-slate-200 text-slate-500 text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity hover:bg-slate-50 flex items-center justify-center"
-                      title="Editar ou apagar mensagem"
-                      data-testid={`msg-actions-${msg.id}`}
-                    >
-                      ⋯
-                    </button>
+                  {/* 2026-02-18 — Dropdown estilo WhatsApp para Editar/Apagar */}
+                  {showActions && (
+                    <MessageActionsMenu
+                      msg={msg}
+                      ticketId={selectedTicket.id}
+                      onChanged={() => loadMessages(selectedTicket.id)}
+                    />
                   )}
                   {msg.type === 'document' && msg.attachment_kind === 'quote_pdf' && (
                     <button
@@ -2206,5 +2177,134 @@ const MergeTicketModal = ({ source, allTickets, onClose, onMerged }) => {
 };
 
 
+
+// 2026-02-18 — Dropdown estilo WhatsApp para Editar/Apagar mensagem.
+// - Botao chevron-down aparece on hover (canto sup. da bubble).
+// - Click abre menu com Editar + Apagar.
+// - Editar troca a bubble por um <textarea> inline com botoes Salvar/Cancelar.
+// - Apagar dispara confirm + chamada ao backend.
+const MessageActionsMenu = ({ msg, ticketId, onChanged }) => {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(msg.content || '');
+  const [busy, setBusy] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const doEdit = async () => {
+    const text = draft.trim();
+    if (!text || text === (msg.content || '')) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post(`/crm/tickets/${ticketId}/messages/${msg.id}/edit`, { text });
+      toast.success('Mensagem editada');
+      setEditing(false);
+      onChanged?.();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Falha ao editar');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDelete = async () => {
+    if (!window.confirm('Apagar esta mensagem para o cliente?\n\nNo seu lado ela continua visivel com estilo "apagado". O cliente nao vera mais a mensagem no celular.')) return;
+    setBusy(true);
+    try {
+      await api.post(`/crm/tickets/${ticketId}/messages/${msg.id}/delete-for-customer`);
+      toast.success('Mensagem apagada para o cliente');
+      setOpen(false);
+      onChanged?.();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Falha ao apagar');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Modo edicao: substitui o bubble por inline editor
+  if (editing) {
+    return (
+      <div className="absolute inset-0 bg-white rounded-xl border-2 border-amber-300 shadow-lg p-2 z-10" data-testid={`msg-edit-inline-${msg.id}`}>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={3}
+          autoFocus
+          className="w-full text-sm border-none focus:outline-none focus:ring-0 resize-none p-1 bg-white"
+        />
+        <div className="flex justify-end gap-1.5 mt-1">
+          <button
+            type="button"
+            onClick={() => { setDraft(msg.content || ''); setEditing(false); }}
+            className="text-xs font-semibold px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={doEdit}
+            disabled={busy}
+            className="text-xs font-semibold px-2.5 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+            data-testid={`msg-edit-save-${msg.id}`}
+          >
+            {busy ? 'Salvando...' : 'Salvar edicao'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute -top-1 -right-1" ref={menuRef}>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+        className={`w-6 h-6 rounded-full bg-white/95 border border-slate-200 text-slate-600 shadow-sm hover:bg-slate-50 flex items-center justify-center transition-opacity ${open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+        title="Acoes"
+        data-testid={`msg-actions-btn-${msg.id}`}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-7 z-20 bg-white rounded-lg shadow-xl border border-slate-200 py-1 min-w-[170px] animate-in fade-in zoom-in-95 duration-100"
+          data-testid={`msg-actions-menu-${msg.id}`}
+        >
+          <button
+            type="button"
+            onClick={() => { setOpen(false); setEditing(true); }}
+            className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-amber-50 hover:text-amber-700 flex items-center gap-2"
+            data-testid={`msg-edit-${msg.id}`}
+          >
+            <Pencil className="w-3.5 h-3.5" /> Editar mensagem
+          </button>
+          <button
+            type="button"
+            onClick={doDelete}
+            disabled={busy}
+            className="w-full text-left px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 flex items-center gap-2 disabled:opacity-50"
+            data-testid={`msg-delete-${msg.id}`}
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Apagar para o cliente
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default AtendimentosPage;
