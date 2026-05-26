@@ -1053,13 +1053,61 @@ const AtendimentosPage = () => {
               <span className="text-[10px] bg-white/90 text-slate-500 px-3 py-1 rounded-lg shadow-sm">CONVERSA</span>
             </div>
 
-            {selectedTicket.messages?.map((msg) => (
-              <div key={msg.id} className={`flex mb-3 ${msg.sender_type === 'agent' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[75%] rounded-xl px-4 py-2.5 shadow-sm ${
-                  msg.sender_type === 'agent' ? 'bg-[#D9FDD3] text-slate-800 rounded-tr-sm' : 'bg-white text-slate-800 rounded-tl-sm'
+            {selectedTicket.messages?.map((msg) => {
+              const isDeleted = !!msg.deleted_for_customer;
+              const isEdited = !!msg.edited_at;
+              return (
+              <div key={msg.id} className={`flex mb-3 group ${msg.sender_type === 'agent' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[75%] rounded-xl px-4 py-2.5 shadow-sm relative ${
+                  isDeleted
+                    ? 'bg-slate-100 border border-dashed border-slate-300 text-slate-400 italic rounded-tr-sm'
+                    : isEdited
+                      ? 'bg-amber-50 border border-amber-200 text-slate-800 rounded-tr-sm'
+                      : msg.sender_type === 'agent'
+                        ? 'bg-[#D9FDD3] text-slate-800 rounded-tr-sm'
+                        : 'bg-white text-slate-800 rounded-tl-sm'
                 }`}>
-                  {msg.sender_type === 'agent' && (
+                  {msg.sender_type === 'agent' && !isDeleted && (
                     <p className="text-[10px] font-bold text-emerald-700 mb-0.5">{msg.sender_name || 'Admin'}</p>
+                  )}
+                  {/* 2026-02-18 — Menu de acoes (Editar/Apagar) para mensagens
+                      enviadas pelo operador com wa_message_id (ja chegaram no
+                      WhatsApp). NAO mostra para mensagens apagadas. */}
+                  {msg.sender_type === 'agent' && msg.wa_message_id && !isDeleted && (
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const choice = window.prompt(
+                          'Acao para esta mensagem:\n\n1 - Editar\n2 - Apagar para o cliente\n\nDigite 1 ou 2:'
+                        );
+                        if (choice === '1') {
+                          const newText = window.prompt('Novo texto:', msg.content || '');
+                          if (!newText || newText === msg.content) return;
+                          try {
+                            await api.post(`/tickets/${selectedTicket.id}/messages/${msg.id}/edit`, { text: newText });
+                            toast.success('Mensagem editada');
+                            loadMessages(selectedTicket.id);
+                          } catch (err) {
+                            toast.error(err?.response?.data?.detail || 'Falha ao editar');
+                          }
+                        } else if (choice === '2') {
+                          if (!window.confirm('Apagar esta mensagem para o cliente? O texto continuara visivel para voce com estilo "apagado".')) return;
+                          try {
+                            await api.post(`/tickets/${selectedTicket.id}/messages/${msg.id}/delete-for-customer`);
+                            toast.success('Mensagem apagada para o cliente');
+                            loadMessages(selectedTicket.id);
+                          } catch (err) {
+                            toast.error(err?.response?.data?.detail || 'Falha ao apagar');
+                          }
+                        }
+                      }}
+                      className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-white border border-slate-200 text-slate-500 text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity hover:bg-slate-50 flex items-center justify-center"
+                      title="Editar ou apagar mensagem"
+                      data-testid={`msg-actions-${msg.id}`}
+                    >
+                      ⋯
+                    </button>
                   )}
                   {msg.type === 'document' && msg.attachment_kind === 'quote_pdf' && (
                     <button
@@ -1190,9 +1238,29 @@ const AtendimentosPage = () => {
                   {msg.delivery_status === 'failed' && msg.delivery_error && (
                     <p className="text-[9px] text-red-500 mt-0.5 italic">{msg.delivery_error}</p>
                   )}
+                  {/* 2026-02-18 — Selo "apagada" / "editada" para o operador */}
+                  {isDeleted && (
+                    <p className="text-[10px] text-slate-400 italic mt-0.5">
+                      Apagada para o cliente
+                      {msg.deleted_by_name ? ` por ${msg.deleted_by_name}` : ''}
+                    </p>
+                  )}
+                  {isEdited && !isDeleted && (
+                    <p
+                      className="text-[10px] text-amber-700 italic mt-0.5 cursor-help"
+                      title={
+                        Array.isArray(msg.edit_history) && msg.edit_history.length
+                          ? `Original: ${msg.edit_history[0].previous_text || ''}`
+                          : 'Mensagem editada'
+                      }
+                    >
+                      Editada{msg.edited_at ? ` · ${formatTime(msg.edited_at)}` : ''}
+                    </p>
+                  )}
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {(!selectedTicket.messages || selectedTicket.messages.length === 0) && (
               <div className="text-center py-12">

@@ -702,6 +702,56 @@ async def adm_finance_summary(
 
 
 # ────────────────────────────────────────────────────────────────────────
+# 2026-02-18 — Resync em batch de parcelas pendentes (refletir alteracoes
+# de total_sale_price/discount/licenses em todas as empresas existentes)
+# ────────────────────────────────────────────────────────────────────────
+@router.post("/finance/resync-pending-parcelas")
+async def adm_resync_pending_parcelas(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    """Deleta TODAS as parcelas pendentes auto-geradas e re-cria via scheduler
+    com os valores atualizados (`total_sale_price - discount`).
+
+    Use quando uma alteracao em massa de valores foi feita (ex: ajuste do
+    cadastro de varias empresas) e voce nao quer abrir cada uma manualmente.
+
+    Parcelas com status=pago sao PRESERVADAS — somente as pendentes geradas
+    automaticamente sao recriadas. Lancamentos manuais avulsos (kind=diversos)
+    tambem sao preservados.
+    """
+    # Conta antes pra logging
+    pre_count = await db.super_admin_transactions.count_documents({
+        "status": "pendente",
+        "auto_company_billing": True,
+    })
+    # Deleta pendentes auto-geradas (preservando pagas e lancamentos manuais)
+    res = await db.super_admin_transactions.delete_many({
+        "status": "pendente",
+        "auto_company_billing": True,
+    })
+    # Recria via scheduler (send_messages=False — esta operacao NAO envia
+    # mensagem, so materializa parcelas)
+    try:
+        from scheduler import _process_billing_reminders
+        await _process_billing_reminders(db, send_messages=False)
+    except Exception as e:
+        raise HTTPException(500, f"Falha ao regerar parcelas: {e}")
+    post_count = await db.super_admin_transactions.count_documents({
+        "status": "pendente",
+        "auto_company_billing": True,
+    })
+    return {
+        "ok": True,
+        "deleted": res.deleted_count,
+        "created": post_count,
+        "pre_count": pre_count,
+    }
+
+
+
+
+# ────────────────────────────────────────────────────────────────────────
 # 2026-02-18 — Relatorio Empresas (rentabilidade + status de cobranca)
 # ────────────────────────────────────────────────────────────────────────
 @router.get("/reports/companies")

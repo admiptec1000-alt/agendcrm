@@ -10,6 +10,37 @@ SaaS multi-tenant para CRM e Agendamento (mobile-first via PWA). Inclui módulos
 - Scheduler: `/app/backend/scheduler.py` — loop em background a cada 60s para reminders / surveys / bulk messages / **auto-close** / **billing reminders**
 
 
+### 2026-02-18 (RESYNC + MSG-EDIT-DELETE) — Resync de parcelas + Editar/Apagar mensagem ✅
+
+**Parte 1 — Endpoint batch para resync de parcelas pendentes:**
+- `POST /api/super-admin/finance/resync-pending-parcelas` deleta TODAS as parcelas pendentes com `auto_company_billing=true` e re-cria via `_process_billing_reminders(send_messages=False)`, refletindo os valores atuais (`total_sale_price - discount`).
+- Parcelas pagas e lancamentos manuais (`kind=diversos`) sao **preservados**.
+- Botao "Resync pendentes" no toolbar do Financeiro Adm dispara via UI com confirmacao.
+
+**Parte 2 — Editar / Apagar mensagem do WhatsApp (sem mexer no flow):**
+
+Microservico `whatsapp-service/index.js` (v2.1.19):
+- `POST /instances/{id}/edit-message` { phone, message_id, new_text } — usa `sendMessage(jid, {text, edit: msgKey})` da Baileys (protocolMessage MESSAGE_EDIT).
+- `POST /instances/{id}/delete-message` { phone, message_id } — usa `sendMessage(jid, {delete: msgKey})` (revoke-for-everyone).
+- WhatsApp impoe que **so o remetente** pode editar/apagar suas mensagens (validado no `fromMe:true` do msgKey).
+
+Backend `crm_routes.py`:
+- `POST /api/tickets/{ticket_id}/messages/{message_id}/edit` { text }
+- `POST /api/tickets/{ticket_id}/messages/{message_id}/delete-for-customer`
+- Validacoes: so `sender_type=agent` + `wa_message_id` presente + nao apagada.
+- Edit grava `edit_history[]` (preserva versoes anteriores) e atualiza `content`/`edited_at`.
+- Delete grava `deleted_for_customer=true`, `deleted_at`, `deleted_by_id/name` — texto original PRESERVADO no banco para auditoria.
+
+Frontend `AtendimentosPage.js`:
+- Bubble da mensagem do operador ganha botao **`⋯`** flutuante (aparece on hover) com 2 opcoes via prompt: **1=Editar / 2=Apagar para o cliente**.
+- **Mensagem apagada**: bubble fica cinza tracejado + label "Apagada para o cliente por {nome}" (texto NAO some, mas fica em italico).
+- **Mensagem editada**: bubble fica amarelado (bg-amber-50) + label "Editada · {hora}" com tooltip mostrando o texto original do `edit_history[0]`.
+- Cliente NAO ve mensagens apagadas e ve o texto NOVO das editadas (comportamento nativo do WhatsApp).
+
+**Para verificar em producao:** Save to GitHub + deploy do backend Emergent + Manual Deploy do whatsapp-service no Render.
+
+
+
 ### 2026-02-18 (REPORT+SIMPLIF) — Card "Custo" removido + Relatorio Empresas + Mensalidade unificada ✅
 
 **Pedido do operador:**

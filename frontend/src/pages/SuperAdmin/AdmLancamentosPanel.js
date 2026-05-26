@@ -299,6 +299,27 @@ export const AdmLancamentosPanel = () => {
         <button onClick={load} className="px-3 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 flex items-center justify-center gap-1" data-testid="adm-refresh-btn">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> <span className="hidden sm:inline">Atualizar</span>
         </button>
+        {/* 2026-02-18 — Forca resync de TODAS as parcelas pendentes auto-geradas,
+            usando os valores atuais de total_sale_price/discount/licenses das
+            empresas. Util quando o cadastro foi alterado depois das parcelas
+            ja terem sido criadas. */}
+        <button
+          onClick={async () => {
+            if (!window.confirm('Forcar resync? Todas as parcelas PENDENTES (nao pagas) auto-geradas serao recriadas com os valores atuais das empresas. Pagamentos ja registrados nao sao afetados.')) return;
+            try {
+              const r = await api.post('/super-admin/finance/resync-pending-parcelas');
+              toast.success(`Resync: ${r.data.deleted} apagadas → ${r.data.created} recriadas`);
+              load();
+            } catch (e) {
+              toast.error(e?.response?.data?.detail || 'Falha no resync');
+            }
+          }}
+          className="px-3 py-2 text-sm rounded border border-amber-300 text-amber-700 hover:bg-amber-50 flex items-center justify-center gap-1"
+          data-testid="adm-resync-pending-btn"
+          title="Recria todas as parcelas pendentes com os valores atuais"
+        >
+          <RefreshCw className="w-4 h-4" /> <span className="hidden sm:inline">Resync pendentes</span>
+        </button>
         <button
           onClick={() => setShowForm(true)}
           className="sm:ml-auto w-full sm:w-auto px-4 py-2 bg-primary text-white rounded text-sm font-semibold flex items-center justify-center gap-1.5"

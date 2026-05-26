@@ -1397,6 +1397,80 @@ app.post('/instances/:id/reset-session/:jid', async (req, res) => {
 
 
 
+// ──────────────────────────────────────────────────────────────────────
+// 2026-02-18 — Edit / Delete (revoke) message endpoints
+// ──────────────────────────────────────────────────────────────────────
+// Baileys exposes these via the 5th arg of `sendMessage`:
+//   edit:        sendMessage(jid, { text: "novo texto", edit: msgKey })
+//   delete (revoke for everyone): sendMessage(jid, { delete: msgKey })
+//
+// Body for BOTH endpoints:
+//   { phone: "5562999...", message_id: "WA-MSG-ID", from_me: true|false }
+//
+// `from_me` MUST reflect the original send direction (true if WE sent it).
+// For deletes, WhatsApp only allows the SENDER to revoke a message — so
+// you can only revoke messages WE sent (from_me=true).
+// ──────────────────────────────────────────────────────────────────────
+app.post('/instances/:id/edit-message', async (req, res) => {
+  const inst = connections[req.params.id];
+  if (!inst?.sock || inst.status !== 'connected') {
+    return res.status(404).json({ ok: false, error: 'instance not connected' });
+  }
+  const { phone, message_id, new_text } = req.body || {};
+  if (!phone || !message_id || !new_text) {
+    return res.status(400).json({ ok: false, error: 'phone, message_id and new_text required' });
+  }
+  let jid = String(phone).includes('@')
+    ? phone
+    : (String(phone).replace(/\D/g, '') + '@s.whatsapp.net');
+  // We are the sender of the message we want to edit (only OUR sends can
+  // be edited — WhatsApp enforces this server-side).
+  const msgKey = { remoteJid: jid, fromMe: true, id: message_id };
+  try {
+    const result = await inst.sock.sendMessage(jid, {
+      text: new_text,
+      edit: msgKey,
+    });
+    console.log(`[${req.params.id}] [EDIT] ${message_id} -> "${new_text.slice(0,40)}..."`);
+    return res.json({
+      ok: true,
+      message_id,
+      new_text,
+      result_id: result?.key?.id || null,
+    });
+  } catch (e) {
+    console.warn(`[${req.params.id}] edit-message failed:`, e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/instances/:id/delete-message', async (req, res) => {
+  const inst = connections[req.params.id];
+  if (!inst?.sock || inst.status !== 'connected') {
+    return res.status(404).json({ ok: false, error: 'instance not connected' });
+  }
+  const { phone, message_id } = req.body || {};
+  if (!phone || !message_id) {
+    return res.status(400).json({ ok: false, error: 'phone and message_id required' });
+  }
+  let jid = String(phone).includes('@')
+    ? phone
+    : (String(phone).replace(/\D/g, '') + '@s.whatsapp.net');
+  // Only OUR sent messages can be revoked-for-everyone. WhatsApp also has
+  // a server-enforced time window (~2h after send); past that, the recipient
+  // device may refuse to delete locally.
+  const msgKey = { remoteJid: jid, fromMe: true, id: message_id };
+  try {
+    await inst.sock.sendMessage(jid, { delete: msgKey });
+    console.log(`[${req.params.id}] [DELETE] revoked ${message_id} for ${jid}`);
+    return res.json({ ok: true, message_id });
+  } catch (e) {
+    console.warn(`[${req.params.id}] delete-message failed:`, e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
 // Send an interactive message — either buttons (≤3) or a list (sections w/ rows).
 // Baileys supports both via `templateMessage` (buttons) and `listMessage` (list).
 //

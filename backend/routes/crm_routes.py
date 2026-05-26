@@ -368,6 +368,7 @@ async def create_ticket(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     # Duplicate guard: refuse to open a second OPEN ticket for the same
+
     # phone in the same tenant unless the operator explicitly forces it.
     # The match is digits-only so "5511999..." and "(55) 11 999..." are
     # treated as the same person. Group tickets are excluded — they're
@@ -2928,3 +2929,128 @@ async def import_clients_xlsx(
         "unknown_labels_count": len(unknown_labels),
         "unknown_labels_top": [{"label": k, "count": v} for k, v in top_unknown],
     }
+
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-02-18 — Editar / Apagar mensagem ja enviada via WhatsApp
+# ──────────────────────────────────────────────────────────────────────
+async def _wa_service_url() -> str:
+    return os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+
+
+@router.post("/tickets/{ticket_id}/messages/{message_id}/edit")
+async def edit_outbound_message(
+    ticket_id: str,
+    message_id: str,
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    new_text = (payload or {}).get("text", "").strip()
+    if not new_text:
+        raise HTTPException(400, "text obrigatorio")
+    ticket = await db.tickets.find_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"_id": 0, "messages": 1, "customer_phone": 1, "connection_id": 1},
+    )
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    msg = next((m for m in (ticket.get("messages") or []) if m.get("id") == message_id), None)
+    if not msg:
+        raise HTTPException(404, "Mensagem nao encontrada")
+    if msg.get("sender_type") != "agent":
+        raise HTTPException(400, "So mensagens enviadas pelo operador podem ser editadas")
+    if not msg.get("wa_message_id"):
+        raise HTTPException(400, "Mensagem ainda nao tem ID do WhatsApp — aguarde a confirmacao do envio")
+    if msg.get("deleted_for_customer"):
+        raise HTTPException(400, "Mensagem ja apagada, nao pode ser editada")
+    import httpx
+    wa_url = await _wa_service_url()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                f"{wa_url}/instances/{ticket['connection_id']}/edit-message",
+                json={
+                    "phone": ticket["customer_phone"],
+                    "message_id": msg["wa_message_id"],
+                    "new_text": new_text,
+                },
+            )
+            if r.status_code >= 400:
+                _ct = r.headers.get("content-type", "")
+                detail = r.json().get("error") if _ct.startswith("application/json") else r.text
+                raise HTTPException(r.status_code, f"WhatsApp recusou edicao: {detail}")
+    except httpx.RequestError as e:
+        raise HTTPException(503, f"Microservico Baileys indisponivel: {e}")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    edit_entry = {
+        "previous_text": msg.get("content") or "",
+        "edited_at": now_iso,
+        "edited_by_id": user.get("id"),
+        "edited_by_name": user.get("name") or user.get("email") or "",
+    }
+    await db.tickets.update_one(
+        {"id": ticket_id, "messages.id": message_id},
+        {
+            "$set": {
+                "messages.$.content": new_text,
+                "messages.$.edited_at": now_iso,
+            },
+            "$push": {"messages.$.edit_history": edit_entry},
+        },
+    )
+    return {"ok": True, "message_id": message_id, "new_text": new_text}
+
+
+@router.post("/tickets/{ticket_id}/messages/{message_id}/delete-for-customer")
+async def delete_outbound_message(
+    ticket_id: str,
+    message_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    ticket = await db.tickets.find_one(
+        {"id": ticket_id, "company_id": user["company_id"]},
+        {"_id": 0, "messages": 1, "customer_phone": 1, "connection_id": 1},
+    )
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    msg = next((m for m in (ticket.get("messages") or []) if m.get("id") == message_id), None)
+    if not msg:
+        raise HTTPException(404, "Mensagem nao encontrada")
+    if msg.get("sender_type") != "agent":
+        raise HTTPException(400, "So mensagens enviadas pelo operador podem ser apagadas")
+    if not msg.get("wa_message_id"):
+        raise HTTPException(400, "Mensagem ainda nao tem ID do WhatsApp")
+    if msg.get("deleted_for_customer"):
+        return {"ok": True, "already": True}
+    import httpx
+    wa_url = await _wa_service_url()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                f"{wa_url}/instances/{ticket['connection_id']}/delete-message",
+                json={
+                    "phone": ticket["customer_phone"],
+                    "message_id": msg["wa_message_id"],
+                },
+            )
+            if r.status_code >= 400:
+                _ct = r.headers.get("content-type", "")
+                detail = r.json().get("error") if _ct.startswith("application/json") else r.text
+                raise HTTPException(r.status_code, f"WhatsApp recusou exclusao: {detail}")
+    except httpx.RequestError as e:
+        raise HTTPException(503, f"Microservico Baileys indisponivel: {e}")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.tickets.update_one(
+        {"id": ticket_id, "messages.id": message_id},
+        {"$set": {
+            "messages.$.deleted_for_customer": True,
+            "messages.$.deleted_at": now_iso,
+            "messages.$.deleted_by_id": user.get("id"),
+            "messages.$.deleted_by_name": user.get("name") or user.get("email") or "",
+        }},
+    )
+    return {"ok": True, "message_id": message_id}
+
