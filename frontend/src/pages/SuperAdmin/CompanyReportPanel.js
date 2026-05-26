@@ -220,13 +220,13 @@ export const CompanyReportPanel = () => {
         />
         <TotalCard
           label="Conexoes / Empresas"
-          value={`${totals.connections_total || 0} / ${totals.company_count || 0}`}
+          value={`${totals.connections_total || 0}`}
           tone="amber"
           testid="report-total-connections"
         />
         <TotalCard
-          label="Usuarios / Empresas"
-          value={`${totals.users_total || 0} / ${totals.company_count || 0}`}
+          label="Usuarios"
+          value={`${totals.users_total || 0}`}
           tone="rose"
           testid="report-total-users"
         />
