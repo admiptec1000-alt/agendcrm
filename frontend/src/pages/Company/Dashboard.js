@@ -6563,6 +6563,7 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
     professional_id: user?.professional_id || '',
     connection_ids: user?.connection_ids || [],
     allowed_queue_ids: user?.allowed_queue_ids || [],
+    view_all_kanban: !!user?.view_all_kanban,  // 2026-05-27
   });
   const [connections, setConnections] = useState([]);
   const [queues, setQueues] = useState([]);
@@ -6679,6 +6680,29 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
         <p className="text-[10px] text-slate-400 mt-1">
           O usuario vera na aba <strong>Aguardando</strong> apenas tickets em filas que ele tem acesso. Deixe em branco para visao ampla (todos os tickets sem dono).
         </p>
+      </div>
+      {/* 2026-05-27 — Toggle "Acesso a todos os Kanban". Quando ligado,
+          o usuario enxerga TODOS os tickets no Kanban (ignora filtro de
+          filas/conexoes). Util pra supervisor sem precisar do perfil
+          global `view_all_tickets`. */}
+      <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3">
+        <label className="flex items-start gap-3 cursor-pointer" data-testid="user-view-all-kanban-label">
+          <input
+            type="checkbox"
+            checked={form.view_all_kanban}
+            onChange={(e) => setForm({ ...form, view_all_kanban: e.target.checked })}
+            className="mt-0.5"
+            data-testid="user-view-all-kanban"
+          />
+          <div className="text-xs">
+            <p className="font-semibold text-indigo-900">Acesso a todos os Kanban</p>
+            <p className="text-slate-600 mt-0.5">
+              Quando habilitado, o usuario ve TODOS os tickets do Kanban
+              (ignora os filtros de filas e conexoes acima). Util para perfis
+              de supervisao. <strong>So afeta a tela de Kanban.</strong>
+            </p>
+          </div>
+        </label>
       </div>
       <div className="flex justify-end">
         <button onClick={() => form.name && form.email && onSave(form)} className="btn-primary text-sm" data-testid="save-user-btn">Salvar</button>
@@ -6955,8 +6979,11 @@ const IndoorSettingsPage = () => {
 
 const Modal = ({ title, onClose, children }) => (
   <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
-      <div className="flex items-center justify-between mb-4">
+    {/* 2026-05-27 — Adicionado max-h + overflow-y para que modais com
+        muitos campos (ex: Editar Usuario com listas de conexoes + filas
+        + novo flag view_all_kanban) nao "estourem" a tela. */}
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between mb-4 sticky top-0 bg-white pb-2 -mt-2 pt-2 z-10 border-b border-slate-100">
         <h3 className="text-xl font-page-title text-slate-900">{title}</h3>
         <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
       </div>

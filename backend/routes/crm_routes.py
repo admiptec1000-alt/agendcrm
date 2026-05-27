@@ -2388,7 +2388,13 @@ async def get_kanban_v2(
     custom_ids = {c["id"] for c in custom_cols}
 
     query = {"company_id": user["company_id"]}
-    vis = _ticket_visibility_filter(user)
+    # 2026-05-27 — `view_all_kanban` per-user flag bypasses queue/conn
+    # filtering for the Kanban view (operator-tier "supervisao" sem mexer
+    # no perfil de permissoes). Outras telas mantem o filtro normal.
+    if user.get("view_all_kanban"):
+        vis = {}
+    else:
+        vis = _ticket_visibility_filter(user)
     if vis:
         query.update(vis)
 

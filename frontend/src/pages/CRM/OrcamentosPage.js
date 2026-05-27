@@ -141,6 +141,7 @@ const ServiceModal = ({ initial, onClose, onSave }) => {
     unit: initial?.unit || 'un',
     default_price: initial?.default_price || 0,
     notes: initial?.notes || '',
+    excedente: initial?.excedente || '',  // 2026-05-27
   });
   return (
     <ModalShell title={initial?.id ? 'Editar Item' : 'Novo Item'} onClose={onClose}>
@@ -164,6 +165,16 @@ const ServiceModal = ({ initial, onClose, onSave }) => {
             <input data-testid="service-price" type="number" step="0.01" className="w-full border rounded px-3 py-2 text-sm" value={form.default_price} onChange={(e) => setForm({ ...form, default_price: parseFloat(e.target.value) || 0 })} />
           </Field>
         </div>
+        <Field label="Excedente (informativo)">
+          <input
+            data-testid="service-excedente"
+            className="w-full border rounded px-3 py-2 text-sm"
+            value={form.excedente}
+            onChange={(e) => setForm({ ...form, excedente: e.target.value })}
+            placeholder='Ex: "10% sobre a franquia" ou "R$ 0,50/kg adicional"'
+          />
+          <p className="text-[11px] text-slate-500 mt-1">Texto livre. Disponivel no template como variavel <code>{'{{excedente}}'}</code> dentro do loop de itens.</p>
+        </Field>
         <Field label="Observacao">
           <textarea data-testid="service-notes" className="w-full border rounded px-3 py-2 text-sm" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
         </Field>
@@ -291,10 +302,13 @@ const PLACEHOLDERS = [
   { group: 'Condicoes', token: '{{payment_terms}}', label: 'Prazo de pagamento (dias)' },
   { group: 'Condicoes', token: '{{payment_method}}', label: 'Forma de pagamento' },
   { group: 'Condicoes', token: '{{prazo_medio}}', label: 'Prazo medio (texto livre)' },
+  { group: 'Condicoes', token: '{{vigencia}}', label: 'Vigencia (texto livre)' },
+  { group: 'Condicoes', token: '{{frequencia}}', label: 'Frequencia (texto livre)' },
   { group: 'Vendedor', token: '{{seller_name}}', label: 'Nome do vendedor' },
   { group: 'Vendedor', token: '{{seller_contact}}', label: 'Contato do vendedor' },
+  { group: 'Vendedor', token: '{{seller_phone}}', label: 'Telefone do vendedor' },
   { group: 'Observacoes', token: '{{notes}}', label: 'Observacoes livres' },
-  { group: 'Blocos (listas)', token: '{{#items}}...{{description}} {{quantity}} {{unit_price}} {{total}}...{{/items}}', label: 'Loop de itens — repete para cada item' },
+  { group: 'Blocos (listas)', token: '{{#items}}...{{description}} {{quantity}} {{unit_price}} {{total}} {{excedente}}...{{/items}}', label: 'Loop de itens — repete para cada item (com excedente)' },
   { group: 'Blocos (listas)', token: '{{#freights}}...{{description}} {{km_total}} {{price_per_km}} {{total}}...{{/freights}}', label: 'Loop de fretes — repete para cada frete' },
 ];
 
@@ -924,11 +938,12 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
   // {{seller_contact}} template tokens.
   const fallbackSellerName = initial?.seller_name || user?.name || '';
   const fallbackSellerContact = initial?.seller_contact || user?.phone || user?.email || '';
+  const fallbackSellerPhone = initial?.seller_phone || user?.phone || '';  // 2026-05-27
   const [form, setForm] = useState({
     template_id: initial?.template_id || '',
     client_id: initial?.client_id || '',
     ticket_id: initial?.ticket_id || '',
-    items: initial?.items?.length ? initial.items.map(i => ({ description: i.description, unit: i.unit, quantity: i.quantity, unit_price: i.unit_price })) : [],
+    items: initial?.items?.length ? initial.items.map(i => ({ description: i.description, unit: i.unit, quantity: i.quantity, unit_price: i.unit_price, excedente: i.excedente || '', quote_service_id: i.quote_service_id })) : [],
     freights: initial?.freights?.length ? initial.freights.map(f => ({ description: f.description, km_total: f.km_total, price_per_km: f.price_per_km })) : [],
     minimum_billing_kg: initial?.minimum_billing_kg || '',
     payment_terms: initial?.payment_terms || '30',
@@ -936,7 +951,10 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
     average_delivery_days: initial?.average_delivery_days || '',
     seller_name: fallbackSellerName,
     seller_contact: fallbackSellerContact,
+    seller_phone: fallbackSellerPhone,  // 2026-05-27
     validity_days: initial?.validity_days || 15,
+    vigencia: initial?.vigencia || '',  // 2026-05-27
+    frequencia: initial?.frequencia || '',  // 2026-05-27
     notes: initial?.notes || '',
     status: initial?.status || 'rascunho',
   });
@@ -994,11 +1012,13 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
   const updateFreight = (idx, patch) => setForm({ ...form, freights: form.freights.map((f, i) => i === idx ? { ...f, ...patch } : f) });
   const removeFreight = (idx) => setForm({ ...form, freights: form.freights.filter((_, i) => i !== idx) });
 
-  const addBlankItem = () => setForm({ ...form, items: [...form.items, { description: '', unit: 'un', quantity: 1, unit_price: 0 }] });
+  const addBlankItem = () => setForm({ ...form, items: [...form.items, { description: '', unit: 'un', quantity: 1, unit_price: 0, excedente: '' }] });
   const addBlankFreight = () => setForm({ ...form, freights: [...form.freights, { description: '', km_total: 0, price_per_km: 0 }] });
 
   const addFromCatalog = (s) => {
-    setForm({ ...form, items: [...form.items, { description: s.description, unit: s.unit, quantity: 1, unit_price: s.default_price, quote_service_id: s.id }] });
+    // 2026-05-27 — Carrega o campo Excedente do catalogo. Operador pode
+    // sobrescrever no formulario antes de salvar.
+    setForm({ ...form, items: [...form.items, { description: s.description, unit: s.unit, quantity: 1, unit_price: s.default_price, quote_service_id: s.id, excedente: s.excedente || '' }] });
     setPickService(false);
   };
   const addFreightFromCatalog = (f) => {
@@ -1205,6 +1225,26 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
               placeholder="Ex: 5 dias úteis, 48h, conforme disponibilidade..."
               value={form.average_delivery_days}
               onChange={(e) => setForm({ ...form, average_delivery_days: e.target.value })}
+            />
+          </Field>
+          {/* 2026-05-27 — Vigencia e Frequencia (texto livre).
+              Disponiveis no template como {{vigencia}} e {{frequencia}}. */}
+          <Field label="Vigencia (placeholder {{vigencia}})">
+            <input
+              data-testid="quote-vigencia"
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="Ex: 12 meses, 01/01/2026 a 31/12/2026..."
+              value={form.vigencia}
+              onChange={(e) => setForm({ ...form, vigencia: e.target.value })}
+            />
+          </Field>
+          <Field label="Frequencia (placeholder {{frequencia}})">
+            <input
+              data-testid="quote-frequencia"
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="Ex: Mensal, Semanal, Sob demanda..."
+              value={form.frequencia}
+              onChange={(e) => setForm({ ...form, frequencia: e.target.value })}
             />
           </Field>
           {/* Vendedor: nome e contato saem AUTOMATICAMENTE do usuario logado

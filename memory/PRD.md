@@ -2762,3 +2762,17 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - **Tabela do Financeiro Admin (`AdmLancamentosPanel.js`)**: celula VALOR agora exibe `Liquido` (verde) quando ha desconto e `Devido` (vermelho/bold) quando ha juros — antes mostrava apenas `Devido` quando atrasado.
 - **Modal "Dar baixa"**: ganhou linha `Valor liquido` em destaque entre `Desconto` e `Acrescimo (multa + juros)`. `Total devido` renomeado para `Valor devido`. Visualizacao validada via screenshot (R$ 200 - R$ 10 = R$ 190 liquido + R$ 16,78 acrescimo = R$ 206,78 devido).
 - `BillingReminderPanel.js`: legenda de variaveis adicionou `{{valor_liquido}}` e `{{valor_acrescimo}}`.
+
+## 2026-05-27 — Batch 1 + Batch 2 (Orcamentos + Usuarios)
+**Batch 1 — Orcamentos:**
+- Cadastro de Item ganhou campo `Excedente` (texto livre, informativo). Snapshot vai pro QuoteItem ao adicionar do catalogo (operador pode sobrescrever).
+- Variavel `{{excedente}}` disponivel no loop `{{#items}}...{{/items}}` do template.
+- Variavel `{{seller_phone}}` (telefone do vendedor, fallback do user logado).
+- Form de orcamento ganhou campos `Vigencia` e `Frequencia` (texto livre). Variaveis `{{vigencia}}` e `{{frequencia}}` no template.
+- Lista de placeholders atualizada na UI (`OrcamentosPage.js`).
+
+**Batch 2 — Usuarios:**
+- Modal "Editar Usuario" ganhou `max-h-[90vh] overflow-y-auto` + header sticky (resolveu o "estourando" da tela).
+- Novo flag por usuario: `view_all_kanban: bool` (CompanyUser model). Toggle "Acesso a todos os Kanban" no form de usuario, descricao destacada em indigo.
+- Backend (`/api/crm/kanban-v2`) respeita o flag: quando True, ignora `_ticket_visibility_filter` (allowed_queue_ids / connection_ids) somente para o Kanban — outras telas (Aguardando/Atendimento) mantem filtro normal.
+- Validado via curl: PUT view_all_kanban=true → True; PUT false → False.

@@ -114,6 +114,9 @@ class QuoteServiceCreate(BaseModel):
     unit: Optional[str] = "un"          # kg, ton, l, un, m³, etc
     default_price: Optional[float] = 0.0
     notes: Optional[str] = None
+    # 2026-05-27 — Campo informativo livre exposto como {{excedente}} no loop
+    # de itens. Util para informar excedente/franquia por item.
+    excedente: Optional[str] = None
 
 
 class QuoteServiceUpdate(BaseModel):
@@ -122,6 +125,7 @@ class QuoteServiceUpdate(BaseModel):
     default_price: Optional[float] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
+    excedente: Optional[str] = None
 
 
 class QuoteFreightCreate(BaseModel):
@@ -177,6 +181,9 @@ class QuoteItemIn(BaseModel):
     quantity: float = 1.0
     unit_price: float = 0.0
     quote_service_id: Optional[str] = None  # reference, kept for analytics
+    # 2026-05-27 — Snapshot do excedente cadastrado no catalogo. Pode ser
+    # sobrescrito por orcamento. Exposto como {{excedente}} no loop.
+    excedente: Optional[str] = None
 
 
 class QuoteFreightIn(BaseModel):
@@ -198,7 +205,12 @@ class QuoteCreate(BaseModel):
     average_delivery_days: Optional[str] = None  # ex: "5 dias úteis" — placeholder {{prazo_medio}}
     seller_name: Optional[str] = None
     seller_contact: Optional[str] = None
+    # 2026-05-27 — Telefone do vendedor exposto como {{seller_phone}}.
+    seller_phone: Optional[str] = None
     validity_days: int = 15
+    # 2026-05-27 — Texto livre. Exposto como {{vigencia}} e {{frequencia}}.
+    vigencia: Optional[str] = None
+    frequencia: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -211,7 +223,10 @@ class QuoteUpdate(BaseModel):
     average_delivery_days: Optional[str] = None
     seller_name: Optional[str] = None
     seller_contact: Optional[str] = None
+    seller_phone: Optional[str] = None  # 2026-05-27
     validity_days: Optional[int] = None
+    vigencia: Optional[str] = None  # 2026-05-27
+    frequencia: Optional[str] = None  # 2026-05-27
     notes: Optional[str] = None
     status: Optional[str] = None  # rascunho | enviado | aceito | recusado
 
@@ -934,6 +949,18 @@ async def create_quote(data: QuoteCreate, user=Depends(get_current_user), db: As
 
     items = [i.model_dump() for i in data.items]
     freights = [f.model_dump() for f in data.freights]
+    # 2026-05-27 — Auto-popula `excedente` a partir do catalogo `quote_services`
+    # quando a linha tem quote_service_id mas operador nao sobrescreveu.
+    svc_ids = [i.get("quote_service_id") for i in items if i.get("quote_service_id")]
+    if svc_ids:
+        svc_docs = await db.quote_services.find(
+            {"company_id": company_id, "id": {"$in": svc_ids}},
+            {"_id": 0, "id": 1, "excedente": 1},
+        ).to_list(1000)
+        svc_map = {s["id"]: (s.get("excedente") or "") for s in svc_docs}
+        for it in items:
+            if not (it.get("excedente") or "").strip():
+                it["excedente"] = svc_map.get(it.get("quote_service_id"), "")
     items_out, freights_out, total = _compute_totals(items, freights)
 
     doc = {
@@ -954,7 +981,14 @@ async def create_quote(data: QuoteCreate, user=Depends(get_current_user), db: As
         "average_delivery_days": data.average_delivery_days,
         "seller_name": data.seller_name or user.get("name"),
         "seller_contact": data.seller_contact,
+        # 2026-05-27 — telefone do vendedor exposto como {{seller_phone}}.
+        # Fallback: telefone do user logado (campo `phone`) quando o frontend
+        # nao envia explicitamente.
+        "seller_phone": data.seller_phone or user.get("phone") or "",
         "validity_days": data.validity_days or 15,
+        # 2026-05-27 — Texto livre exibido como {{vigencia}} e {{frequencia}}.
+        "vigencia": data.vigencia or "",
+        "frequencia": data.frequencia or "",
         "notes": data.notes,
         "status": "rascunho",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1280,6 +1314,10 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
         "PRAZO_MEDIO": quote.get("average_delivery_days") or "",
         "seller_name": quote.get("seller_name") or "",
         "seller_contact": quote.get("seller_contact") or "",
+        # 2026-05-27 — Telefone do vendedor + Vigencia + Frequencia.
+        "seller_phone": quote.get("seller_phone") or "",
+        "vigencia": quote.get("vigencia") or "",
+        "frequencia": quote.get("frequencia") or "",
         "validity_days": quote.get("validity_days") or 15,
         "notes": quote.get("notes") or "",
         "data_emissao": datetime.fromisoformat(quote["created_at"].replace("Z", "+00:00")).strftime("%d/%m/%Y") if quote.get("created_at") else "",

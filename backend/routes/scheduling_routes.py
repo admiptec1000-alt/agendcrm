@@ -1254,6 +1254,10 @@ class CompanyUserCreate(BaseModel):
     professional_id: Optional[str] = None
     connection_ids: List[str] = []  # WhatsApp connections this user can act on
     allowed_queue_ids: List[str] = []  # filas que o usuario pode visualizar/atender
+    # 2026-05-27 — Quando True, o usuario enxerga TODOS os tickets do
+    # Kanban (ignora allowed_queue_ids/connection_ids) sem precisar do
+    # perfil global `view_all_tickets`. Aplicado apenas em /kanban-v2.
+    view_all_kanban: bool = False
 
 class CompanyUserUpdate(BaseModel):
     name: Optional[str] = None
@@ -1263,6 +1267,7 @@ class CompanyUserUpdate(BaseModel):
     professional_id: Optional[str] = None
     connection_ids: Optional[List[str]] = None
     allowed_queue_ids: Optional[List[str]] = None
+    view_all_kanban: Optional[bool] = None  # 2026-05-27
 
 @router.get("/company-users")
 async def list_company_users(
@@ -1296,6 +1301,7 @@ async def create_company_user(
         "professional_id": data.professional_id,
         "connection_ids": data.connection_ids or [],
         "allowed_queue_ids": data.allowed_queue_ids or [],
+        "view_all_kanban": bool(data.view_all_kanban),  # 2026-05-27
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.company_users.insert_one(new_user)
