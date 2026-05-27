@@ -145,8 +145,8 @@ const SuspensionModal = ({ professional, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
-      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="suspension-modal">
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[90vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="suspension-modal">
         <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white">
           <div>
             <h3 className="text-xl font-page-title">Suspender Agenda</h3>
@@ -445,8 +445,8 @@ const ProfessionalModal = ({ professional, onClose, onSave }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10">
           <h3 className="text-xl font-page-title">{isEditing ? 'Editar Profissional' : 'Novo Profissional'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
@@ -759,8 +759,8 @@ const ServiceModal = ({ service, categories, allServices, onClose, onSave }) => 
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white z-10">
           <h3 className="text-xl font-page-title">{isEditing ? 'Editar Servico' : 'Novo Servico'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
@@ -1113,8 +1113,8 @@ const PlanoModal = ({ plan, services, onClose, onSave }) => {
   }));
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
-      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()} data-testid="plan-modal">
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="plan-modal">
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
           <h3 className="text-xl font-page-title">{plan ? 'Editar Plano' : 'Novo Plano'}</h3>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>

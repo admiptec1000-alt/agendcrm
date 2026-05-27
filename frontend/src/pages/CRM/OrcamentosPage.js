@@ -349,6 +349,35 @@ const buildQuillImageHandler = () => function () {
   input.click();
 };
 
+// 2026-05-27 — Editor HTML "source" colapsavel: permite ao power-user
+// inserir/editar tabelas, colunas, classes, atributos que a toolbar do
+// Quill nao expoe. Tudo que digitar aqui sobrescreve o HTML do Quill.
+const HtmlSourceToggle = ({ html, onChange, testId }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="text-[11px] text-emerald-700 hover:text-emerald-900 underline"
+        data-testid={`${testId}-toggle`}
+      >
+        {open ? 'Esconder HTML' : 'Editar HTML (avancado)'}
+      </button>
+      {open && (
+        <textarea
+          value={html}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full mt-1 font-mono text-[11px] border border-slate-300 rounded p-2"
+          style={{ minHeight: 180 }}
+          data-testid={testId}
+          spellCheck={false}
+        />
+      )}
+    </div>
+  );
+};
+
 const TemplateMultiTabEditor = ({ editing, setEditing }) => {
   const [tab, setTab] = useState('content');
   const [a4Open, setA4Open] = useState(false);
@@ -551,14 +580,28 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
               </div>
             )}
             <div className="border rounded bg-white">
+              {/* 2026-05-27 — height fixo + .ql-editor scroll proprio
+                  evita o "jump to top" relatado pelo operador. Antes o
+                  modal externo (`max-h overflow-y-auto`) competia com o
+                  Quill pelo scroll e quando o caret saia da area visivel
+                  o modal pulava de volta pro topo do template. */}
               <ReactQuill
                 theme="snow"
                 value={editing?.[field] || ''}
                 onChange={(html) => setEditing(prev => ({ ...prev, [field]: html }))}
                 modules={quillModules}
-                style={{ minHeight: `${heights[t.key]}px` }}
+                style={{ height: `${heights[t.key]}px` }}
+                className="quill-bounded"
               />
             </div>
+            {/* 2026-05-27 — Edicao livre HTML (botao toggle). Power-user
+                pode adicionar COLUNAS em tabelas / atributos / classes
+                que a toolbar Quill nao expoe. */}
+            <HtmlSourceToggle
+              html={editing?.[field] || ''}
+              onChange={(html) => setEditing(prev => ({ ...prev, [field]: html }))}
+              testId={`template-${t.key}-html`}
+            />
           </div>
         );
       })}
@@ -576,7 +619,7 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
         >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-[860px] max-h-[92vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
               <div>
@@ -1497,10 +1540,10 @@ const TemplatePicker = ({ templates, value, onChange }) => {
 
 const ModalShell = ({ title, children, onClose, large }) => {
   return createPortal(
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className={`bg-white rounded-lg shadow-xl w-full ${large ? 'max-w-4xl' : 'max-w-lg'} my-4 max-h-[95vh] sm:max-h-[90vh] flex flex-col`}
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
         data-testid="modal-shell"
       >
         <div className="flex justify-between items-center px-4 py-3 border-b flex-shrink-0">

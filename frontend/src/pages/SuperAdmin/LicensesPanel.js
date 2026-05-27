@@ -175,8 +175,8 @@ const LicenseFormModal = ({ initial, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg" onClick={e => e.stopPropagation()} data-testid="license-form-modal">
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="license-form-modal">
         <div className="flex items-center justify-between p-5 border-b border-slate-200">
           <h2 className="text-lg font-bold font-heading text-slate-900">{isEdit ? 'Editar Licenca' : 'Nova Licenca'}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>

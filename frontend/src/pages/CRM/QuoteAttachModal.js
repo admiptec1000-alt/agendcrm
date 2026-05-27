@@ -116,10 +116,10 @@ const QuoteAttachModal = ({ ticket, connections, onClose, onSent, initialQuoteId
   };
 
   return createPortal(
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-3" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-3" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
         data-testid="quote-attach-modal"
       >
         <div className="flex justify-between items-center px-4 py-3 border-b">

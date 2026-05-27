@@ -2788,3 +2788,8 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Resultado em preview: aguardando 153ms, atendendo 205ms, kanban-v2 144ms (84KB).
 
 **ATENCAO PRODUCAO**: Mudancas no microservico Baileys (v2.1.19) requerem REDEPLOY DO whatsapp-service no Render alem do backend/frontend.
+
+## 2026-05-27 (PM2) — UX critical fixes: modais + CPF mascara + editor de template
+- **Bug "modal fechando ao clicar em campo"** (afetava todas as telas com `<div class="fixed inset-0..." onClick={onClose}>`): substituido por `onMouseDown={(e) => e.target === e.currentTarget && onClose()}` + `onMouseDown={e => e.stopPropagation()}` no inner. Aplicado bulk em 15 arquivos / 35 modais (AIPage, FlowBuilderPage, CampaignsPage, WhatsAppConnectionsPage, OrcamentosPage, SGPGatewayPage, AtendimentosPage, QuoteAttachModal, LicensesPanel, SA Dashboard, AdmLancamentosPanel, BookingPage, Company Dashboard, SchedulingPages, AgendaProPage). Validado via Playwright: clique na borda do overlay nao fecha mais o modal.
+- **CPF/CNPJ sem mascara no "Editar via contato"**: agora aplica `formatCPF/formatCNPJ` no onChange (mesma logica do ClientForm). Telefone tambem mascarado `(00) 00000-0000`. Validado: CPF `12345678901` -> `123.456.789-01`, CNPJ `12345678000199` -> `12.345.678/0001-99`.
+- **Editor de templates "jump to top"**: ReactQuill com altura FIXA + scroll interno (`.quill-bounded .ql-editor { height:100%; overflow-y:auto }`) — antes o modal externo competia pelo scroll quando o caret saia da viewport. Adicionado tambem botao "Editar HTML (avancado)" abaixo de cada campo (content/header/footer) para o power-user adicionar/editar TABELAS, COLUNAS, classes que a toolbar do Quill nao expoe.

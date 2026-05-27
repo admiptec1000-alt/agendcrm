@@ -817,9 +817,9 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-2 sm:p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-2 sm:p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <form
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
         className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-4 sm:p-6 my-4 sm:my-8"
         data-testid="adm-txn-form-modal"
@@ -1217,7 +1217,7 @@ const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
     >
       <div
         className="bg-white rounded-2xl shadow-2xl w-full max-w-md my-4 sm:my-8"
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
         data-testid="pay-txn-modal"
       >
         <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-200">
@@ -1350,10 +1350,10 @@ const ReminderHistoryModal = ({ txn, onClose, onResend }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl my-4 sm:my-8"
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
         data-testid="reminder-history-modal"
       >
         <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200">

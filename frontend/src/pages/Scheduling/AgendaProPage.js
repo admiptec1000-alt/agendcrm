@@ -567,8 +567,8 @@ const QuickBookModal = ({ initial, professionals, services, onClose, onSaved }) 
   const isBlocking = mode === 'block' || apt.is_block;
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={onClose}>
-      <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-xl shadow-2xl" onClick={e => e.stopPropagation()} data-testid="agendapro-modal">
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-xl shadow-2xl" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="agendapro-modal">
         <div className="flex items-center justify-between p-4 border-b border-slate-200">
           <h3 className="font-bold text-slate-900 flex items-center gap-2">
             {isBlocking ? <Lock className="w-4 h-4 text-slate-500" /> : <Calendar className="w-4 h-4 text-blue-500" />}

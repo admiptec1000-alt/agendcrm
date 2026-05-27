@@ -602,7 +602,7 @@ const MobileMenuSheet = ({ menuGroups, activePage, onPick, onClose, onLogout }) 
     >
       <div
         className="w-full bg-white rounded-t-3xl max-h-[90vh] overflow-hidden flex flex-col animate-slide-up"
-        onClick={e => e.stopPropagation()}
+        onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
       >
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
           <div>
@@ -2398,7 +2398,7 @@ const AgendaPage = () => {
       {/* Conclude Payment Modal */}
       {concludeApt && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center" onClick={() => setConcludeApt(null)}>
-          <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl" onClick={e => e.stopPropagation()} data-testid="conclude-modal">
+          <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="conclude-modal">
             <div className="p-5 border-b border-slate-100">
               <h3 className="text-xl font-page-title">Concluir Atendimento</h3>
               <p className="text-xs text-slate-500 mt-0.5">{concludeApt.customer_name} &middot; {concludeApt.service_name}</p>
@@ -2589,10 +2589,10 @@ const NewAppointmentModal = ({ services, professionals, onClose, onSave }) => {
     ) && book.service_id && book.professional_id && book.date && book.time;
 
   return createPortal(
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className="bg-white w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-hidden flex flex-col"
-        onClick={e => e.stopPropagation()}
+        onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
         data-testid="new-appointment-modal"
       >
         <div className="p-5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
@@ -2912,8 +2912,8 @@ const EditAppointmentModal = ({ appointment, services, canEditPrice, onClose, on
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
-      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="edit-appointment-modal">
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="edit-appointment-modal">
         <div className="flex items-center justify-between p-4 border-b border-slate-100 sticky top-0 bg-white">
           <div>
             <h3 className="text-xl font-page-title">Editar Agendamento</h3>
@@ -3232,7 +3232,7 @@ const MessageSchedulingPage = () => {
 
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-5 border-b border-slate-200">
               <h3 className="text-xl font-page-title">Agendar Mensagem</h3>
               <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
@@ -3701,8 +3701,8 @@ const ConnectionFlowModal = React.memo(({ conn, onClose, onSaved }) => {
     } finally { setSaving(false); }
   };
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose} data-testid="connection-flow-modal">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()} data-testid="connection-flow-modal">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold font-heading flex items-center gap-2">
             <GitBranch className="w-5 h-5 text-blue-500" /> Fluxo automatico
@@ -3907,7 +3907,7 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
 
       {showImport && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={() => setShowImport(false)} data-testid={`import-modal-${conn.id}`}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md my-8" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md my-8" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <h3 className="text-base font-bold">Importar Contatos do WhatsApp</h3>
               <button onClick={() => setShowImport(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -4543,8 +4543,8 @@ const PaymentMethodModal = ({ method, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()} data-testid="payment-method-modal">
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="payment-method-modal">
         <div className="flex items-center justify-between p-4 border-b border-slate-200">
           <h3 className="text-base font-bold">{method ? 'Editar' : 'Nova'} Forma de Pagamento</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -4825,7 +4825,7 @@ const LancamentosView = ({ startDate, endDate, filterMethod, fees, onChanged }) 
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={() => setShowModal(false)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <h3 className="text-base font-bold text-slate-900">{editing ? 'Editar' : 'Novo'} Lancamento</h3>
               <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -6977,20 +6977,31 @@ const IndoorSettingsPage = () => {
   );
 };
 
-const Modal = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-    {/* 2026-05-27 — Adicionado max-h + overflow-y para que modais com
-        muitos campos (ex: Editar Usuario com listas de conexoes + filas
-        + novo flag view_all_kanban) nao "estourem" a tela. */}
-    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-      <div className="flex items-center justify-between mb-4 sticky top-0 bg-white pb-2 -mt-2 pt-2 z-10 border-b border-slate-100">
-        <h3 className="text-xl font-page-title text-slate-900">{title}</h3>
-        <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+const Modal = ({ title, onClose, children }) => {
+  // 2026-05-27 — Substituido `onClick={onClose}` pelo padrao
+  // `onMouseDown` + target check. O onClick fecha o modal quando o
+  // usuario clica/arrasta texto dentro de inputs e o mouseup termina
+  // fora do conteudo (selecao de texto) — comportamento reportado pelo
+  // operador. mousedown EM CIMA do overlay so eh possivel se o cursor
+  // comeca fora do modal, eliminando o falso positivo.
+  const handleOverlayMouseDown = (e) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+  return (
+    <div
+      className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      onMouseDown={handleOverlayMouseDown}
+    >
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 sticky top-0 bg-white pb-2 -mt-2 pt-2 z-10 border-b border-slate-100">
+          <h3 className="text-xl font-page-title text-slate-900">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+        {children}
       </div>
-      {children}
     </div>
-  </div>
-);
+  );
+};
 
 const TicketModal = ({ onClose, onSave }) => {
   const [form, setForm] = useState({ customer_name: '', customer_phone: '', description: '', priority: 'medium', channel: 'whatsapp' });

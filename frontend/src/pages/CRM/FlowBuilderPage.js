@@ -648,8 +648,8 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, o
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md max-h-[95vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md max-h-[95vh] overflow-hidden flex flex-col" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="p-4 border-b border-slate-200 flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white" style={{ background: cfg?.color }}>
             <Icon className="w-5 h-5" />

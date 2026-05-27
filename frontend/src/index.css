@@ -146,3 +146,26 @@ h1, h2, h3, h4, h5, h6 {
   animation: slideUp 0.25s ease-out;
 }
 
+
+
+/* 2026-05-27 — ReactQuill com altura fixa e scroll interno na area de
+   edicao. Sem isso o Quill se expande infinitamente e quando o caret
+   sai da viewport o modal externo (max-h-90vh overflow-y-auto) compete
+   pelo scroll, causando o "jump to top" reportado no editor de templates
+   de orcamento. */
+.quill-bounded {
+  display: flex;
+  flex-direction: column;
+}
+.quill-bounded .ql-toolbar {
+  flex-shrink: 0;
+}
+.quill-bounded .ql-container {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.quill-bounded .ql-editor {
+  height: 100%;
+  overflow-y: auto;
+}

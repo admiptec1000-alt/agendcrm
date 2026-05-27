@@ -862,8 +862,8 @@ const PlanModal = ({ initial, onClose, onSave }) => {
     }));
   };
   return (
-    <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} data-testid="plan-modal">
+    <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} data-testid="plan-modal">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h3 className="text-lg font-bold text-slate-900">{initial ? 'Editar Plano' : 'Novo Plano'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -1087,8 +1087,8 @@ const PartnerEditModal = ({ partner, onClose, onSave }) => {
   const [recurring, setRecurring] = useState(partner.partner_recurring !== false);
   const [notes, setNotes] = useState(partner.partner_notes || '');
   return (
-    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()} data-testid="partner-edit-modal">
+    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl w-full max-w-sm p-5" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="partner-edit-modal">
         <h3 className="font-bold text-slate-800 mb-3">Comissao de {partner.name}</h3>
         <label className="text-[10px] uppercase font-bold text-slate-400">% de comissao</label>
         <input value={pct} onChange={e => setPct(e.target.value)} type="number" step="0.01" min="0" max="100" className="w-full px-3 py-2 border border-slate-300 rounded text-sm mb-3" data-testid="partner-pct-input" />
@@ -1403,8 +1403,8 @@ const ExpenseModal = ({ expense, onClose, onSaved }) => {
     finally { setSaving(false); }
   };
   return (
-    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()} data-testid="expense-modal">
+    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl w-full max-w-md p-5" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="expense-modal">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-bold text-slate-800">{expense ? 'Editar Despesa' : 'Nova Despesa'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4 text-slate-500" /></button>
@@ -1811,8 +1811,8 @@ const ExternalClientModal = ({ client, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()} data-testid="external-modal">
+    <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} data-testid="external-modal">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h3 className="text-lg font-bold">{client ? 'Editar' : 'Novo'} Cliente Externo</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -1873,8 +1873,8 @@ const NewInvoiceModal = ({ companies, externals, onClose, onSaved }) => {
     } catch (e) { toast.error(e.response?.data?.detail || 'Erro ao criar fatura'); }
   };
   return (
-    <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()} data-testid="new-invoice-modal">
+    <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} data-testid="new-invoice-modal">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h3 className="text-lg font-bold">Nova Fatura Manual</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -2269,7 +2269,7 @@ const CompanyIndoorRow = ({ company, expanded, onToggle }) => {
             href={`${origin}/${slug}/indoor`}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
             className="text-xs text-primary hover:underline flex items-center gap-1"
           >
             <ExternalLink className="w-3 h-3" /> Abrir
@@ -2565,8 +2565,8 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
   const superAdminFeatures = allFeatures.filter(f => f.category === 'Super Admin');
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[96vh] sm:max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[96vh] sm:max-h-[90vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
           <h2 className="text-lg sm:text-xl font-bold font-heading text-slate-900">
             {isEditing ? 'Editar Empresa' : 'Nova Empresa'}
@@ -3031,8 +3031,8 @@ const BusinessTypeModal = ({ businessType, allFeatures, onClose, onSave }) => {
   const superAdminFeatures = effectiveFeatures.filter(f => f.category === 'Super Admin');
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
           <h2 className="text-xl font-bold font-heading text-slate-900">
             {isEditing ? 'Editar Tipo de Negocio' : 'Novo Tipo de Negocio'}

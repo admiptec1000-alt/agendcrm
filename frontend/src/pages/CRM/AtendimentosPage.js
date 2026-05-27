@@ -48,7 +48,7 @@ const KanbanColumnPicker = ({ ticket, columns, onChange }) => {
     <span
       className="relative inline-flex items-center"
       data-testid={`kanban-picker-${ticket.id}`}
-      onClick={e => e.stopPropagation()}
+      onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
     >
       <span
         className="text-[9px] px-1.5 py-0.5 rounded font-bold truncate max-w-[110px]"
@@ -60,7 +60,7 @@ const KanbanColumnPicker = ({ ticket, columns, onChange }) => {
       <select
         value={ticket.kanban_column_id || ''}
         onChange={e => onChange(e.target.value || null)}
-        onClick={e => e.stopPropagation()}
+        onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
         className="absolute inset-0 opacity-0 cursor-pointer"
         aria-label="Etapa do Kanban"
         data-testid={`kanban-select-${ticket.id}`}
@@ -1531,8 +1531,8 @@ const NewTicketModal = ({ onClose, onSave }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold font-heading text-slate-900">Novo Atendimento</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
@@ -1675,8 +1675,8 @@ const TransferTicketModal = ({ ticket, users, queues, onClose, onTransferred }) 
     } finally { setBusy(false); }
   };
   return (
-    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()} data-testid="transfer-ticket-modal">
+    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl w-full max-w-md p-5" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} data-testid="transfer-ticket-modal">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-bold text-slate-800">Transferir Atendimento</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4 text-slate-500" /></button>
@@ -1742,6 +1742,14 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
     const d = (v || '').replace(/\D/g, '').slice(0, 8);
     return d.length <= 5 ? d : `${d.slice(0, 5)}-${d.slice(5)}`;
   };
+  // 2026-05-27 — Mascara de telefone (mesma logica do ClientForm).
+  const formatPhone = (v) => {
+    const d = (v || '').replace(/\D/g, '').slice(0, 11);
+    if (d.length <= 2) return d;
+    if (d.length <= 7) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+    if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  };
   const formatCPF = (v) => {
     const d = (v || '').replace(/\D/g, '').slice(0, 11);
     if (d.length <= 3) return d;
@@ -1802,9 +1810,16 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
     } finally { setSaving(false); }
   };
 
+  // 2026-05-27 — onMouseDown + target check (mesma estrategia do Modal
+  // do Dashboard). Evita fechar quando operador arrasta para selecionar
+  // texto dentro de inputs.
+  const handleOverlayMouseDown = (e) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="edit-contact-modal">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-5 my-8" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onMouseDown={handleOverlayMouseDown} data-testid="edit-contact-modal">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-5 my-8" onMouseDown={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-lg font-bold font-heading text-slate-900">Cadastro do Cliente</h3>
@@ -1868,15 +1883,22 @@ const EditContactModal = ({ ticket, onClose, onSave }) => {
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="text-[10px] font-bold uppercase text-slate-400">Telefone</label>
-                  <input value={client?.phone || ''} onChange={e => set({ phone: e.target.value })} className="input-field w-full" data-testid="contact-phone" />
+                  <input value={client?.phone || ''} onChange={e => set({ phone: formatPhone(e.target.value) })} className="input-field w-full" data-testid="contact-phone" placeholder="(00) 00000-0000" />
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase text-slate-400">{client?.person_type === 'juridica' ? 'CNPJ' : 'CPF'}</label>
                   <input
                     value={client?.person_type === 'juridica' ? (client?.cnpj || '') : (client?.cpf || '')}
-                    onChange={e => set(client?.person_type === 'juridica' ? { cnpj: e.target.value } : { cpf: e.target.value })}
+                    onChange={e => {
+                      // 2026-05-27 — Aplica a mesma mascara do cadastro
+                      // Cliente/Lead (formatCPF/formatCNPJ ja definidos).
+                      const isJur = client?.person_type === 'juridica';
+                      const formatted = isJur ? formatCNPJ(e.target.value) : formatCPF(e.target.value);
+                      set(isJur ? { cnpj: formatted } : { cpf: formatted });
+                    }}
                     className="input-field w-full"
                     data-testid="contact-doc"
+                    placeholder={client?.person_type === 'juridica' ? '00.000.000/0000-00' : '000.000.000-00'}
                   />
                 </div>
               </div>
@@ -2050,8 +2072,8 @@ const ScheduleMessageModal = ({ recipient, onClose, onSave }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose} data-testid="schedule-modal">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()} data-testid="schedule-modal">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 my-8" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <h3 className="text-lg font-bold font-heading text-slate-900 flex items-center gap-2">
             <CalendarClock className="w-5 h-5 text-primary" /> Agendar Mensagem
@@ -2129,8 +2151,8 @@ const MergeTicketModal = ({ source, allTickets, onClose, onMerged }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-start justify-center p-4 overflow-y-auto" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl my-8 flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()} data-testid="merge-ticket-modal">
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-start justify-center p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl my-8 flex flex-col max-h-[85vh]" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} data-testid="merge-ticket-modal">
         <div className="flex justify-between items-center px-4 py-3 border-b">
           <div>
             <h2 className="font-semibold text-slate-800">Mesclar atendimento</h2>

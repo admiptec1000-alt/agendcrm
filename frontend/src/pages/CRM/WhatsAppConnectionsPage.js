@@ -244,8 +244,8 @@ const ConnectionModal = ({ initial, flows, queues = [], onClose, onSave }) => {
     setQueueIds(prev => prev.includes(qid) ? prev.filter(x => x !== qid) : [...prev, qid]);
   };
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold font-heading" data-testid="connection-modal-title">{isEdit ? 'Editar Conexao' : 'Nova Conexao'}</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>

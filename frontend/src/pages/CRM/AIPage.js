@@ -101,7 +101,7 @@ const ProvidersTab = () => {
 
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={() => setShowModal(false)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-md" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <h3 className="text-base font-bold">{editing ? 'Editar' : 'Novo'} Provedor</h3>
               <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -244,8 +244,8 @@ const AgentsTab = () => {
 };
 
 const TemplatePickerModal = ({ templates, onPick, onClose }) => (
-  <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={onClose}>
-    <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+  <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between p-4 border-b border-slate-200">
         <div>
           <h3 className="text-base font-bold">Selecione o Tipo do Agente</h3>
@@ -324,8 +324,8 @@ const AgentEditor = ({ agent: initial, providers, onClose, onSaved }) => {
   const availModels = provider?.models || ['gpt-4o-mini', 'gpt-4o'];
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-3xl max-h-[95vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-3xl max-h-[95vh] overflow-hidden flex flex-col" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3 p-4 border-b border-slate-200">
           <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0" style={{ background: `${agent.color}20` }}>{agent.icon || '🤖'}</div>
           <div className="flex-1 min-w-0">

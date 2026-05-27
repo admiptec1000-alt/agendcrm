@@ -242,8 +242,8 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl my-8" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl my-8" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-slate-200">
           <h3 className="text-lg font-bold flex items-center gap-2"><Megaphone className="w-5 h-5 text-primary" /> {isEditing ? 'Editar' : 'Nova'} Campanha</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
@@ -531,8 +531,8 @@ const AntiBlockSettingsTab = () => {
 };
 
 const AudienceModal = ({ campaign, data, onClose }) => (
-  <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
-    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md my-8" onClick={e => e.stopPropagation()}>
+  <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md my-8" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between p-4 border-b border-slate-200">
         <h3 className="text-base font-bold flex items-center gap-2"><Eye className="w-4 h-4 text-primary" /> Audiencia — {campaign.name}</h3>
         <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
@@ -646,8 +646,8 @@ const ContactListModal = ({ list, onClose, onSaved }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl my-8" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl my-8" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-slate-200">
           <h3 className="text-base font-bold">{isEditing ? 'Editar' : 'Nova'} Lista de Contato</h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>

@@ -464,8 +464,8 @@ const MyAppointmentsModal = ({ slug, primaryColor, onClose }) => {
   const STATUS = { confirmado: { bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'Confirmado' }, pendente: { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Pendente' }, cancelado: { bg: 'bg-red-100', text: 'text-red-700', label: 'Cancelado' }, concluido: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Concluido' } };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
-      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[85vh] overflow-hidden" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-slate-200">
           <div>
             <h3 className="text-lg font-bold font-heading">Meus Agendamentos</h3>
