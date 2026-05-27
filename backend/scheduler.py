@@ -521,10 +521,24 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
                 #              menos valor_desconto (total da venda ja
                 #              descontado, util pra exibir "Total a pagar"
                 #              no template alem do per-parcela).
+                # 2026-05-26 (P2) — {{valor_devido}} agora inclui juros e
+                # multa quando a parcela esta atrasada. {{valor_liquido}}
+                # eh a versao SEM acrescimo (= amount - desconto).
+                # {{valor_acrescimo}} eh o total de multa + juros do dia.
+                from finance_helpers import compute_late_fee_amount
                 _disc = float(c.get("discount") or 0)
-                _valor_devido = max(0.0, float(price) - _disc)
                 _venda_total = float(c.get("total_sale_price") or 0)
                 _total_liquido = max(0.0, _venda_total - _disc)
+                _lf = (txn or {}).get("late_fee") or {}
+                _lf_calc = compute_late_fee_amount(
+                    float(price), txn.get("due_date") or due.isoformat(),
+                    float(_lf.get("multa_pct") or 0) if _lf.get("enabled") else 0.0,
+                    float(_lf.get("juros_dia_pct") or 0) if _lf.get("enabled") else 0.0,
+                    discount=_disc,
+                )
+                _valor_liquido = max(0.0, float(price) - _disc)
+                _valor_devido = float(_lf_calc.get("valor_devido") or _valor_liquido)
+                _valor_acrescimo = float(_lf_calc.get("total") or 0.0)
                 ctx = {
                     "nome": nome,
                     "empresa": c.get("name") or "",
@@ -535,6 +549,8 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
                     "licencas_usuario": str(c.get("max_users") or 0),
                     "valor_venda_total": f"{_venda_total:.2f}".replace(".", ","),
                     "valor_desconto": f"{_disc:.2f}".replace(".", ","),
+                    "valor_liquido": f"{_valor_liquido:.2f}".replace(".", ","),
+                    "valor_acrescimo": f"{_valor_acrescimo:.2f}".replace(".", ","),
                     "valor_devido": f"{_valor_devido:.2f}".replace(".", ","),
                     "valor_total_liquido": f"{_total_liquido:.2f}".replace(".", ","),
                 }

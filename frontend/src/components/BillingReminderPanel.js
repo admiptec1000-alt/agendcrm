@@ -342,6 +342,8 @@ const BillingReminderPanel = () => {
           <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{licencas_usuario}}'}</code>
           <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_venda_total}}'}</code>
           <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_desconto}}'}</code>
+          <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_liquido}}'}</code>
+          <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_acrescimo}}'}</code>
           <code className="ml-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[11px] font-mono">{'{{valor_devido}}'}</code>
           {/* 2026-05-26 — Total da venda ja descontado (alternativa ao
               valor_devido que eh per-parcela). */}

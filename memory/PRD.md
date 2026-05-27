@@ -2756,3 +2756,9 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Microservico reiniciado em preview. Sintaxe validada via `node -c`.
 - **Variavel nova**: `{{valor_total_liquido}}` = `valor_venda_total - valor_desconto`. Disponivel no envio automatico (scheduler) e no reenvio manual SA. UI atualizada em `BillingReminderPanel.js`.
 - **ATENCAO PRODUCAO**: Para a correcao do Baileys chegar em `agentcrm.8ip.com.br`, eh preciso REDEPLOY DO MICROSERVICO NODE no Render (nao basta o git push do main backend/frontend — o whatsapp-service eh um servico separado no Render).
+
+## 2026-05-26 (PM) — {{valor_devido}} = liquido + juros + UI destacando Liquido/Devido
+- **Backend (`scheduler.py` + `super_admin_routes.py`)**: `{{valor_devido}}` no template de cobranca agora inclui multa+juros do dia (era so `amount - desconto`). Novas vars: `{{valor_liquido}}` (= amount - desconto, sem acrescimo) e `{{valor_acrescimo}}` (= multa + juros do dia).
+- **Tabela do Financeiro Admin (`AdmLancamentosPanel.js`)**: celula VALOR agora exibe `Liquido` (verde) quando ha desconto e `Devido` (vermelho/bold) quando ha juros — antes mostrava apenas `Devido` quando atrasado.
+- **Modal "Dar baixa"**: ganhou linha `Valor liquido` em destaque entre `Desconto` e `Acrescimo (multa + juros)`. `Total devido` renomeado para `Valor devido`. Visualizacao validada via screenshot (R$ 200 - R$ 10 = R$ 190 liquido + R$ 16,78 acrescimo = R$ 206,78 devido).
+- `BillingReminderPanel.js`: legenda de variaveis adicionou `{{valor_liquido}}` e `{{valor_acrescimo}}`.

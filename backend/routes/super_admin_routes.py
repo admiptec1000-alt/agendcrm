@@ -514,7 +514,20 @@ async def resend_transaction_reminder(
         txn.get("total_sale_price") if txn.get("total_sale_price") is not None
         else ((company or {}).get("total_sale_price") or 0)
     )
-    _valor_devido = max(0.0, _amount - _disc)
+    # 2026-05-26 (P2) — {{valor_devido}} agora inclui multa+juros do dia.
+    # {{valor_liquido}} = amount - desconto (sem acrescimo).
+    # {{valor_acrescimo}} = total de multa+juros.
+    from finance_helpers import compute_late_fee_amount
+    _lf = txn.get("late_fee") or {}
+    _lf_calc = compute_late_fee_amount(
+        _amount, txn.get("due_date") or txn.get("date") or "",
+        float(_lf.get("multa_pct") or 0) if _lf.get("enabled") else 0.0,
+        float(_lf.get("juros_dia_pct") or 0) if _lf.get("enabled") else 0.0,
+        discount=_disc,
+    )
+    _valor_liquido = max(0.0, _amount - _disc)
+    _valor_devido = float(_lf_calc.get("valor_devido") or _valor_liquido)
+    _valor_acrescimo = float(_lf_calc.get("total") or 0.0)
     _total_liquido = max(0.0, _venda_total - _disc)
     ctx = {
         "nome": nome,
@@ -526,6 +539,8 @@ async def resend_transaction_reminder(
         "licencas_usuario": str((company or {}).get("max_users") or 0),
         "valor_venda_total": f"{_venda_total:.2f}".replace(".", ","),
         "valor_desconto": f"{_disc:.2f}".replace(".", ","),
+        "valor_liquido": f"{_valor_liquido:.2f}".replace(".", ","),
+        "valor_acrescimo": f"{_valor_acrescimo:.2f}".replace(".", ","),
         "valor_devido": f"{_valor_devido:.2f}".replace(".", ","),
         "valor_total_liquido": f"{_total_liquido:.2f}".replace(".", ","),
     }

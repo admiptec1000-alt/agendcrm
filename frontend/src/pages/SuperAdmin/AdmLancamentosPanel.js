@@ -385,8 +385,17 @@ export const AdmLancamentosPanel = () => {
                     </td>
                     <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
                       {isOut ? '−' : '+'} {fmt(t.amount)}
+                      {/* 2026-05-26 — Mostra Liquido (amount-desconto) e
+                          Devido (liquido+acrescimo) em destaque na lista. */}
+                      {Number(t.discount || 0) > 0 && (
+                        <div className="text-[10px] text-emerald-700 font-normal" data-testid={`adm-row-liquido-${t.id}`}>
+                          Liquido: {fmt(Math.max(0, Number(t.amount || 0) - Number(t.discount || 0)))}
+                        </div>
+                      )}
                       {overdue && (
-                        <div className="text-[10px] text-slate-500 font-normal">Devido: {fmt(t.late_fee_computed.valor_devido)}</div>
+                        <div className="text-[10px] text-rose-700 font-semibold" data-testid={`adm-row-devido-${t.id}`}>
+                          Devido: {fmt(t.late_fee_computed.valor_devido)}
+                        </div>
                       )}
                     </td>
                     <td className="px-3 py-2 text-center">
@@ -1232,15 +1241,25 @@ const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
                 <span className="font-mono font-medium text-emerald-700">− {fmt(discount)}</span>
               </div>
             )}
+            {/* 2026-05-26 — Sempre exibimos Valor liquido (=bruto-desconto)
+                quando ha desconto ou acrescimo, antes da linha de juros. */}
+            {(discount > 0 || (lfc?.days_overdue > 0 && lateTotal > 0)) && (
+              <div className="flex justify-between">
+                <span className="text-slate-600 font-medium">Valor liquido</span>
+                <span className="font-mono font-semibold text-emerald-800" data-testid="pay-modal-valor-liquido">
+                  {fmt(Math.max(0, baseAmount - discount))}
+                </span>
+              </div>
+            )}
             {lfc?.days_overdue > 0 && lateTotal > 0 && (
               <div className="flex justify-between">
-                <span className="text-slate-500">Multa + Juros ({lfc.days_overdue}d)</span>
+                <span className="text-slate-500">Acrescimo (multa + juros, {lfc.days_overdue}d)</span>
                 <span className="font-mono font-medium text-amber-700">+ {fmt(lateTotal)}</span>
               </div>
             )}
             {(discount > 0 || (lfc?.days_overdue > 0 && lateTotal > 0)) && (
               <div className="flex justify-between pt-1 border-t border-slate-200">
-                <span className="text-slate-600 font-semibold">Total devido</span>
+                <span className="text-slate-600 font-semibold">Valor devido</span>
                 <span className="font-mono font-bold text-rose-700">{fmt(valorDevido)}</span>
               </div>
             )}
