@@ -2776,3 +2776,15 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Novo flag por usuario: `view_all_kanban: bool` (CompanyUser model). Toggle "Acesso a todos os Kanban" no form de usuario, descricao destacada em indigo.
 - Backend (`/api/crm/kanban-v2`) respeita o flag: quando True, ignora `_ticket_visibility_filter` (allowed_queue_ids / connection_ids) somente para o Kanban — outras telas (Aguardando/Atendimento) mantem filtro normal.
 - Validado via curl: PUT view_all_kanban=true → True; PUT false → False.
+
+## 2026-05-27 (PM) — Batch 3 (Baileys + Roteamento de fila) + Batch 4 (Performance)
+**Batch 3:**
+- **Baileys v2.1.19 (`whatsapp-service/index.js`)**: re-send agora dispara em DOIS gatilhos: (A) `messages.update` status=0 ERROR, OU (B) stuck >90s + destinatario ONLINE (recebemos inbound/presence dele em <5min). Caso (B) cobre o "Aguardando mensagem" que afetava a Incinera sem reintroduzir duplicatas em clientes offline. STUCK_TIMEOUT=90s, MAX_AUTO_RETRIES=1. `markRecipientSeen` chamada em messages.upsert (inbound) e presence.update. Aplicado globalmente para TODAS as conexoes/empresas (microservico unico).
+- **Flow Engine (`/app/backend/flow_engine.py`)**: bug do node `ticket/queue/transfer` corrigido. Antes lia `cfg.get("queue")` e gravava em `ticket.queue`; frontend grava `queue_id`+`queue_name`. Agora aceita ambos e grava em `ticket.queue_id` (campo canonico usado pelo CRM). Tambem aplica `status` do node (aguardando/atendendo/aberto) e quando `aguardando` desatribui `assigned_to` (cai no pool publico da fila). Bug que impedia ticket de aparecer na fila filtrada — RESOLVIDO.
+
+**Batch 4:**
+- **Indices Mongo na startup (`/app/backend/server.py`)**: 6 indices em `tickets` (`company_status_updated`, `company_assignedto_status`, `company_kanban_updated`, `company_phone`, `company_queue_status`, `company_connection_status`). Sem isso, COLLSCAN de 2.5k+ tickets na Incinera (~3s por troca de aba).
+- **GET /api/crm/tickets**: projecao mudou de `{messages: 0}` (excluindo tudo) para `{messages: {$slice: -1}}` — mantem APENAS a ultima mensagem (para o card de Atendimento via `getLastMessage`), elimina o pull de 100+ mensagens por ticket sem quebrar a UX.
+- Resultado em preview: aguardando 153ms, atendendo 205ms, kanban-v2 144ms (84KB).
+
+**ATENCAO PRODUCAO**: Mudancas no microservico Baileys (v2.1.19) requerem REDEPLOY DO whatsapp-service no Render alem do backend/frontend.

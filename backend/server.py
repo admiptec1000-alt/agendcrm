@@ -479,6 +479,45 @@ async def startup_event():
     await _ensure_super_admin_system_company(db)
     init_object_storage()
     await ensure_wa_cache_indexes(db)
+    # 2026-05-27 — Indices criticos para listagem de tickets / Kanban.
+    # Sem isso, GET /api/crm/tickets?status=aguardando e /api/crm/kanban-v2
+    # fazem COLLSCAN com 1k+ docs (~3s na empresa Web em prod).
+    try:
+        await db.tickets.create_index(
+            [("company_id", 1), ("status", 1), ("updated_at", -1)],
+            name="company_status_updated",
+            background=True,
+        )
+        await db.tickets.create_index(
+            [("company_id", 1), ("assigned_to", 1), ("status", 1)],
+            name="company_assignedto_status",
+            background=True,
+        )
+        await db.tickets.create_index(
+            [("company_id", 1), ("kanban_column_id", 1), ("updated_at", -1)],
+            name="company_kanban_updated",
+            background=True,
+        )
+        await db.tickets.create_index(
+            [("company_id", 1), ("customer_phone", 1)],
+            name="company_phone",
+            background=True,
+        )
+        await db.tickets.create_index(
+            [("company_id", 1), ("queue_id", 1), ("status", 1)],
+            name="company_queue_status",
+            background=True,
+        )
+        await db.tickets.create_index(
+            [("company_id", 1), ("connection_id", 1), ("status", 1)],
+            name="company_connection_status",
+            background=True,
+        )
+        # Histograma de mensagens raramente eh necessario na listagem; o
+        # projection `messages: 0` ja basta. Index extra nao ajuda.
+        logger.info("[startup] tickets indexes ensured")
+    except Exception as e:
+        logger.warning(f"[startup] failed to ensure tickets indexes: {e}")
     # Start WhatsApp keep-alive background loop (Render free tier wake-up)
     try:
         from wa_keepalive import start_keepalive_loop

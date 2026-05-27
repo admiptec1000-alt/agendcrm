@@ -163,7 +163,16 @@ async def list_tickets(
     # the full collection for tenants like Incinera with 2.5k+ tickets.
     safe_limit = max(1, min(int(limit or 1000), 5000))
     safe_offset = max(0, int(offset or 0))
-    cursor = db.tickets.find(query, {"_id": 0}).sort("updated_at", -1).skip(safe_offset).limit(safe_limit)
+    # 2026-05-27 — PERF: $slice na projecao mantem APENAS a ultima mensagem
+    # de cada ticket (para `getLastMessage` no card de Atendimento). Reduz
+    # 100x+ o payload em tenants com muitas mensagens por ticket.
+    cursor = (
+        db.tickets
+        .find(query, {"_id": 0, "messages": {"$slice": -1}})
+        .sort("updated_at", -1)
+        .skip(safe_offset)
+        .limit(safe_limit)
+    )
     tickets = await cursor.to_list(safe_limit)
     # Annotate each ticket with the registered client name (when the phone
     # matches a record in `clients`). The list UI shows this instead of the

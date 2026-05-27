@@ -202,23 +202,21 @@ const jidNeedsForceAssert = new Set();
 
 // ────────────────────────────────────────────────────────────────────────
 // 2026-02-18 (v2.1.17) — AUTO-RECOVERY for "Aguardando mensagem" stuck
-// deliveries. When the recipient's WhatsApp cannot decrypt our ciphertext
-// (corrupted Signal session, e.g. after their device rotated identity
-// keys), the message stays in PENDING/SERVER_ACK forever without reaching
-// DELIVERY_ACK. The customer sees a placeholder "Aguardando mensagem.
-// Essa ação pode levar alguns instantes." and the bot looks dead.
+// deliveries.
 //
-// 2026-05-26 (v2.1.18) — FIX duplicate-send bug. Previous version re-sent
-// the message whenever DELIVERY_ACK didn't arrive in 20s, but ACK arrival
-// depends on the *recipient* being online (WhatsApp closed/no signal →
-// ack can take minutes, legitimately). That caused duplicates/triplicates
-// observed in prod (2026-05-26 reports). The fix is to gate the re-send
-// on a REAL failure signal:
-//   • `messages.update` with status=0 (ERROR) for the wamId, OR
-//   • The watchdog `force_resend` flag was explicitly raised by the
-//     "Aguardando mensagem" backend probe (out of scope here).
-// Without any of those signals, the entry just decays silently after
-// STUCK_TIMEOUT_MS — no re-send, no duplicate.
+// 2026-05-26 (v2.1.18) — Re-send no longer fires on simple timeout; now
+// requires REAL failure signal (messages.update status=0 ERROR).
+//
+// 2026-05-27 (v2.1.19) — Expanded re-send trigger to also catch the
+// "Aguardando mensagem" decryption-failure case. WhatsApp does NOT emit
+// status=0 when the recipient's Signal session is corrupted — it emits
+// retry-receipts asking for re-encryption. We now also re-send when:
+//   • we have an outbound msgId WITHOUT DELIVERY_ACK for > STUCK_TIMEOUT_MS,
+//   • AND the recipient has been ACTIVE (we received an inbound from them
+//     OR they appeared on presence updates) in the last RECIPIENT_ONLINE_MS.
+// If they appear OFFLINE (no recent activity, no presence) we let the
+// entry decay silently — that's the "client is offline / has bad signal"
+// case where re-sending would duplicate.
 //
 // Standard Baileys WAMessageStatus enum (verified at runtime against
 // proto.WebMessageInfo.Status on 2026-02-18 / Baileys 6.7.21):
@@ -226,10 +224,29 @@ const jidNeedsForceAssert = new Set();
 // Anything ≥3 means the recipient device received and decrypted the
 // ciphertext — at which point we are safe and the entry is dropped.
 const pendingDeliveries = new Map(); // outbound msgId -> tracking entry
-const STUCK_TIMEOUT_MS = 60 * 1000;   // 2026-05-26: was 20s, bumped to 60s
-const MAX_AUTO_RETRIES = 1;            // 2026-05-26: was 2, single retry is enough
-const STUCK_CHECK_INTERVAL_MS = 10 * 1000;  // 2026-05-26: was 5s
+const STUCK_TIMEOUT_MS = 90 * 1000;   // 2026-05-27: 90s (was 60s)
+const MAX_AUTO_RETRIES = 1;            // single retry is enough
+const STUCK_CHECK_INTERVAL_MS = 15 * 1000;
 const PENDING_DELIVERIES_MAX = 1000;  // cap memory
+// 2026-05-27 — Janela em que consideramos o destinatario "online".
+// Recebemos inbound dele ou presence update? entao ele esta acordado,
+// re-send eh seguro contra duplicatas (cliente esta vendo "Aguardando").
+const RECIPIENT_ONLINE_MS = 5 * 60 * 1000;
+const recipientLastSeen = new Map(); // `${instanceId}|${jid}` -> ts
+function markRecipientSeen(instanceId, jid) {
+  if (!instanceId || !jid) return;
+  recipientLastSeen.set(`${instanceId}|${jid}`, Date.now());
+  // Cap memory
+  if (recipientLastSeen.size > 5000) {
+    const it = recipientLastSeen.keys();
+    recipientLastSeen.delete(it.next().value);
+  }
+}
+function isRecipientLikelyOnline(instanceId, jid) {
+  const ts = recipientLastSeen.get(`${instanceId}|${jid}`);
+  if (!ts) return false;
+  return (Date.now() - ts) <= RECIPIENT_ONLINE_MS;
+}
 
 function trackOutboundForRecovery(instanceId, jid, msgId, text) {
   if (!msgId) return;
@@ -254,15 +271,21 @@ setInterval(async () => {
   const now = Date.now();
   for (const [msgId, info] of pendingDeliveries.entries()) {
     const age = now - info.sentAt;
-    // 2026-05-26 (v2.1.18) — Decay silently after STUCK_TIMEOUT_MS unless a
-    // REAL failure signal (`needsResend=true`) raised the flag. This avoids
-    // duplicate sends caused by legit ACK delays (recipient offline / poor
-    // signal / closed WA).
-    if (age >= STUCK_TIMEOUT_MS && !info.needsResend) {
+    // 2026-05-27 (v2.1.19) — Three exit/retry paths:
+    //   A) Real failure signal raised (status=0 ERROR) → re-send.
+    //   B) Stuck >STUCK_TIMEOUT_MS AND recipient is likely online (we got
+    //      inbound from them recently) → "Aguardando mensagem" case →
+    //      wipe Signal session + re-send.
+    //   C) Stuck >STUCK_TIMEOUT_MS, no failure signal AND recipient seems
+    //      offline → decay silently (no duplicate).
+    const recipientOnline = isRecipientLikelyOnline(info.instanceId, info.jid);
+    const stale = age >= STUCK_TIMEOUT_MS;
+    const shouldResend = info.needsResend || (stale && recipientOnline);
+    if (stale && !shouldResend) {
       pendingDeliveries.delete(msgId);
       continue;
     }
-    if (!info.needsResend) continue;
+    if (!shouldResend) continue;
     if (info.retries >= MAX_AUTO_RETRIES) {
       console.error(
         `[${info.instanceId}] [AUTO-RECOVERY] giving up msgId=${msgId} ` +
@@ -274,11 +297,12 @@ setInterval(async () => {
     const inst = connections[info.instanceId];
     if (!inst?.sock || inst.status !== 'connected') continue;
     info.retries += 1;
-    info.sentAt = Date.now();  // delay the NEXT recovery cycle
-    info.needsResend = false;  // require new ERROR signal to retry again
+    info.sentAt = Date.now();
+    info.needsResend = false;
+    const trigger = info.needsResend ? 'ERROR_SIGNAL' : (recipientOnline ? 'ONLINE_NOACK' : 'TIMEOUT');
     console.warn(
       `[${info.instanceId}] [AUTO-RECOVERY] msgId=${msgId} jid=${info.jid} ` +
-      `flagged ERROR; wiping session + re-sending ` +
+      `trigger=${trigger}; wiping session + re-sending ` +
       `(retry #${info.retries}/${MAX_AUTO_RETRIES})`
     );
     try {
@@ -875,6 +899,9 @@ async function createConnection(instanceId) {
       const p = presences?.[id] || Object.values(presences || {})[0];
       if (!p) return;
       const presence = p.lastKnownPresence || 'available';
+      // 2026-05-27 (v2.1.19) — Marca destinatario como "online" para o
+      // auto-recovery saber que vale a pena re-enviar mensagem stuck.
+      markRecipientSeen(instanceId, id);
       await axios.post(`${FASTAPI_URL}/api/channels/webhook/presence`, {
         instance_id: instanceId, phone, presence,
       }, { timeout: 5000 }).catch(() => {});
@@ -966,6 +993,10 @@ async function createConnection(instanceId) {
       // exact post-inbound stale-session window observed in prod (gap 2 min).
       if (!fromMe && remoteJid && !isGroup) {
         jidNeedsForceAssert.add(remoteJid);
+        // 2026-05-27 (v2.1.19) — Cliente acabou de enviar inbound → esta
+        // online. Auto-recovery vai re-enviar mensagens stuck (Aguardando
+        // mensagem) para esse JID com confianca.
+        markRecipientSeen(instanceId, remoteJid);
       }
 
       // CRITICAL: Modern WhatsApp uses Linked Device IDs (@lid) for contact

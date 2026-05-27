@@ -1199,16 +1199,35 @@ async def advance_flow(
 
         if nt in ("ticket", "queue", "transfer"):
             cfg = (node.get("data") or {}).get("config") or {}
-            queue = cfg.get("queue")
+            # 2026-05-27 — Fix routing bug: frontend grava `queue_id` (UUID
+            # da fila) e `queue_name`; engine antes lia somente `queue`
+            # (legado), o que deixava o ticket com `queue=undefined` e nao
+            # entrava no filtro da aba Atendimento. Agora aceitamos ambos
+            # e gravamos em `queue_id` (campo canonico usado pelo CRM).
+            queue_id = cfg.get("queue_id") or cfg.get("queue")
+            queue_name = cfg.get("queue_name")
+            new_status = cfg.get("status")
             patch = {"updated_at": datetime.now(timezone.utc).isoformat(),
                      "active_flow_node_id": None,
                      "active_flow_id": None,
                      "flow_vars": vars_}
-            if queue:
-                patch["queue"] = queue
+            if queue_id:
+                patch["queue_id"] = queue_id
+                if queue_name:
+                    patch["queue_name"] = queue_name  # cache para UI
+            if new_status:
+                # Status visivel ao operador (aguardando | atendendo | aberto)
+                patch["status"] = new_status
+                # Se o fluxo manda pra "aguardando" desatribui qualquer dono
+                # para que o ticket cai no pool publico daquela fila.
+                if new_status == "aguardando":
+                    patch["assigned_to"] = None
             if not dry_run:
                 await db.tickets.update_one({"id": ticket["id"]}, {"$set": patch})
-            logger.info(f"[flow_engine] flow ended at ticket/queue node {current_id} queue={queue!r}")
+            logger.info(
+                f"[flow_engine] flow ended at ticket/queue node {current_id} "
+                f"queue_id={queue_id!r} status={new_status!r}"
+            )
             return sent  # flow ends here — human pickup
 
         # Unknown node type: try to send text then advance
