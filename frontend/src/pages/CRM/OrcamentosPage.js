@@ -383,12 +383,137 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
   const [a4Open, setA4Open] = useState(false);
   const [a4Html, setA4Html] = useState('');
   const [a4Loading, setA4Loading] = useState(false);
+  // 2026-05-27 — Refs por aba para alcancar o Quill instance e o DOM
+  // (.ql-editor) e poder manipular tabelas (add/remove linha/coluna).
+  const quillRefs = useRef({});
   const fields = {
     content: 'content',
     header: 'header_html',
     footer: 'footer_html',
   };
   const heights = { content: 320, header: 140, footer: 140 };
+
+  // 2026-05-27 — Helpers de edicao de tabela. ESTRATEGIA: operamos na
+  // STRING HTML do state (editing[field]), nao na DOM live do Quill, pois
+  // a ReactQuill faz diff/normalize que estava duplicando linhas. O
+  // unico papel da DOM live eh nos dizer ONDE esta o cursor (qual tabela
+  // / linha / coluna). Localizada a posicao, aplicamos a mutacao numa
+  // DOM em memoria via DOMParser e damos setEditing com a nova string.
+  const _getEditorEl = (tabKey) => {
+    const ref = quillRefs.current[tabKey];
+    if (!ref) return null;
+    return (ref.getEditor && ref.getEditor()?.root) || null;
+  };
+  const _findCellPath = (root) => {
+    // Retorna {tableIndex, rowIndex, colIndex} para identificar a celula
+    // unicamente dentro do HTML do template.
+    if (!root) return null;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    let node = sel.anchorNode;
+    while (node && node !== root) {
+      if (node.nodeType === 1 && (node.tagName === 'TD' || node.tagName === 'TH')) {
+        const row = node.parentNode;
+        const tbl = row?.closest && row.closest('table');
+        if (!tbl) return null;
+        const allTables = Array.from(root.querySelectorAll('table'));
+        const tableIndex = allTables.indexOf(tbl);
+        const rowsInTable = Array.from(tbl.querySelectorAll('tr'));
+        const rowIndex = rowsInTable.indexOf(row);
+        const colIndex = Array.prototype.indexOf.call(row.children, node);
+        return { tableIndex, rowIndex, colIndex };
+      }
+      node = node.parentNode;
+    }
+    return null;
+  };
+  const _mutateHtml = (field, mutator) => {
+    const current = editing?.[field] || '';
+    const doc = new DOMParser().parseFromString(`<div>${current}</div>`, 'text/html');
+    const container = doc.body.firstChild;
+    mutator(container);
+    setEditing(prev => ({ ...prev, [field]: container.innerHTML }));
+  };
+  const tableAction = (tabKey, field, action) => {
+    const root = _getEditorEl(tabKey);
+    if (!root) { toast.error('Editor nao pronto'); return; }
+    if (action === 'add-table') {
+      // Insere tabela 3x3 no FINAL do conteudo. Esta eh a opcao mais
+      // confiavel — Quill nao garante posicao de cursor entre renders.
+      _mutateHtml(field, (container) => {
+        const tbl = doc => {
+          const t = doc.createElement('table');
+          t.setAttribute('style', 'border-collapse:collapse;width:100%;border:1px solid #999;');
+          const tbody = doc.createElement('tbody');
+          for (let r = 0; r < 3; r++) {
+            const tr = doc.createElement('tr');
+            for (let c = 0; c < 3; c++) {
+              const td = doc.createElement('td');
+              td.setAttribute('style', 'border:1px solid #999;padding:6px;');
+              td.innerHTML = '&nbsp;';
+              tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+          }
+          t.appendChild(tbody);
+          return t;
+        };
+        container.appendChild(tbl(container.ownerDocument));
+        const p = container.ownerDocument.createElement('p');
+        p.innerHTML = '<br>';
+        container.appendChild(p);
+      });
+      toast.success('Tabela 3x3 inserida');
+      return;
+    }
+    const path = _findCellPath(root);
+    if (!path) { toast.error('Posicione o cursor dentro de uma celula da tabela'); return; }
+    _mutateHtml(field, (container) => {
+      const allTables = Array.from(container.querySelectorAll('table'));
+      const table = allTables[path.tableIndex];
+      if (!table) return;
+      const rows = Array.from(table.querySelectorAll('tr'));
+      const row = rows[path.rowIndex];
+      if (!row) return;
+      const colIdx = path.colIndex;
+
+      if (action === 'add-col-right' || action === 'add-col-left') {
+        const where = action === 'add-col-right' ? colIdx + 1 : colIdx;
+        rows.forEach(r => {
+          const tpl = r.children[colIdx];
+          const tag = tpl?.tagName?.toLowerCase() === 'th' ? 'th' : 'td';
+          const ownDoc = container.ownerDocument;
+          const newCell = ownDoc.createElement(tag);
+          newCell.innerHTML = '&nbsp;';
+          if (tpl && tpl.getAttribute('style')) newCell.setAttribute('style', tpl.getAttribute('style'));
+          r.insertBefore(newCell, r.children[where] || null);
+        });
+      } else if (action === 'del-col') {
+        if ((rows[0]?.children.length || 0) <= 1) { toast.error('Tabela ja tem so 1 coluna'); return; }
+        rows.forEach(r => { if (r.children[colIdx]) r.removeChild(r.children[colIdx]); });
+      } else if (action === 'add-row-below' || action === 'add-row-above') {
+        const ownDoc = container.ownerDocument;
+        const newRow = ownDoc.createElement('tr');
+        const cols = row.children.length;
+        for (let i = 0; i < cols; i++) {
+          const tag = row.children[i]?.tagName?.toLowerCase() === 'th' ? 'th' : 'td';
+          const c = ownDoc.createElement(tag);
+          c.innerHTML = '&nbsp;';
+          if (row.children[i]?.getAttribute('style')) c.setAttribute('style', row.children[i].getAttribute('style'));
+          newRow.appendChild(c);
+        }
+        if (action === 'add-row-below') row.parentNode.insertBefore(newRow, row.nextSibling);
+        else row.parentNode.insertBefore(newRow, row);
+      } else if (action === 'del-row') {
+        const tbody = row.parentNode;
+        if ((tbody?.children?.length || 0) <= 1) { toast.error('Tabela ja tem so 1 linha'); return; }
+        tbody.removeChild(row);
+      } else if (action === 'del-table') {
+        if (!window.confirm('Excluir a tabela inteira?')) return;
+        table.parentNode.removeChild(table);
+      }
+    });
+  };
 
   const handleOpenA4 = async () => {
     setA4Loading(true);
@@ -580,12 +705,30 @@ const TemplateMultiTabEditor = ({ editing, setEditing }) => {
               </div>
             )}
             <div className="border rounded bg-white">
+              {/* 2026-05-27 — Toolbar dedicada de TABELA. Quill nativo nao
+                  suporta tabelas; estes botoes fazem manipulacao DOM
+                  direta na celula onde o cursor esta posicionado. */}
+              <div className="flex flex-wrap gap-1 p-1.5 bg-emerald-50 border-b border-emerald-200 text-[11px]">
+                <span className="font-semibold text-emerald-900 mr-1 px-1 py-0.5">Tabela:</span>
+                <button type="button" onClick={() => tableAction(t.key, field, 'add-table')} className="px-2 py-0.5 bg-white border border-emerald-300 rounded hover:bg-emerald-100" data-testid={`tbl-${t.key}-add-table`} title="Inserir tabela 3x3 na posicao do cursor">+ Tabela</button>
+                <span className="mx-1 text-slate-300">|</span>
+                <button type="button" onClick={() => tableAction(t.key, field, 'add-col-right')} className="px-2 py-0.5 bg-white border border-emerald-300 rounded hover:bg-emerald-100" data-testid={`tbl-${t.key}-add-col-right`} title="Adicionar coluna a DIREITA da celula atual">+ Coluna &rarr;</button>
+                <button type="button" onClick={() => tableAction(t.key, field, 'add-col-left')} className="px-2 py-0.5 bg-white border border-emerald-300 rounded hover:bg-emerald-100" data-testid={`tbl-${t.key}-add-col-left`} title="Adicionar coluna a ESQUERDA da celula atual">&larr; + Coluna</button>
+                <button type="button" onClick={() => tableAction(t.key, field, 'del-col')} className="px-2 py-0.5 bg-white border border-rose-300 text-rose-700 rounded hover:bg-rose-50" data-testid={`tbl-${t.key}-del-col`} title="Excluir a coluna atual">- Coluna</button>
+                <span className="mx-1 text-slate-300">|</span>
+                <button type="button" onClick={() => tableAction(t.key, field, 'add-row-below')} className="px-2 py-0.5 bg-white border border-emerald-300 rounded hover:bg-emerald-100" data-testid={`tbl-${t.key}-add-row-below`} title="Adicionar linha ABAIXO da atual">+ Linha &darr;</button>
+                <button type="button" onClick={() => tableAction(t.key, field, 'add-row-above')} className="px-2 py-0.5 bg-white border border-emerald-300 rounded hover:bg-emerald-100" data-testid={`tbl-${t.key}-add-row-above`} title="Adicionar linha ACIMA da atual">&uarr; + Linha</button>
+                <button type="button" onClick={() => tableAction(t.key, field, 'del-row')} className="px-2 py-0.5 bg-white border border-rose-300 text-rose-700 rounded hover:bg-rose-50" data-testid={`tbl-${t.key}-del-row`} title="Excluir a linha atual">- Linha</button>
+                <span className="mx-1 text-slate-300">|</span>
+                <button type="button" onClick={() => tableAction(t.key, field, 'del-table')} className="px-2 py-0.5 bg-white border border-rose-400 text-rose-700 rounded hover:bg-rose-50" data-testid={`tbl-${t.key}-del-table`} title="Excluir a tabela inteira">- Tabela</button>
+              </div>
               {/* 2026-05-27 — height fixo + .ql-editor scroll proprio
                   evita o "jump to top" relatado pelo operador. Antes o
                   modal externo (`max-h overflow-y-auto`) competia com o
                   Quill pelo scroll e quando o caret saia da area visivel
                   o modal pulava de volta pro topo do template. */}
               <ReactQuill
+                ref={(r) => { if (r) quillRefs.current[t.key] = r; }}
                 theme="snow"
                 value={editing?.[field] || ''}
                 onChange={(html) => setEditing(prev => ({ ...prev, [field]: html }))}
