@@ -588,10 +588,26 @@ async def resend_transaction_reminder(
     # copiar no WhatsApp). Disparada quando o operador habilitou na
     # configuracao global. Sucesso/falha registrado no historico mas NAO
     # bloqueia o retorno OK do reenvio principal.
+    # 2026-05-28 (PM) — Adicionado log explicativo quando o pix NAO eh
+    # enviado, para diagnostico em prod (usuario reportou "nao envia").
+    import logging
+    _logger = logging.getLogger(__name__)
     pix_key = (settings.get("pix_key") or "").strip()
-    if bool(settings.get("pix_send_separate")) and pix_key and sa_conn_id and phone:
+    pix_enabled = bool(settings.get("pix_send_separate"))
+    if not pix_enabled:
+        _logger.info(f"[pix-followup] skipped txn={transaction_id} reason=pix_send_separate=false")
+    elif not pix_key:
+        _logger.info(f"[pix-followup] skipped txn={transaction_id} reason=empty_pix_key")
+    elif not sa_conn_id:
+        _logger.info(f"[pix-followup] skipped txn={transaction_id} reason=no_sa_connection")
+    elif not phone:
+        _logger.info(f"[pix-followup] skipped txn={transaction_id} reason=no_phone")
+    else:
         try:
             pix_ok, pix_err = await _send_billing_reminder(sa_conn_id, phone, pix_key)
+            _logger.info(
+                f"[pix-followup] sent txn={transaction_id} ok={pix_ok} err={pix_err}"
+            )
             await db.billing_reminder_history.insert_one({
                 "id": str(__import__('uuid').uuid4()),
                 "company_id": txn.get("company_id"),
@@ -605,9 +621,8 @@ async def resend_transaction_reminder(
                 "sent_at": datetime.now(timezone.utc).isoformat(),
             })
         except Exception as _pe:
-            import logging
-            logging.getLogger(__name__).warning(
-                f"[super_admin] manual pix follow-up failed txn={transaction_id}: {_pe}"
+            _logger.warning(
+                f"[pix-followup] EXCEPTION txn={transaction_id}: {_pe}"
             )
     return {"ok": True, "history": history_doc}
 

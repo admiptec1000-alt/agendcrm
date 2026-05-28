@@ -606,11 +606,16 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                     # no WhatsApp do cliente: tocar+segurar -> Copiar).
                     pix_key = (settings.get("pix_key") or "").strip()
                     pix_send_separate = bool(settings.get("pix_send_separate"))
-                    if pix_send_separate and pix_key and wants_whatsapp and sa_conn_id and phone:
+                    if not pix_send_separate:
+                        logger.info(f"[scheduler] pix-followup skipped txn={txn['id']} reason=disabled")
+                    elif not pix_key:
+                        logger.info(f"[scheduler] pix-followup skipped txn={txn['id']} reason=empty_key")
+                    elif pix_send_separate and pix_key and wants_whatsapp and sa_conn_id and phone:
                         try:
                             pix_ok, pix_err = await _send_billing_reminder(
                                 sa_conn_id, phone, pix_key
                             )
+                            logger.info(f"[scheduler] pix-followup sent txn={txn['id']} ok={pix_ok} err={pix_err}")
                             await db.billing_reminder_history.insert_one({
                                 "id": str(__import__('uuid').uuid4()),
                                 "company_id": c["id"],
