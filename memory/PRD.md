@@ -2812,3 +2812,10 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - `update_company` e `/resync-pending-parcelas` agora chamam com `suppress_auto=True`. Resultado: NENHUMA mensagem eh enviada automaticamente apos salvar empresa.
 - `/resync-pending-parcelas?notify=true|false`: quando `notify=true`, pega a parcela em aberto mais proxima do vencimento de cada empresa afetada e dispara UMA mensagem manual (via `resend_transaction_reminder`).
 - Frontend: o `window.confirm` foi substituido por modal customizado com checkbox **"Notificar cliente (envia UMA mensagem)"**. Desmarcado = sem mensagem. Marcado = exatamente 1 mensagem.
+
+## 2026-05-28 — Chave Pix em mensagem separada na notificacao de cobranca
+- Configuracao global `pix_key` + `pix_send_separate` em `system_settings.billing_reminder`.
+- Quando habilitado, APOS a mensagem principal de cobranca (automatica via scheduler ou reenvio manual SA), o sistema envia uma 2a mensagem WhatsApp contendo APENAS a chave Pix — facilita o cliente copiar (toca+segura -> Copiar). Decisao de design: texto puro em vez de botoes interativos porque Baileys nao garante render de botoes em todos os aparelhos (e botoes interativos exigem Business API certificada).
+- Backend: scheduler `_process_billing_reminders` envia follow-up Pix apos sucesso. `super_admin_routes.resend_transaction_reminder` faz o mesmo. Falha do Pix follow-up NAO bloqueia o sucesso da cobranca principal — registra em billing_reminder_history como `kind=auto_pix`/`manual_resend_pix`.
+- Frontend: nova secao verde "Chave Pix (mensagem separada)" no painel de configuracao (BillingReminderPanel.js) com checkbox + input de chave (max 200 chars). Quando checkbox desmarcado, o input fica disabled.
+- Validado via curl: PUT settings com pix_key persiste, GET retorna corretamente.

@@ -601,6 +601,32 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                     "sent_at": datetime.now(timezone.utc).isoformat(),
                 })
                 if sent_ok:
+                    # 2026-05-28 — Apos sucesso do envio principal, opcional
+                    # 2a mensagem com APENAS a chave Pix (mais facil de copiar
+                    # no WhatsApp do cliente: tocar+segurar -> Copiar).
+                    pix_key = (settings.get("pix_key") or "").strip()
+                    pix_send_separate = bool(settings.get("pix_send_separate"))
+                    if pix_send_separate and pix_key and wants_whatsapp and sa_conn_id and phone:
+                        try:
+                            pix_ok, pix_err = await _send_billing_reminder(
+                                sa_conn_id, phone, pix_key
+                            )
+                            await db.billing_reminder_history.insert_one({
+                                "id": str(__import__('uuid').uuid4()),
+                                "company_id": c["id"],
+                                "transaction_id": txn["id"],
+                                "phone": phone,
+                                "text": pix_key,
+                                "kind": "auto_pix",
+                                "status": "sent" if pix_ok else "failed",
+                                "error": pix_err,
+                                "days_before_due": offset,
+                                "sent_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                        except Exception as _pe:
+                            logger.warning(
+                                f"[scheduler] pix-key follow-up failed company={c['id']} err={_pe}"
+                            )
                     logger.info(
                         f"[scheduler] billing-reminder sent company={c['id']} "
                         f"txn={txn['id']} offset={offset}d"

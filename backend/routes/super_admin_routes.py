@@ -367,6 +367,9 @@ class BillingReminderSettingsIn(BaseModel):
     default_late_fee_juros_dia_pct: Optional[float] = None  # juros ao dia %
     channel: str = "whatsapp"  # whatsapp | email | both
     default_message: Optional[str] = None
+    # 2026-05-28 — Chave Pix do SA enviada como 2a mensagem (facil de copiar).
+    pix_key: Optional[str] = None
+    pix_send_separate: Optional[bool] = None
 
 
 @router.get("/billing-reminder-settings")
@@ -400,6 +403,8 @@ async def get_billing_reminder_settings(
             "Ola {{nome}}! Sua mensalidade no valor de R$ {{valor}} "
             "vence em {{vencimento}} (parcela {{parcela}}). Em caso de duvida nos chame."
         ),
+        "pix_key": doc.get("pix_key") or "",
+        "pix_send_separate": bool(doc.get("pix_send_separate")),
     }
 
 
@@ -442,6 +447,9 @@ async def update_billing_reminder_settings(
         "default_late_fee_juros_dia_pct": lf_juros,
         "channel": channel,
         "default_message": (data.default_message or "")[:2000] or None,
+        # 2026-05-28 — Chave Pix em 2a mensagem
+        "pix_key": (data.pix_key or "").strip()[:200] or "",
+        "pix_send_separate": bool(data.pix_send_separate),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.system_settings.update_one(
@@ -576,6 +584,31 @@ async def resend_transaction_reminder(
     history_doc.pop("_id", None)
     if not sent:
         raise HTTPException(400, f"Falha ao reenviar: {error or 'unknown'}")
+    # 2026-05-28 — Mensagem follow-up com APENAS a chave Pix (facil de
+    # copiar no WhatsApp). Disparada quando o operador habilitou na
+    # configuracao global. Sucesso/falha registrado no historico mas NAO
+    # bloqueia o retorno OK do reenvio principal.
+    pix_key = (settings.get("pix_key") or "").strip()
+    if bool(settings.get("pix_send_separate")) and pix_key and sa_conn_id and phone:
+        try:
+            pix_ok, pix_err = await _send_billing_reminder(sa_conn_id, phone, pix_key)
+            await db.billing_reminder_history.insert_one({
+                "id": str(__import__('uuid').uuid4()),
+                "company_id": txn.get("company_id"),
+                "transaction_id": transaction_id,
+                "phone": phone,
+                "text": pix_key,
+                "kind": "manual_resend_pix",
+                "status": "sent" if pix_ok else "failed",
+                "error": pix_err,
+                "days_before_due": None,
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as _pe:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[super_admin] manual pix follow-up failed txn={transaction_id}: {_pe}"
+            )
     return {"ok": True, "history": history_doc}
 
 

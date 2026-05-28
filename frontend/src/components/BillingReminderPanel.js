@@ -27,6 +27,9 @@ const BillingReminderPanel = () => {
     default_late_fee_juros_dia_pct: 0,
     channel: 'whatsapp',
     default_message: '',
+    // 2026-05-28 — Chave Pix em msg separada (facil de copiar no celular)
+    pix_key: '',
+    pix_send_separate: false,
   });
   const [daysInput, setDaysInput] = useState('');
   const [loading, setLoading] = useState(true);
@@ -49,6 +52,8 @@ const BillingReminderPanel = () => {
           default_late_fee_juros_dia_pct: Number(r.data?.default_late_fee_juros_dia_pct ?? 0),
           channel: r.data?.channel || 'whatsapp',
           default_message: r.data?.default_message || '',
+          pix_key: r.data?.pix_key || '',
+          pix_send_separate: !!r.data?.pix_send_separate,
         });
       })
       .catch(() => {})
@@ -94,6 +99,8 @@ const BillingReminderPanel = () => {
         default_late_fee_juros_dia_pct: Math.max(0, Math.min(100, parseFloat(form.default_late_fee_juros_dia_pct) || 0)),
         channel: form.channel,
         default_message: form.default_message,
+        pix_key: form.pix_key || '',
+        pix_send_separate: !!form.pix_send_separate,
       });
       toast.success('Configuracao salva.');
     } catch (e) {
@@ -367,6 +374,41 @@ const BillingReminderPanel = () => {
         />
         <p className="text-[11px] text-slate-400 mt-1">
           {(form.default_message || '').length}/2000
+        </p>
+      </div>
+
+      {/* 2026-05-28 — Chave Pix em mensagem separada (facil de copiar
+          no celular do cliente). Quando habilitado, apos a notificacao
+          principal o sistema envia UMA segunda mensagem contendo APENAS
+          a chave Pix. O cliente toca + segura -> Copiar. */}
+      <div className="max-w-2xl p-4 rounded-xl border border-emerald-200 bg-emerald-50/40" data-testid="pix-key-section">
+        <h3 className="font-semibold text-slate-900 mb-2 text-sm">Chave Pix (mensagem separada)</h3>
+        <label className="flex items-start gap-2 cursor-pointer mb-3">
+          <input
+            type="checkbox"
+            checked={form.pix_send_separate}
+            onChange={(e) => setForm({ ...form, pix_send_separate: e.target.checked })}
+            className="mt-0.5"
+            data-testid="pix-send-separate"
+          />
+          <span className="text-xs text-slate-700">
+            <strong>Enviar Pix em 2a mensagem</strong> apos a notificacao de cobranca<br/>
+            <span className="text-slate-500">Facilita ao cliente copiar a chave no WhatsApp (toca+segura -&gt; Copiar). Sem layouts complexos que travam botoes em alguns aparelhos.</span>
+          </span>
+        </label>
+        <label className="block text-xs font-medium text-slate-600 mb-1">Chave Pix</label>
+        <input
+          type="text"
+          value={form.pix_key}
+          onChange={(e) => setForm({ ...form, pix_key: e.target.value })}
+          placeholder="00.000.000/0001-00, +55 11 99999-9999, email@empresa.com ou chave aleatoria"
+          className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+          data-testid="pix-key-input"
+          maxLength={200}
+          disabled={!form.pix_send_separate}
+        />
+        <p className="text-[10px] text-slate-500 mt-1">
+          Texto livre — pode ser CPF/CNPJ, telefone, email ou chave aleatoria. So eh enviada quando a cobranca principal eh entregue com sucesso.
         </p>
       </div>
 
