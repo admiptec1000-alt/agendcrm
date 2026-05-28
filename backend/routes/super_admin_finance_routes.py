@@ -743,6 +743,7 @@ async def adm_finance_summary(
 @router.post("/finance/resync-pending-parcelas")
 async def adm_resync_pending_parcelas(
     company_id: Optional[str] = None,
+    notify: bool = False,  # 2026-05-27 — quando True, envia UMA mensagem manual apos resync
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
@@ -768,10 +769,13 @@ async def adm_resync_pending_parcelas(
     # Deleta pendentes auto-geradas (preservando pagas e lancamentos manuais)
     res = await db.super_admin_transactions.delete_many(base_q)
     # Recria via scheduler (send_messages=False — esta operacao NAO envia
-    # mensagem, so materializa parcelas)
+    # mensagem aqui; o operador escolhe via `notify=True` se quer enviar 1
+    # mensagem manual abaixo). suppress_auto=True marca as parcelas com
+    # `auto_notify=False` para o scheduler periodico tambem nao enviar
+    # (resolve o "envio duplicado" reportado em 2026-05-27).
     try:
         from scheduler import _process_billing_reminders
-        await _process_billing_reminders(db, send_messages=False)
+        await _process_billing_reminders(db, send_messages=False, suppress_auto=True)
     except Exception as e:
         raise HTTPException(500, f"Falha ao regerar parcelas: {e}")
     post_q: dict = {
@@ -781,11 +785,45 @@ async def adm_resync_pending_parcelas(
     if company_id:
         post_q["company_id"] = company_id
     post_count = await db.super_admin_transactions.count_documents(post_q)
+
+    # 2026-05-27 — Envio manual UNICO quando o operador marca "Notificar
+    # cliente". Pega a parcela em aberto mais antiga (proxima a vencer)
+    # de cada empresa afetada e envia 1 mensagem.
+    notified = 0
+    notify_errors = []
+    if notify and (company_id or post_count > 0):
+        # late import — evita ciclo com super_admin_routes
+        from routes.super_admin_routes import resend_transaction_reminder
+        company_filter = {"company_id": company_id} if company_id else {}
+        pipeline = [
+            {"$match": {
+                "auto_company_billing": True,
+                "status": "pendente",
+                **company_filter,
+            }},
+            {"$sort": {"due_date": 1}},
+            {"$group": {
+                "_id": "$company_id",
+                "txn_id": {"$first": "$id"},
+            }},
+        ]
+        groups = await db.super_admin_transactions.aggregate(pipeline).to_list(500)
+        for g in groups:
+            try:
+                # Chama o handler diretamente — Depends nao sao
+                # resolvidos pq estamos invocando como funcao normal.
+                # `_` (require_super_admin) eh ignorado no corpo.
+                await resend_transaction_reminder(g["txn_id"], _=None, db=db)
+                notified += 1
+            except Exception as e:
+                notify_errors.append(f"{g.get('_id','?')[:8]}: {e}")
     return {
         "ok": True,
         "deleted": res.deleted_count,
         "created": post_count,
         "pre_count": pre_count,
+        "notified": notified,
+        "notify_errors": notify_errors,
     }
 
 

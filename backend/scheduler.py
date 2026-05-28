@@ -311,7 +311,7 @@ def _render_reminder(template: str, ctx: dict) -> str:
     return out
 
 
-async def _process_billing_reminders(db, *, send_messages: bool = True):
+async def _process_billing_reminders(db, *, send_messages: bool = True, suppress_auto: bool = False):
     """2026-02-18 — Nao deve enviar mensagens em edicoes/criacoes de
     empresa. Quando `send_messages=False`, somente cria/atualiza linhas
     pendentes em super_admin_transactions (lado materializacao). O envio
@@ -462,6 +462,15 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
                             "author_name": "Sistema (cadastro da empresa)",
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         }]
+                    # 2026-05-27 — `suppress_auto=True`: parcela criada via
+                    # resync explicito do operador (salvar empresa /
+                    # resync-pending). Marca `auto_notify=False` para o
+                    # scheduler periodico nao re-enviar lembrete (resolve o
+                    # "mensagem dupla" relatado: deletar+recriar parcela
+                    # perdia o billing_reminder_history dela porque o
+                    # dedup eh por transaction_id).
+                    if suppress_auto:
+                        txn["auto_notify"] = False
                     await db.super_admin_transactions.insert_one(txn)
                     logger.info(
                         f"[scheduler] billing-reminder: created Lancamento "
@@ -469,6 +478,11 @@ async def _process_billing_reminders(db, *, send_messages: bool = True):
                     )
                 # Skip reminders for already-paid parcelas.
                 if (txn.get("status") or "").lower() == "pago":
+                    continue
+                # 2026-05-27 — Skip parcelas marcadas como `auto_notify=False`
+                # (criadas via resync explicito do operador). Operador
+                # escolhe se quer notificar manualmente via UI.
+                if txn.get("auto_notify") is False:
                     continue
                 # 2026-02-18 — Edicoes/criacoes de empresa chamam este loop
                 # apenas pra materializar Lancamentos pendentes. NUNCA

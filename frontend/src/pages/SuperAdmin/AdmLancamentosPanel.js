@@ -384,19 +384,34 @@ export const AdmLancamentosPanel = () => {
                       </div>
                     </td>
                     <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isOut ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {isOut ? '−' : '+'} {fmt(t.amount)}
-                      {/* 2026-05-26 — Mostra Liquido (amount-desconto) e
-                          Devido (liquido+acrescimo) em destaque na lista. */}
-                      {Number(t.discount || 0) > 0 && (
-                        <div className="text-[10px] text-emerald-700 font-normal" data-testid={`adm-row-liquido-${t.id}`}>
-                          Liquido: {fmt(Math.max(0, Number(t.amount || 0) - Number(t.discount || 0)))}
-                        </div>
-                      )}
-                      {overdue && (
-                        <div className="text-[10px] text-rose-700 font-semibold" data-testid={`adm-row-devido-${t.id}`}>
-                          Devido: {fmt(t.late_fee_computed.valor_devido)}
-                        </div>
-                      )}
+                      {/* 2026-05-27 (PM4) — Coluna VALOR redesenhada:
+                          - LIQUIDO em destaque (grande, verde quando entrada)
+                          - "Valor atualizado" (= devido com juros+multa) abaixo, em vermelho quando atrasado
+                          - Removida a linha "Valor total" bruto: o operador
+                            so precisa enxergar quanto realmente entra ou sai.
+                          Para SAIDAS (despesas) ou lancamentos sem desconto/
+                          juros, mostramos apenas o amount. */}
+                      {(() => {
+                        const amount = Number(t.amount || 0);
+                        const disc = Number(t.discount || 0);
+                        const liquido = Math.max(0, amount - disc);
+                        const hasJuros = overdue && Number(t.late_fee_computed?.total || 0) > 0;
+                        const devido = hasJuros ? Number(t.late_fee_computed.valor_devido) : liquido;
+                        // Quando nao ha desconto, o liquido === amount.
+                        const principalValue = disc > 0 ? liquido : amount;
+                        return (
+                          <>
+                            <div data-testid={`adm-row-liquido-${t.id}`}>
+                              {isOut ? '−' : '+'} {fmt(principalValue)}
+                            </div>
+                            {hasJuros && (
+                              <div className="text-[10px] text-rose-700 font-semibold mt-0.5" data-testid={`adm-row-atualizado-${t.id}`}>
+                                Valor atualizado: {fmt(devido)}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 text-center">
                       <PaymentCell

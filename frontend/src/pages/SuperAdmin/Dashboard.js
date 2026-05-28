@@ -2381,6 +2381,10 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
   const [customFeatures, setCustomFeatures] = useState(company?.features || []);
   const [showCustomFeatures, setShowCustomFeatures] = useState(!form.business_type_id);
   const [saving, setSaving] = useState(false);
+  // 2026-05-27 — Dialog customizado pos-save: pergunta se quer atualizar
+  // lancamentos em aberto + checkbox "Notificar cliente". Substitui o
+  // window.confirm() antigo que nao suporta checkbox.
+  const [resyncDialog, setResyncDialog] = useState(null); // {companyId, notify}
   // BD catalog — preloaded from backend, excludes the permanent "Padrao"
   // entry. Used by the EditableComboBox to render the custom list.
   const [bdCustomOptions, setBdCustomOptions] = useState([]);
@@ -2491,25 +2495,11 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           await superAdminAPI.updateCompanyFeatures(company.id, customFeatures);
         }
         toast.success('Empresa atualizada!');
-        // 2026-05-26 — Apos salvar com mudanca financeira, pergunta se
-        // operador quer atualizar os lancamentos em aberto desta empresa
-        // com os novos valores. Confirmou → chama resync escopado.
+        // 2026-05-27 — Apos salvar com mudanca financeira/descritiva,
+        // abre dialog (com checkbox "Notificar cliente"). Sem dialog
+        // window.confirm porque queremos o checkbox.
         if (_financeChanged) {
-          const ok = window.confirm(
-            'Deseja atualizar todos os lancamentos em aberto desta empresa no Financeiro com os novos valores?'
-          );
-          if (ok) {
-            try {
-              const r = await api.post(
-                `/super-admin/finance/resync-pending-parcelas?company_id=${encodeURIComponent(company.id)}`
-              );
-              toast.success(
-                `Lancamentos em aberto atualizados: ${r.data.deleted} → ${r.data.created}`
-              );
-            } catch (re) {
-              toast.error(re?.response?.data?.detail || 'Falha ao atualizar lancamentos em aberto');
-            }
-          }
+          setResyncDialog({ companyId: company.id, notify: false });
         }
       } else {
         // External (BD != Padrao) companies don't need admin login. They
@@ -2890,6 +2880,68 @@ const CompanyModal = ({ company, businessTypes, allFeatures, onClose, onSave }) 
           </button>
         </div>
       </div>
+      {/* 2026-05-27 — Dialog confirmando resync de lancamentos em aberto.
+          Inclui checkbox "Notificar cliente" — ao marcar, backend envia
+          UMA mensagem manual via /resync-pending-parcelas?notify=true.
+          Desmarcado (default): apenas atualiza valores; nenhuma mensagem
+          eh enviada (parcelas criadas com auto_notify=false bloqueiam o
+          scheduler periodico). */}
+      {resyncDialog && (
+        <div
+          className="fixed inset-0 bg-slate-900/60 z-[60] flex items-center justify-center p-4"
+          onMouseDown={(e) => e.target === e.currentTarget && setResyncDialog(null)}
+          data-testid="resync-dialog"
+        >
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onMouseDown={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-slate-900 mb-1">Atualizar lancamentos em aberto?</h3>
+            <p className="text-xs text-slate-600 mb-4">
+              Vamos recriar as parcelas PENDENTES desta empresa no Financeiro com os valores atualizados (sem afetar pagamentos ja registrados).
+            </p>
+            <label className="flex items-start gap-2 p-2.5 rounded border border-emerald-200 bg-emerald-50/40 cursor-pointer" data-testid="resync-dialog-notify-label">
+              <input
+                type="checkbox"
+                checked={resyncDialog.notify}
+                onChange={(e) => setResyncDialog(d => d ? { ...d, notify: e.target.checked } : d)}
+                className="mt-0.5"
+                data-testid="resync-dialog-notify"
+              />
+              <span className="text-xs text-slate-700">
+                <strong>Notificar cliente (envia UMA mensagem)</strong><br/>
+                <span className="text-slate-500">Deixe desmarcado para apenas atualizar sem enviar nada ao cliente. Quando marcado, envia exatamente 1 lembrete pelo WhatsApp.</span>
+              </span>
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setResyncDialog(null)}
+                className="btn-secondary"
+                data-testid="resync-dialog-cancel"
+              >
+                Nao atualizar
+              </button>
+              <button
+                data-testid="resync-dialog-confirm"
+                className="btn-primary"
+                onClick={async () => {
+                  const cur = resyncDialog;
+                  setResyncDialog(null);
+                  try {
+                    const r = await api.post(
+                      `/super-admin/finance/resync-pending-parcelas?company_id=${encodeURIComponent(cur.companyId)}&notify=${cur.notify ? 'true' : 'false'}`
+                    );
+                    let msg = `Lancamentos em aberto atualizados: ${r.data.deleted} -> ${r.data.created}`;
+                    if (cur.notify) msg += ` | ${r.data.notified || 0} mensagem(s) enviada(s)`;
+                    toast.success(msg);
+                  } catch (re) {
+                    toast.error(re?.response?.data?.detail || 'Falha ao atualizar lancamentos em aberto');
+                  }
+                }}
+              >
+                Atualizar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

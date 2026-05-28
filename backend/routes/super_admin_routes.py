@@ -852,13 +852,15 @@ async def update_company(
             logging.getLogger(__name__).warning(
                 f"[super_admin] adm_txn wipe failed company={company_id}: {_e}"
             )
-        # 2026-02-16 (N) — Apos limpar pendentes, ja regera as parcelas
-        # que estao dentro da janela de geracao (lancamento_gen_days).
         # 2026-02-18 — `send_messages=False`: ao editar empresa, NAO
         # enviar mensagens. So materializar parcelas pendentes.
+        # 2026-05-27 — `suppress_auto=True`: marca as parcelas com
+        # `auto_notify=False` para o scheduler periodico tambem nao
+        # enviar (resolve o "envio duplicado" ao salvar empresa).
+        # Operador escolhe se notifica manualmente via dialog frontend.
         try:
             from scheduler import _process_billing_reminders
-            await _process_billing_reminders(db, send_messages=False)
+            await _process_billing_reminders(db, send_messages=False, suppress_auto=True)
         except Exception as _e:
             import logging
             logging.getLogger(__name__).warning(

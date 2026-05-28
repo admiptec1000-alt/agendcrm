@@ -2799,3 +2799,16 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Implementacao: identifica posicao do cursor (tableIndex/rowIndex/colIndex) na DOM live do Quill, aplica mutacao via DOMParser em copia em memoria do HTML state, faz `setEditing` (Quill re-renderiza). Evita o problema de duplicacao de linhas quando Quill faz diff no controlled value.
 - `+ Tabela` funciona mesmo SEM cursor posicionado (insere no fim do conteudo). Demais botoes exigem cursor numa celula.
 - Validado via Playwright: 3x3 inserida -> 3x4 (col added) -> back to 3x3 (col deleted).
+
+## 2026-05-27 (PM4) — Coluna VALOR enxuta + Bug envio duplicado resolvido
+**Coluna VALOR (AdmLancamentosPanel.js)**:
+- Removida a linha "Valor total" (amount bruto) — operador so precisa ver o real.
+- **Valor liquido** agora eh o valor PRINCIPAL grande, em verde (entrada) ou vermelho (saida).
+- Quando ha juros/multa, exibe "Valor atualizado: R$ X" embaixo em vermelho (era "Devido:").
+
+**Bug envio DUPLICADO ao salvar empresa (RESOLVIDO)**:
+- Causa raiz: o resync apaga parcelas e recria com IDs novos. O dedup em `billing_reminder_history` eh por `transaction_id`, entao a parcela nova nao tem histórico - scheduler envia outra mensagem no próximo tick. = 2 mensagens.
+- Fix backend (`scheduler.py`): `_process_billing_reminders` aceita `suppress_auto`. Quando True, parcelas criadas ganham `auto_notify=False`. Scheduler pula parcelas com essa flag.
+- `update_company` e `/resync-pending-parcelas` agora chamam com `suppress_auto=True`. Resultado: NENHUMA mensagem eh enviada automaticamente apos salvar empresa.
+- `/resync-pending-parcelas?notify=true|false`: quando `notify=true`, pega a parcela em aberto mais proxima do vencimento de cada empresa afetada e dispara UMA mensagem manual (via `resend_transaction_reminder`).
+- Frontend: o `window.confirm` foi substituido por modal customizado com checkbox **"Notificar cliente (envia UMA mensagem)"**. Desmarcado = sem mensagem. Marcado = exatamente 1 mensagem.
