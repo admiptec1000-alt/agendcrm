@@ -255,6 +255,47 @@ def _format_brl(v):
         return "R$ 0,00"
 
 
+# 2026-05-28 (PM) — Formata excedente: se for um numero puro
+# ("3,10", "3.10", "0.50"), aplica "R$ X,YY". Caso contrario (texto
+# como "R$ 0,50/kg" ou "10% sobre franquia") retorna como veio.
+import re as _re
+
+def _format_excedente(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if not s:
+        return ""
+    # Normaliza virgula -> ponto, remove R$/espacos
+    cleaned = s.replace("R$", "").replace("r$", "").strip()
+    # Aceita "3,10" "3.10" "1234,56" "1.234,56"
+    test = cleaned.replace(".", "").replace(",", ".") if cleaned.count(",") == 1 and cleaned.replace(".", "").replace(",", "").isdigit() else cleaned
+    try:
+        n = float(test)
+        return _format_brl(n)
+    except (ValueError, TypeError):
+        return s
+
+
+# 2026-05-28 (PM) — Formata telefone BR para apresentacao em orcamento.
+# Entrada: "+5562999991234" / "5562999991234" / "62999991234"
+# Saida: "(62) 99999-1234" (10 ou 11 digitos locais)
+def _format_phone_br(v: Any) -> str:
+    if not v:
+        return ""
+    digits = _re.sub(r"\D", "", str(v))
+    if not digits:
+        return ""
+    # Strip pais 55 se aplicavel
+    if digits.startswith("55") and len(digits) in (12, 13):
+        digits = digits[2:]
+    if len(digits) == 11:
+        return f"({digits[:2]}) {digits[2:7]}-{digits[7:]}"
+    if len(digits) == 10:
+        return f"({digits[:2]}) {digits[2:6]}-{digits[6:]}"
+    return str(v)  # fallback inalterado
+
+
 # 2026-05-28 — Resolver telefone do vendedor via conexao WA marcada no cadastro
 async def _resolve_seller_phone_from_connection(db, user: dict) -> str:
     """Le `seller_connection_id` do usuario e retorna `phone_number` da
