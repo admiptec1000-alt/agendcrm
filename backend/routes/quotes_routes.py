@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Any
 from datetime import datetime, timezone
 import uuid
 import re
@@ -1310,7 +1310,11 @@ async def preview_template_html(
         items_out, freights_out, total = _compute_totals(
             [i for i in body.items], [f for f in (body.freights or [])]
         )
-        _items = items_out
+        # 2026-05-28 (PM) — Aplica formatacao final no preview tambem.
+        _items = [
+            {**it, "excedente": _format_excedente(it.get("excedente"))}
+            for it in items_out
+        ]
         _freights = freights_out
         _items_total = sum(float(i.get("total") or 0) for i in items_out)
         _freights_total = sum(float(f.get("total") or 0) for f in freights_out)
@@ -1337,6 +1341,16 @@ async def preview_template_html(
         "client_email": "cliente@exemplo.com",
         "client_address": "Rua Exemplo, 123",
         "client_cnpj": "12.345.678/0001-90",
+        # 2026-05-28 (PM) — Resolve seller_phone do user (com fallback p/
+        # conexao WA) e formata no padrao BR para o preview espelhar
+        # exatamente o que sai no PDF final.
+        "seller_phone": _format_phone_br(
+            user.get("phone")
+            or await _resolve_seller_phone_from_connection(db, user)
+            or ""
+        ),
+        "vigencia": "",
+        "frequencia": "",
         "company_name": company.get("name", ""),
         "company_phone": company.get("phone", ""),
         "company_email": company.get("email", ""),
@@ -1391,10 +1405,17 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
             template["layout_padding_x_mm"] = default_tpl.get("layout_padding_x_mm") or template.get("layout_padding_x_mm")
 
     client_ctx = await _build_client_ctx(db, user["company_id"], quote.get("client_id"))
+    # 2026-05-28 (PM) — Aplica formatacao final no momento da renderizacao:
+    #   - `excedente` numerico vira "R$ X,YY" (mantem texto livre como esta)
+    #   - `seller_phone` vira "(XX) XXXXX-XXXX" (strip de 55, formatacao BR)
+    _items_fmt = [
+        {**it, "excedente": _format_excedente(it.get("excedente"))}
+        for it in (quote.get("items") or [])
+    ]
     ctx = {
         **client_ctx,
         "quote_number": quote.get("quote_number"),
-        "items": quote.get("items", []),
+        "items": _items_fmt,
         "freights": quote.get("freights", []),
         "items_total": quote.get("items_total", 0),
         "freights_total": quote.get("freights_total", 0),
@@ -1409,7 +1430,8 @@ async def _build_quote_html(qid: str, user, db) -> tuple:
         "seller_name": quote.get("seller_name") or "",
         "seller_contact": quote.get("seller_contact") or "",
         # 2026-05-27 — Telefone do vendedor + Vigencia + Frequencia.
-        "seller_phone": quote.get("seller_phone") or "",
+        # 2026-05-28 (PM) — Telefone formatado para apresentacao BR.
+        "seller_phone": _format_phone_br(quote.get("seller_phone") or ""),
         "vigencia": quote.get("vigencia") or "",
         "frequencia": quote.get("frequencia") or "",
         "validity_days": quote.get("validity_days") or 15,

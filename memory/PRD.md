@@ -2848,3 +2848,23 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Causa do problema: ate hoje o node ticket apenas mudava status/queue do ticket. Cliente nao recebia nada e ficava confuso.
 - Backend (`flow_engine.py`): node passa a aceitar `transfer_message` no config. Quando preenchido, antes de retornar (encerrar fluxo) envia via `_send_whatsapp` + persiste no historico do ticket com `reason: "transfer"`. Variaveis: `{{queue_name}}`, `{{nome}}`, + qualquer var acumulada (vars_).
 - Frontend (`FlowBuilderPage.js`): novo textarea "Mensagem de encaminhamento (opcional)" no editor do node ticket, com placeholder e dica das variaveis disponiveis.
+
+
+## 2026-05-28 (PM) — Formatacao de `{{excedente}}` e `{{seller_phone}}` no render
+- **Bug**: variaveis chegavam ao PDF/preview "cruas" (ex.: `5562999991234` ou `3,10`), exigindo formatacao manual do operador no input.
+- **Fix em `routes/quotes_routes.py`**:
+  - `_format_excedente(v)` — se for numero puro (`3,10` / `1.234,56` / `100`), formata como `R$ X,YY`. Se for texto livre (`R$ 0,50/kg`, `10% sobre franquia`), preserva como esta.
+  - `_format_phone_br(v)` — strip de `+` e codigo `55`, retorna `(XX) XXXXX-XXXX` (11 digitos) ou `(XX) XXXX-XXXX` (10 digitos). Input ja formatado tambem funciona (re-extrai digitos).
+  - Aplicado em `_build_quote_html` (PDF/render real) iterando `quote["items"]` para formatar `excedente` e formatando `seller_phone` no ctx.
+  - Aplicado tambem em `/api/quotes/templates/preview-html` para o live preview do editor refletir exatamente o PDF final. Preview agora resolve `seller_phone` via mesma cascata do POST de orcamento (`user.phone` -> conexao WA).
+- **Import**: adicionado `Any` em `from typing import ...`.
+- **Validacao**: testes unitarios diretos das helpers + curl no `/preview-html` confirmam:
+  - `+5562999991234` -> `(62) 99999-1234`
+  - `5562999991234` -> `(62) 99999-1234`
+  - `6233334444` -> `(62) 3333-4444`
+  - `3,10` -> `R$ 3,10`; `1.234,56` -> `R$ 1.234,56`; `R$ 0,50/kg` -> mantido; `10% sobre franquia` -> mantido.
+
+## Roadmap
+- **P1**: Toggle `no_back` por menu no Flowbuilder (esconder "[9] Voltar" via configuracao por nivel/menu).
+- **P2**: Acao "Responder" no `MessageActionsMenu` do CRM (citar mensagem com banner amarelo lateral).
+- **P2 (refactor)**: quebrar `Dashboard.js` (~7k linhas) em componentes/paginas dedicados e `crm_routes.py` (~3k linhas) em routers menores.
