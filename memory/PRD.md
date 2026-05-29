@@ -2835,3 +2835,16 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Backend (`/api/crm/tickets/{id}`): quando o operador muda `status=fechado` e `companies.send_close_message_on_manual=true`, envia a MESMA mensagem do auto-close para o cliente (best-effort, falha NAO bloqueia o PUT).
 - Frontend (`TicketLifecycleSettingsCard.js`): toggle "Enviar tambem no fechamento MANUAL" no card de configuracao. Default desligado.
 - Validado: GET/PUT `/api/crm/company/ticket-settings` aceita o novo campo `send_close_message_on_manual` e persiste.
+
+## 2026-05-28 — Seller phone via conexao + Mensagem de encaminhamento no node Ticket
+**Bug `{{seller_phone}}` vazio (RESOLVIDO)**:
+- Causa: cadastro de user sem campo telefone -> fallback retornava string vazia.
+- Fix: cadastro de usuario ganhou campo "Contato (conexao WhatsApp) para variavel {{seller_phone}}" — dropdown com todas as conexoes da empresa. Selecionou? Backend resolve `phone_number` da conexao na criacao do orcamento.
+- Cascata de resolucao: 1) `payload.seller_phone` (form) -> 2) `user.phone` -> 3) `phone_number` da conexao em `user.seller_connection_id`.
+- Backend: `CompanyUser*.seller_connection_id`, helper `_resolve_seller_phone_from_connection`. Frontend: dropdown verde com hint.
+- Validado: usuario com `seller_connection_id` -> orcamento criado com `seller_phone="+5562999991234"`.
+
+**Node "Ticket/Queue/Transfer" envia mensagem ao cliente (NOVO)**:
+- Causa do problema: ate hoje o node ticket apenas mudava status/queue do ticket. Cliente nao recebia nada e ficava confuso.
+- Backend (`flow_engine.py`): node passa a aceitar `transfer_message` no config. Quando preenchido, antes de retornar (encerrar fluxo) envia via `_send_whatsapp` + persiste no historico do ticket com `reason: "transfer"`. Variaveis: `{{queue_name}}`, `{{nome}}`, + qualquer var acumulada (vars_).
+- Frontend (`FlowBuilderPage.js`): novo textarea "Mensagem de encaminhamento (opcional)" no editor do node ticket, com placeholder e dica das variaveis disponiveis.

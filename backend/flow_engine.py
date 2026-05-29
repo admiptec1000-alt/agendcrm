@@ -1224,6 +1224,43 @@ async def advance_flow(
                     patch["assigned_to"] = None
             if not dry_run:
                 await db.tickets.update_one({"id": ticket["id"]}, {"$set": patch})
+            # 2026-05-28 — Mensagem opcional de encaminhamento. Quando o
+            # operador escreve algo no campo `transfer_message` do node,
+            # enviamos antes de encerrar o fluxo. Substitui {{queue_name}}
+            # e {{nome}} (cliente). Best-effort — falha NAO derruba o
+            # fluxo nem o transfer.
+            transfer_msg = (cfg.get("transfer_message") or "").strip()
+            if transfer_msg and not dry_run:
+                try:
+                    rendered = (
+                        transfer_msg
+                        .replace("{{queue_name}}", queue_name or "")
+                        .replace("{queue_name}", queue_name or "")
+                        .replace("{{nome}}", ticket.get("customer_name") or "")
+                        .replace("{nome}", ticket.get("customer_name") or "")
+                    )
+                    # Aplica tambem qualquer variavel acumulada do fluxo.
+                    for vk, vv in (vars_ or {}).items():
+                        rendered = rendered.replace("{{" + str(vk) + "}}", str(vv))
+                    sent_msg_id = await _send_whatsapp(ticket, rendered, db=db)
+                    if sent_msg_id:
+                        sent += 1
+                        # Persiste no historico do ticket pra UI ver.
+                        await db.tickets.update_one(
+                            {"id": ticket["id"]},
+                            {"$push": {"messages": {
+                                "from": "bot",
+                                "text": rendered,
+                                "type": "text",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "system": True,
+                                "reason": "transfer",
+                            }}},
+                        )
+                except Exception as _te:
+                    logger.warning(
+                        f"[flow_engine] transfer_message send failed ticket={ticket['id']}: {_te}"
+                    )
             logger.info(
                 f"[flow_engine] flow ended at ticket/queue node {current_id} "
                 f"queue_id={queue_id!r} status={new_status!r}"

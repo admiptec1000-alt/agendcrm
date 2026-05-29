@@ -255,6 +255,25 @@ def _format_brl(v):
         return "R$ 0,00"
 
 
+# 2026-05-28 — Resolver telefone do vendedor via conexao WA marcada no cadastro
+async def _resolve_seller_phone_from_connection(db, user: dict) -> str:
+    """Le `seller_connection_id` do usuario e retorna `phone_number` da
+    `channel_connections` correspondente. Vazio quando nao configurado."""
+    conn_id = (user or {}).get("seller_connection_id")
+    if not conn_id:
+        return ""
+    try:
+        conn = await db.channel_connections.find_one(
+            {"id": conn_id, "company_id": user.get("company_id")},
+            {"_id": 0, "phone_number": 1, "phone": 1},
+        )
+        if not conn:
+            return ""
+        return conn.get("phone_number") or conn.get("phone") or ""
+    except Exception:
+        return ""
+
+
 def _auto_wrap_loops(html: str) -> str:
     """Robust loop-wrapper using a real HTML parser (BeautifulSoup).
 
@@ -982,9 +1001,20 @@ async def create_quote(data: QuoteCreate, user=Depends(get_current_user), db: As
         "seller_name": data.seller_name or user.get("name"),
         "seller_contact": data.seller_contact,
         # 2026-05-27 — telefone do vendedor exposto como {{seller_phone}}.
-        # Fallback: telefone do user logado (campo `phone`) quando o frontend
-        # nao envia explicitamente.
-        "seller_phone": data.seller_phone or user.get("phone") or "",
+        # 2026-05-28 — Cascata de fallback p/ resolver o telefone:
+        #   1) payload.seller_phone (operador digitou no form)
+        #   2) telefone do user (campo `phone`)
+        #   3) phone_number da conexao WA marcada como "vendedor" no
+        #      cadastro do usuario (`user.seller_connection_id`).
+        # Esta cascata garante que mesmo quem nao tem telefone no cadastro
+        # mas tem uma conexao WA dedicada (ex: numero comercial separado)
+        # ja recebe {{seller_phone}} preenchido automaticamente.
+        "seller_phone": (
+            data.seller_phone
+            or user.get("phone")
+            or await _resolve_seller_phone_from_connection(db, user)
+            or ""
+        ),
         "validity_days": data.validity_days or 15,
         # 2026-05-27 — Texto livre exibido como {{vigencia}} e {{frequencia}}.
         "vigencia": data.vigencia or "",

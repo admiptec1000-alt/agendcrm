@@ -6491,7 +6491,7 @@ const UsuariosPage = () => {
   const handleSave = async (form) => {
     try {
       if (editing) {
-        const payload = { name: form.name, email: form.email, permission_profile_id: form.permission_profile_id || null, professional_id: form.professional_id || null, connection_ids: form.connection_ids || [], allowed_queue_ids: form.allowed_queue_ids || [] };
+        const payload = { name: form.name, email: form.email, permission_profile_id: form.permission_profile_id || null, professional_id: form.professional_id || null, connection_ids: form.connection_ids || [], allowed_queue_ids: form.allowed_queue_ids || [], view_all_kanban: !!form.view_all_kanban, seller_connection_id: form.seller_connection_id || null };
         if (form.password) payload.password = form.password;
         await schedulingAPI.updateCompanyUser(editing.id, payload);
         toast.success('Usuario atualizado!');
@@ -6564,6 +6564,7 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
     connection_ids: user?.connection_ids || [],
     allowed_queue_ids: user?.allowed_queue_ids || [],
     view_all_kanban: !!user?.view_all_kanban,  // 2026-05-27
+    seller_connection_id: user?.seller_connection_id || '',  // 2026-05-28
   });
   const [connections, setConnections] = useState([]);
   const [queues, setQueues] = useState([]);
@@ -6703,6 +6704,31 @@ const UsuarioForm = ({ user, profiles, professionals, onSave }) => {
             </p>
           </div>
         </label>
+      </div>
+      {/* 2026-05-28 — Conexao WhatsApp da qual sera extraido o
+          telefone para a variavel {{seller_phone}} em orcamentos
+          gerados por este usuario. Funciona como "vitrine" do contato
+          comercial sem precisar preencher manualmente em cada orcamento. */}
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+        <label className="block text-xs font-semibold text-emerald-900 mb-1">
+          Contato (conexao WhatsApp) para variavel <code className="font-mono">{'{{seller_phone}}'}</code>
+        </label>
+        <select
+          value={form.seller_connection_id}
+          onChange={(e) => setForm({ ...form, seller_connection_id: e.target.value })}
+          className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+          data-testid="user-seller-connection"
+        >
+          <option value="">Usar o telefone do cadastro do usuario</option>
+          {connections.map(c => (
+            <option key={c.id} value={c.id}>
+              {c.name || c.label || c.id} — {c.phone_number || c.phone || 'sem numero'}
+            </option>
+          ))}
+        </select>
+        <p className="text-[10px] text-slate-500 mt-1">
+          Quando este usuario gerar um orcamento, o sistema preenche automaticamente <code>{'{{seller_phone}}'}</code> com o numero da conexao escolhida. Util quando o vendedor usa um numero comercial diferente do cadastro pessoal.
+        </p>
       </div>
       <div className="flex justify-end">
         <button onClick={() => form.name && form.email && onSave(form)} className="btn-primary text-sm" data-testid="save-user-btn">Salvar</button>

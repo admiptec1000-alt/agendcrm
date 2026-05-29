@@ -856,6 +856,22 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, o
                   <option value="atendendo">Em atendimento</option>
                   <option value="aberto">Aberto</option>
                 </select></div>
+              {/* 2026-05-28 — Mensagem opcional enviada ao cliente quando
+                  o fluxo encaminha o ticket. Suporta {{queue_name}}. */}
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Mensagem de encaminhamento (opcional)</label>
+                <textarea
+                  value={config.transfer_message || ''}
+                  onChange={e => setConfig({...config, transfer_message: e.target.value})}
+                  rows={3}
+                  className="input-field text-sm font-mono"
+                  data-testid="ticket-transfer-message"
+                  placeholder="Ex: Otimo! Estamos encaminhando voce para o setor {{queue_name}}. Aguarde, um atendente ja vai te responder."
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Variaveis disponiveis: <code className="font-mono">{'{{queue_name}}'}</code> (nome da fila), <code className="font-mono">{'{{nome}}'}</code> (nome do cliente). Deixe em branco para nao enviar nenhuma mensagem extra.
+                </p>
+              </div>
             </div>
           )}
           {node.data?.nodeType === 'tag' && (
