@@ -137,17 +137,18 @@ async def _process_ticket_auto_close(db):
             continue
         cutoff = (now - timedelta(hours=hours)).isoformat()
         message_template = c.get("ticket_auto_close_message") or ""
-        # Fetch the tickets we're about to close so we can send the
-        # goodbye message via the WhatsApp service. Without this, the
-        # mass-update wouldn't tell us which contacts to ping.
-        # 2026-02-15 (H) — per-company auto-close message.
+        # 2026-05-28 — BUG FIX: antes filtrava por ["aberto","em_andamento"]
+        # mas os tickets reais ficam em `aberto|atendendo|aguardando`. Por
+        # isso o auto-close NUNCA funcionava em prod. Agora pega TUDO que
+        # nao esta `fechado`/`cancelado`.
+        OPEN_STATUSES = ["aberto", "em_andamento", "atendendo", "aguardando"]
         to_close_cursor = db.tickets.find(
             {
                 "company_id": c["id"],
-                "status": {"$in": ["aberto", "em_andamento"]},
+                "status": {"$in": OPEN_STATUSES},
                 "updated_at": {"$lt": cutoff},
             },
-            {"_id": 0, "id": 1, "contact_id": 1, "channel_id": 1},
+            {"_id": 0, "id": 1, "contact_id": 1, "channel_id": 1, "customer_phone": 1, "connection_id": 1, "customer_name": 1},
         )
         tickets_to_close = await to_close_cursor.to_list(500)
         if not tickets_to_close:
@@ -158,17 +159,25 @@ async def _process_ticket_auto_close(db):
         if message_template.strip():
             for t in tickets_to_close:
                 try:
-                    contact = await db.contacts.find_one(
-                        {"id": t.get("contact_id")},
-                        {"_id": 0, "phone": 1, "name": 1},
-                    )
-                    channel = await db.channel_connections.find_one(
-                        {"id": t.get("channel_id")},
-                        {"_id": 0, "id": 1},
-                    )
-                    if not (contact and channel and contact.get("phone")):
+                    # 2026-05-28 — Suporta TANTO o schema antigo (contact_id/
+                    # channel_id, tabelas separadas) quanto o atual onde o
+                    # ticket guarda `customer_phone` / `connection_id` direto.
+                    phone = t.get("customer_phone") or ""
+                    contact_name = t.get("customer_name") or ""
+                    connection_id = t.get("connection_id") or t.get("channel_id")
+                    if not phone:
+                        contact = await db.contacts.find_one(
+                            {"id": t.get("contact_id")},
+                            {"_id": 0, "phone": 1, "name": 1},
+                        )
+                        if contact:
+                            phone = contact.get("phone") or ""
+                            contact_name = contact_name or contact.get("name") or ""
+                    if not (phone and connection_id):
+                        logger.warning(
+                            f"[scheduler] auto-close skipped ticket={t.get('id')}: missing phone/connection"
+                        )
                         continue
-                    contact_name = contact.get("name") or ""
                     company_name = c.get("name") or ""
                     msg = (
                         message_template
@@ -178,9 +187,13 @@ async def _process_ticket_auto_close(db):
                         .replace("{empresa}", company_name)
                     )
                     async with httpx.AsyncClient(timeout=10.0) as client:
-                        await client.post(
-                            f"{wa_service_url}/instances/{channel['id']}/send",
-                            json={"phone": contact["phone"], "message": msg},
+                        r = await client.post(
+                            f"{wa_service_url}/instances/{connection_id}/send",
+                            json={"phone": phone, "message": msg},
+                        )
+                        logger.info(
+                            f"[scheduler] auto-close msg sent ticket={t.get('id')} "
+                            f"status={r.status_code}"
                         )
                     # Persist in ticket message history.
                     await db.tickets.update_one(
@@ -202,7 +215,7 @@ async def _process_ticket_auto_close(db):
         result = await db.tickets.update_many(
             {
                 "company_id": c["id"],
-                "status": {"$in": ["aberto", "em_andamento"]},
+                "status": {"$in": OPEN_STATUSES},
                 "updated_at": {"$lt": cutoff},
             },
             {"$set": {

@@ -20,6 +20,9 @@ const TicketLifecycleSettingsCard = ({ canEdit = true }) => {
   const [initialMessage, setInitialMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // 2026-05-28 — Flag para enviar a MESMA mensagem no fechamento MANUAL
+  // do ticket pelo operador (alem do auto-close por inatividade).
+  const [sendOnManual, setSendOnManual] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,6 +33,7 @@ const TicketLifecycleSettingsCard = ({ canEdit = true }) => {
         const msg = r.data?.ticket_auto_close_message || '';
         setMessage(msg);
         setInitialMessage(msg);
+        setSendOnManual(!!r.data?.send_close_message_on_manual);
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -149,6 +153,29 @@ const TicketLifecycleSettingsCard = ({ canEdit = true }) => {
           {!canEdit && (
             <p className="text-xs text-amber-600">Apenas administradores podem alterar.</p>
           )}
+
+          {/* 2026-05-28 — Toggle: enviar a mesma mensagem quando o operador
+              fecha MANUALMENTE o ticket. */}
+          <div className="border-t border-slate-100 pt-5">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={sendOnManual}
+                onChange={async (e) => {
+                  const v = e.target.checked;
+                  setSendOnManual(v);
+                  try { await save({ send_close_message_on_manual: v }); } catch (_) {}
+                }}
+                disabled={!canEdit || saving}
+                data-testid="send-close-on-manual"
+                className="mt-0.5"
+              />
+              <span className="text-xs text-slate-700">
+                <strong>Enviar tambem no fechamento MANUAL</strong> do atendimento<br/>
+                <span className="text-slate-500">Quando habilitado, a mesma mensagem acima eh enviada ao cliente toda vez que o operador clica em "Encerrar atendimento" no painel. Desligado por padrao.</span>
+              </span>
+            </label>
+          </div>
         </div>
       )}
     </div>

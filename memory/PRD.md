@@ -2824,3 +2824,14 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - **Grid de itens do orcamento (OrcamentosPage.js)**: adicionada coluna "Excedente" editavel inline. Auto-preenchida do catalogo quando o item vem de `addFromCatalog`; pode ser sobrescrita por orcamento. Reorganizado o grid de 12 cols: 4 desc + 1 un + 1 qtd + 2 vlr + 2 excedente + 1 subtotal + 1 lixeira.
 - **Bug `{{excedente}}` literal no preview do template**: causa raiz era o endpoint `/quotes/templates/preview-html` que usava mock fixo "Servico exemplo" ignorando items do payload. Corrigido: agora aceita `items`/`freights` opcionais no payload e os utiliza no contexto de render. Validado via curl: `{{excedente}}` agora resolve para `"R$ 0,50/kg adicional"` no preview.
 - O endpoint `_build_quote_html` (usado em PDF/render real) ja repassava items completos (incluindo excedente) — nada a corrigir la.
+
+## 2026-05-28 — Auto-close por inatividade + Mensagem no fechamento manual
+**Bug critico do auto-close (RESOLVIDO)**:
+- Scheduler `_process_ticket_auto_close` (em `scheduler.py`) filtrava `status: ["aberto","em_andamento"]`, mas no CRM os tickets ativos ficam em **`aberto|atendendo|aguardando`** (sem `em_andamento`). Resultado: o auto-close NUNCA executava em prod. Adicionado `atendendo` e `aguardando` ao filtro.
+- Endereco do contato/conexao: antes lia de `contacts` + `channel_connections`. Agora le direto do ticket (`customer_phone` / `connection_id`), com fallback ao schema antigo. Sem isso a msg falhava silenciosamente.
+- Adicionado log `[scheduler] auto-close msg sent ticket=... status=...` pra diagnostico.
+
+**Nova feature: mensagem no fechamento MANUAL**:
+- Backend (`/api/crm/tickets/{id}`): quando o operador muda `status=fechado` e `companies.send_close_message_on_manual=true`, envia a MESMA mensagem do auto-close para o cliente (best-effort, falha NAO bloqueia o PUT).
+- Frontend (`TicketLifecycleSettingsCard.js`): toggle "Enviar tambem no fechamento MANUAL" no card de configuracao. Default desligado.
+- Validado: GET/PUT `/api/crm/company/ticket-settings` aceita o novo campo `send_close_message_on_manual` e persiste.

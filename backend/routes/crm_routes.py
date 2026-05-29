@@ -473,7 +473,61 @@ async def update_ticket(
             {"id": ticket_id},
             {"$set": update_data}
         )
-    
+
+    # 2026-05-28 — Quando o operador fecha MANUALMENTE o ticket, opcional
+    # mente envia a MESMA mensagem de encerramento usada pelo auto-close
+    # (companies.ticket_auto_close_message). Controlado por
+    # `companies.send_close_message_on_manual` (default False). Best-effort,
+    # falha NAO derruba a request.
+    if new_status == "fechado":
+        try:
+            comp = await db.companies.find_one(
+                {"id": user["company_id"]},
+                {"_id": 0, "name": 1, "send_close_message_on_manual": 1, "ticket_auto_close_message": 1},
+            ) or {}
+            if bool(comp.get("send_close_message_on_manual")) and (comp.get("ticket_auto_close_message") or "").strip():
+                import httpx, os, logging
+                _logger = logging.getLogger(__name__)
+                phone = ticket.get("customer_phone") or ""
+                connection_id = ticket.get("connection_id") or ticket.get("channel_id")
+                contact_name = ticket.get("customer_name") or ""
+                if phone and connection_id:
+                    company_name = comp.get("name") or ""
+                    template = comp["ticket_auto_close_message"]
+                    msg = (
+                        template
+                        .replace("{{nome}}", contact_name)
+                        .replace("{nome}", contact_name)
+                        .replace("{{empresa}}", company_name)
+                        .replace("{empresa}", company_name)
+                    )
+                    wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            r = await client.post(
+                                f"{wa_url}/instances/{connection_id}/send",
+                                json={"phone": phone, "message": msg},
+                            )
+                            _logger.info(
+                                f"[manual-close] msg sent ticket={ticket_id} status={r.status_code}"
+                            )
+                        await db.tickets.update_one(
+                            {"id": ticket_id},
+                            {"$push": {"messages": {
+                                "from": "bot",
+                                "text": msg,
+                                "type": "text",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "system": True,
+                                "reason": "manual_close",
+                            }}},
+                        )
+                    except Exception as se:
+                        _logger.warning(f"[manual-close] msg failed ticket={ticket_id}: {se}")
+        except Exception as ce:
+            import logging
+            logging.getLogger(__name__).warning(f"[manual-close] config lookup failed ticket={ticket_id}: {ce}")
+
     updated_ticket = await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
     return updated_ticket
 
@@ -1327,6 +1381,8 @@ class TicketLifecycleSettingsUpdate(BaseModel):
     sgp_gateway_auto_close: Optional[bool] = None
     ticket_auto_close_hours: Optional[int] = None
     ticket_auto_close_message: Optional[str] = None
+    # 2026-05-28 — Quando True, fechamento MANUAL tambem envia a mensagem.
+    send_close_message_on_manual: Optional[bool] = None
 
 
 @router.get("/company/ticket-settings")
@@ -1336,12 +1392,14 @@ async def get_company_ticket_settings(
 ):
     comp = await db.companies.find_one(
         {"id": user["company_id"]},
-        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1, "ticket_auto_close_message": 1},
+        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1,
+         "ticket_auto_close_message": 1, "send_close_message_on_manual": 1},
     ) or {}
     return {
         "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
         "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
         "ticket_auto_close_message": comp.get("ticket_auto_close_message") or "",
+        "send_close_message_on_manual": bool(comp.get("send_close_message_on_manual", False)),
     }
 
 
@@ -1365,18 +1423,22 @@ async def update_company_ticket_settings(
     if data.ticket_auto_close_message is not None:
         # Trim e cap em 1000 chars pra evitar payload abusivo.
         update["ticket_auto_close_message"] = (data.ticket_auto_close_message or "")[:1000]
+    if data.send_close_message_on_manual is not None:
+        update["send_close_message_on_manual"] = bool(data.send_close_message_on_manual)
     await db.companies.update_one(
         {"id": user["company_id"]},
         {"$set": update},
     )
     comp = await db.companies.find_one(
         {"id": user["company_id"]},
-        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1, "ticket_auto_close_message": 1},
+        {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1,
+         "ticket_auto_close_message": 1, "send_close_message_on_manual": 1},
     ) or {}
     return {
         "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
         "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
         "ticket_auto_close_message": comp.get("ticket_auto_close_message") or "",
+        "send_close_message_on_manual": bool(comp.get("send_close_message_on_manual", False)),
     }
 
 
