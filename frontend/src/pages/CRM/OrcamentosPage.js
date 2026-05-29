@@ -1328,13 +1328,34 @@ const QuoteEditor = ({ initial, onClose, onSaved, onSavedAndSend }) => {
             </div>
           </div>
           {form.items.length === 0 && <div className="text-center text-slate-400 text-sm py-4">Nenhum item. Adicione do catalogo ou linha vazia.</div>}
+          {form.items.length > 0 && (
+            <div className="grid grid-cols-12 gap-2 text-[10px] uppercase font-bold text-slate-400 mb-1 px-1">
+              <div className="col-span-4">Descricao</div>
+              <div className="col-span-1 text-center">Unid</div>
+              <div className="col-span-1 text-right">Qtd</div>
+              <div className="col-span-2 text-right">Vlr Unit</div>
+              {/* 2026-05-28 — Coluna excedente editavel inline. Texto livre.
+                  Auto-preenchida do catalogo, mas operador pode sobrescrever. */}
+              <div className="col-span-2">Excedente</div>
+              <div className="col-span-1 text-right">Total</div>
+              <div className="col-span-1"></div>
+            </div>
+          )}
           <div className="space-y-2">
             {form.items.map((it, idx) => (
               <div key={idx} className="grid grid-cols-12 gap-2 items-center" data-testid={`quote-item-${idx}`}>
-                <input className="col-span-5 border rounded px-2 py-1 text-sm" placeholder="Descricao" value={it.description} onChange={(e) => updateItem(idx, { description: e.target.value })} />
+                <input className="col-span-4 border rounded px-2 py-1 text-sm" placeholder="Descricao" value={it.description} onChange={(e) => updateItem(idx, { description: e.target.value })} />
                 <input className="col-span-1 border rounded px-2 py-1 text-sm text-center" placeholder="un" value={it.unit} onChange={(e) => updateItem(idx, { unit: e.target.value })} />
-                <input type="number" step="0.01" className="col-span-2 border rounded px-2 py-1 text-sm text-right" placeholder="Qtde" value={it.quantity} onChange={(e) => updateItem(idx, { quantity: parseFloat(e.target.value) || 0 })} />
+                <input type="number" step="0.01" className="col-span-1 border rounded px-2 py-1 text-sm text-right" placeholder="Qtde" value={it.quantity} onChange={(e) => updateItem(idx, { quantity: parseFloat(e.target.value) || 0 })} />
                 <input type="number" step="0.01" className="col-span-2 border rounded px-2 py-1 text-sm text-right" placeholder="Vlr Unit" value={it.unit_price} onChange={(e) => updateItem(idx, { unit_price: parseFloat(e.target.value) || 0 })} />
+                <input
+                  className="col-span-2 border rounded px-2 py-1 text-sm"
+                  placeholder="Ex: R$ 0,50/kg adicional"
+                  value={it.excedente || ''}
+                  onChange={(e) => updateItem(idx, { excedente: e.target.value })}
+                  data-testid={`quote-item-excedente-${idx}`}
+                  title="Texto livre — aparece como variavel {{excedente}} no template"
+                />
                 <span className="col-span-1 text-right text-xs font-medium text-emerald-700">{formatBRL((it.quantity || 0) * (it.unit_price || 0))}</span>
                 <button onClick={() => removeItem(idx)} className="col-span-1 text-red-500"><Trash2 className="w-4 h-4 mx-auto" /></button>
               </div>

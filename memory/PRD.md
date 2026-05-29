@@ -2819,3 +2819,8 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 - Backend: scheduler `_process_billing_reminders` envia follow-up Pix apos sucesso. `super_admin_routes.resend_transaction_reminder` faz o mesmo. Falha do Pix follow-up NAO bloqueia o sucesso da cobranca principal — registra em billing_reminder_history como `kind=auto_pix`/`manual_resend_pix`.
 - Frontend: nova secao verde "Chave Pix (mensagem separada)" no painel de configuracao (BillingReminderPanel.js) com checkbox + input de chave (max 200 chars). Quando checkbox desmarcado, o input fica disabled.
 - Validado via curl: PUT settings com pix_key persiste, GET retorna corretamente.
+
+## 2026-05-28 — Coluna Excedente na grid de itens + preview real
+- **Grid de itens do orcamento (OrcamentosPage.js)**: adicionada coluna "Excedente" editavel inline. Auto-preenchida do catalogo quando o item vem de `addFromCatalog`; pode ser sobrescrita por orcamento. Reorganizado o grid de 12 cols: 4 desc + 1 un + 1 qtd + 2 vlr + 2 excedente + 1 subtotal + 1 lixeira.
+- **Bug `{{excedente}}` literal no preview do template**: causa raiz era o endpoint `/quotes/templates/preview-html` que usava mock fixo "Servico exemplo" ignorando items do payload. Corrigido: agora aceita `items`/`freights` opcionais no payload e os utiliza no contexto de render. Validado via curl: `{{excedente}}` agora resolve para `"R$ 0,50/kg adicional"` no preview.
+- O endpoint `_build_quote_html` (usado em PDF/render real) ja repassava items completos (incluindo excedente) — nada a corrigir la.

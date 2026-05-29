@@ -1212,6 +1212,12 @@ class _TemplatePreviewRequest(BaseModel):
     footer_html: Optional[str] = ""
     header_height_mm: Optional[int] = 22
     footer_height_mm: Optional[int] = 18
+    # 2026-05-28 — Opcional: payload pode injetar dados reais (items/
+    # freights/notes/vigencia/...) para preview do template apos clique
+    # em "Pre-visualizar" no editor de orcamento. Sem isso, fallback
+    # para o servico exemplo de 1 linha.
+    items: Optional[List[dict]] = None
+    freights: Optional[List[dict]] = None
 
 
 @router.post("/templates/preview-html")
@@ -1227,13 +1233,30 @@ async def preview_template_html(
     quote required; uses the company logo and a single placeholder so the
     layout is realistic."""
     company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
+    # 2026-05-28 — Quando o payload manda items reais (preview de orcamento
+    # em edicao), usa eles. Caso contrario fallback para mock 1 linha.
+    if body.items:
+        items_out, freights_out, total = _compute_totals(
+            [i for i in body.items], [f for f in (body.freights or [])]
+        )
+        _items = items_out
+        _freights = freights_out
+        _items_total = sum(float(i.get("total") or 0) for i in items_out)
+        _freights_total = sum(float(f.get("total") or 0) for f in freights_out)
+        _total = float(total or 0)
+    else:
+        _items = [{"description": "Servico exemplo", "quantity": 1, "unit_price": 100.0, "total": 100.0, "unit": "un", "excedente": ""}]
+        _freights = []
+        _items_total = 100.0
+        _freights_total = 0.0
+        _total = 100.0
     fake_quote_ctx = {
         "quote_number": "0001 (preview)",
-        "items": [{"description": "Servico exemplo", "quantity": 1, "unit_price": 100.0, "total": 100.0, "unit": "un"}],
-        "freights": [],
-        "items_total": 100.0,
-        "freights_total": 0.0,
-        "total_value": 100.0,
+        "items": _items,
+        "freights": _freights,
+        "items_total": _items_total,
+        "freights_total": _freights_total,
+        "total_value": _total,
         "minimum_billing_kg": "",
         "payment_terms": "30 dias apos emissao",
         "validity_days": 15,
