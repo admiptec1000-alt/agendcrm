@@ -361,6 +361,9 @@ class BookingPageUpdate(BaseModel):
     custom_domain: Optional[str] = None
     slug: Optional[str] = None
     show_email_field: Optional[bool] = None
+    # 2026-02-28 — Inverte ordem da pagina publica: ON => Profissional
+    # primeiro, depois Servico. Default OFF mantem comportamento atual.
+    invert_service_professional: Optional[bool] = None
 
 # Quick Response Models
 class QuickResponseCreate(BaseModel):

@@ -164,9 +164,14 @@ const PublicBooking = () => {
     );
   }
 
+  // 2026-02-28 — Inversao da ordem de etapas controlada pela empresa
+  // (Configuracao Agenda). Quando true, Step 1 vira Profissional e Step
+  // 2 vira Servico. Default false = comportamento original.
+  const invertOrder = !!pageData?.invert_service_professional;
+
   const steps = [
-    { n: 1, label: 'Serviço' },
-    { n: 2, label: 'Profissional' },
+    { n: 1, label: invertOrder ? 'Profissional' : 'Serviço' },
+    { n: 2, label: invertOrder ? 'Serviço' : 'Profissional' },
     { n: 3, label: 'Data & Hora' },
     { n: 4, label: 'Dados' },
   ];
@@ -218,8 +223,8 @@ const PublicBooking = () => {
       {/* Content */}
       <div className="max-w-2xl mx-auto px-4 pb-12">
         <div className="card">
-          {/* Step 1: Service */}
-          {step === 1 && (
+          {/* Step 1: Service OR Professional (depending on invertOrder) */}
+          {((step === 1 && !invertOrder) || (step === 2 && invertOrder)) && (
             <div data-testid="step-service">
               <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Escolha seu Serviço ou Produto</h2>
               <p className="text-sm text-slate-500 mb-6">Selecione o que voce deseja agendar</p>
@@ -228,7 +233,7 @@ const PublicBooking = () => {
                   const price = getServicePrice(svc);
                   const isIncluded = clientLookup?.included_service_ids?.includes(svc.id);
                   return (
-                    <button key={svc.id} type="button" onClick={() => { setFormData({...formData, service_id: svc.id}); setSelectedService(svc); setStep(2); }}
+                    <button key={svc.id} type="button" onClick={() => { setFormData({...formData, service_id: svc.id}); setSelectedService(svc); setStep(invertOrder ? 3 : 2); }}
                       data-testid={`svc-${svc.id}`}
                       className="w-full p-4 border-2 border-slate-200 rounded-xl hover:border-primary/50 hover:bg-primary/5 transition-all text-left group">
                       <div className="flex items-center gap-4">
@@ -260,17 +265,20 @@ const PublicBooking = () => {
                 })}
                 {services.length === 0 && <p className="text-center py-8 text-slate-500">Nenhum serviço disponível</p>}
               </div>
+              {invertOrder && (
+                <button onClick={() => setStep(1)} className="btn-secondary mt-4 flex items-center gap-1 text-sm" data-testid="back-from-service"><ArrowLeft className="w-4 h-4" /> Voltar</button>
+              )}
             </div>
           )}
 
-          {/* Step 2: Professional */}
-          {step === 2 && (
+          {/* Step 2: Professional OR Service (depending on invertOrder) */}
+          {((step === 2 && !invertOrder) || (step === 1 && invertOrder)) && (
             <div data-testid="step-professional">
               <h2 className="text-xl font-bold font-heading mb-1" style={{ color: primaryColor }}>Escolha o Profissional</h2>
               <p className="text-sm text-slate-500 mb-6">Selecione quem vai te atender</p>
               <div className="space-y-3">
                 {professionals.map(prof => (
-                  <button key={prof.id} type="button" onClick={() => { setFormData({...formData, professional_id: prof.id}); setStep(3); }}
+                  <button key={prof.id} type="button" onClick={() => { setFormData({...formData, professional_id: prof.id}); setStep(invertOrder ? 2 : 3); }}
                     data-testid={`prof-${prof.id}`}
                     className="w-full p-4 border-2 border-slate-200 rounded-xl hover:border-primary/50 transition-all text-left flex items-center gap-4">
                     {prof.image_url ? (
@@ -293,7 +301,9 @@ const PublicBooking = () => {
                   </button>
                 ))}
               </div>
-              <button onClick={() => setStep(1)} className="btn-secondary mt-4 flex items-center gap-1 text-sm"><ArrowLeft className="w-4 h-4" /> Voltar</button>
+              {!invertOrder && (
+                <button onClick={() => setStep(1)} className="btn-secondary mt-4 flex items-center gap-1 text-sm"><ArrowLeft className="w-4 h-4" /> Voltar</button>
+              )}
             </div>
           )}
 

@@ -493,6 +493,10 @@ async def update_ticket(
                 contact_name = ticket.get("customer_name") or ""
                 if phone and connection_id:
                     company_name = comp.get("name") or ""
+                    # 2026-02-28 — Mesma logica SGP do scheduler.
+                    fvars = ticket.get("flow_vars") or {}
+                    nome_sgp = (fvars.get("nome_cliente") or "").strip()
+                    primeiro_nome_sgp = nome_sgp.split()[0] if nome_sgp else ""
                     template = comp["ticket_auto_close_message"]
                     msg = (
                         template
@@ -500,6 +504,10 @@ async def update_ticket(
                         .replace("{nome}", contact_name)
                         .replace("{{empresa}}", company_name)
                         .replace("{empresa}", company_name)
+                        .replace("{{nome_sgp}}", nome_sgp)
+                        .replace("{nome_sgp}", nome_sgp)
+                        .replace("{{primeiro_nome_sgp}}", primeiro_nome_sgp)
+                        .replace("{primeiro_nome_sgp}", primeiro_nome_sgp)
                     )
                     wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
                     try:
@@ -1715,13 +1723,16 @@ async def run_campaign_now(
                 from motor.motor_asyncio import AsyncIOMotorClient as _Cli
                 cli = _Cli(_os.environ["MONGO_URL"])
                 bdb = cli[_os.environ["DB_NAME"]]
+                # 2026-02-28 — Humanization re-computed per send.
+                from wa_humanize import humanize_kwargs as _hum
                 sent_x, failed_x, count = 0, 0, 0
                 async with _httpx.AsyncClient(timeout=30.0) as client:
                     for person in audience:
                         for tpl in msgs:
                             mtxt = _render(tpl or "", {"nome": person.get("name") or "", "numero": person.get("phone") or "", "telefone": person.get("phone") or ""})
                             try:
-                                rr = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": mtxt})
+                                hum = await _hum(bdb, conn_id)
+                                rr = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": mtxt, **hum})
                                 rs = rr.json() if rr.status_code == 200 else {}
                                 if rs.get("success"): sent_x += 1
                                 else: failed_x += 1
@@ -1751,12 +1762,16 @@ async def run_campaign_now(
 
     # Otherwise execute synchronously (small campaigns)
     sent, failed, count = 0, 0, 0
+    # 2026-02-28 — Humanization helper (no-op when conexao nao tem
+    # `humanization.enabled=true`).
+    from wa_humanize import humanize_kwargs as _hum_sync
     async with _httpx.AsyncClient(timeout=30.0) as client:
         for person in audience:
             for tpl in msgs:
                 msg = _render(tpl or "", {"nome": person.get("name") or "", "numero": person.get("phone") or "", "telefone": person.get("phone") or ""})
                 try:
-                    r = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": msg})
+                    hum = await _hum_sync(db, conn_id)
+                    r = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": msg, **hum})
                     res = r.json() if r.status_code == 200 else {}
                     if res.get("success"):
                         sent += 1

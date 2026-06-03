@@ -135,7 +135,11 @@ async def get_booking_page(
             "email": company.get("email"),
             "phone": company.get("phone"),
             "logo_url": company.get("logo_url")
-        }
+        },
+        # 2026-02-28 — Flag exposta na resposta publica para o React
+        # decidir a ordem das etapas. Default false = comportamento
+        # antigo (Servico -> Profissional).
+        "invert_service_professional": bool(page.get("invert_service_professional", False)),
     }
 
 @router.get("/booking/{slug}/services")

@@ -293,9 +293,17 @@ async def _send_whatsapp(ticket: dict, text: str, db=None) -> Optional[str]:
         # cap was clipping legitimate sends and triggering false-positive
         # failure counters mid-flow.
         async with httpx.AsyncClient(timeout=25.0) as cli:
+            # 2026-02-28 — Humanization: injeta `humanize_typing_ms` quando
+            # a conexao tem isso habilitado, sem mexer no comportamento
+            # default (instant send). Falhas na busca cai no {} silencioso.
+            try:
+                from wa_humanize import humanize_kwargs as _hum
+                hum = await _hum(db, connection_id) if db is not None else {}
+            except Exception:
+                hum = {}
             r = await cli.post(
                 f"{wa_url}/instances/{connection_id}/send",
-                json={"phone": target, "message": text},
+                json={"phone": target, "message": text, **hum},
             )
             if r.status_code != 200:
                 # Log richer detail so we can correlate prod failures.

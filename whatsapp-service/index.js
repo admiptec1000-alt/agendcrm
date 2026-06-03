@@ -1252,7 +1252,7 @@ app.post('/instances/:id/send', async (req, res) => {
   if (!instance?.sock || instance.status !== 'connected') {
     return res.status(400).json({ success: false, error: 'Not connected' });
   }
-  const { phone, message } = req.body;
+  const { phone, message, humanize_typing_ms, humanize_presence } = req.body;
   try {
     // Resolve the correct JID using onWhatsApp() so WhatsApp accepts the
     // number as registered. This prevents "Aguardando mensagem..." (phantom
@@ -1315,6 +1315,22 @@ app.post('/instances/:id/send', async (req, res) => {
     // Pre-send: ensure we're presence-subscribed (idempotent in Baileys)
     try { await instance.sock.presenceSubscribe(targetJid); } catch (_) {}
     try { await instance.sock.sendPresenceUpdate('composing', targetJid); } catch (_) {}
+
+    // 2026-02-28 — Humanization: simulate "typing" presence for N ms BEFORE
+    // sending. Defaults to 0 (current behavior). Caller (backend) passes
+    // `humanize_typing_ms` derived from the channel_connection config or
+    // campaign anti-block policy. Caps at 8s to avoid pathological waits.
+    if (typeof humanize_typing_ms === 'number' && humanize_typing_ms > 0) {
+      const ms = Math.min(8000, Math.floor(humanize_typing_ms));
+      await new Promise(r => setTimeout(r, ms));
+      // Refresh composing presence right before the actual send so the
+      // recipient sees a continuous "typing…" hint (some Baileys clients
+      // expire the indicator after ~5s).
+      try { await instance.sock.sendPresenceUpdate('composing', targetJid); } catch (_) {}
+    }
+    if (humanize_presence === 'available') {
+      try { await instance.sock.sendPresenceUpdate('available', targetJid); } catch (_) {}
+    }
 
     // CRITICAL: force a pre-key bundle exchange BEFORE the first sendMessage
     // to a brand-new contact. Without this, the recipient's WhatsApp shows

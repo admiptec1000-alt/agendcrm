@@ -1148,6 +1148,11 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "meu_site", "label": "Meu Site", "category": "Config Empresa"},
     {"feature_key": "notificacoes", "label": "Notificacoes", "category": "Config Empresa"},
     {"feature_key": "configuracoes", "label": "Configuracoes", "category": "Config Empresa"},
+    # 2026-02-28 — Sub-menu de "Configuracao Agenda" liberavel por niche.
+    # Quando o SuperAdmin habilita esta feature no business-type do cliente,
+    # o admin da empresa ve um card extra dentro de Configuracoes com a
+    # opcao de inverter a ordem da pagina publica (Profissional -> Servico).
+    {"feature_key": "configuracao_agenda", "label": "Configuracao Agenda (sub-menu)", "category": "Config Empresa"},
     {"feature_key": "indoor", "label": "Indoor / TV", "category": "Config Empresa"},
     {"feature_key": "usuarios", "label": "Usuarios", "category": "Administracao"},
     {"feature_key": "perfis_acesso", "label": "Perfis de Acesso", "category": "Administracao"},

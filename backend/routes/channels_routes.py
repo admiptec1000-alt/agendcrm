@@ -190,18 +190,41 @@ async def service_version_check(user: dict = Depends(get_current_user)):
 
 
 # === MODELS ===
+class HumanizationConfig(BaseModel):
+    """Per-connection humanization settings used by flow + campaigns to make
+    outgoing messages look organic to WhatsApp / recipients. Empty/None
+    keeps current (instant) behavior."""
+    enabled: bool = False
+    # Typing presence shown to recipient BEFORE the message is actually sent.
+    # Backend picks a random value in [min,max] and forwards as
+    # `humanize_typing_ms` to the WA microservice.
+    typing_min_ms: int = 800
+    typing_max_ms: int = 2500
+    # Whether to broadcast `available` presence right after the send (so the
+    # recipient sees "online" once the bubble lands). Cheap and useful for
+    # marketing flows.
+    presence_online: bool = True
+    # 2026-02-28 — Provedor do canal: hoje somente Baileys (QR).
+    # `whatsapp_cloud` reservado para a Fase 3 (Meta Official API).
+
 class ConnectionCreate(BaseModel):
     name: str
     type: str = "whatsapp"  # whatsapp, instagram
     phone: Optional[str] = None
     default_flow_id: Optional[str] = None  # Flowbuilder flow auto-triggered on first message
     queue_ids: List[str] = []  # filas que recebem tickets dessa conexao
+    # 2026-02-28 — Provedor (Baileys=padrao QR ou Meta Official Cloud API).
+    # Por enquanto so "baileys" eh suportado; "whatsapp_cloud" sera ativado
+    # na Fase 3 quando o cliente prover token Meta.
+    provider: Optional[str] = "baileys"
+    humanization: Optional[HumanizationConfig] = None
 
 class ConnectionUpdate(BaseModel):
     name: Optional[str] = None
     status: Optional[str] = None
     default_flow_id: Optional[str] = None  # set to "" to clear, or new flow id
     queue_ids: Optional[List[str]] = None  # multi-select de filas
+    humanization: Optional[HumanizationConfig] = None
 
 class TemplateCreate(BaseModel):
     process_key: str
@@ -257,6 +280,8 @@ async def create_connection(
         "phone": data.phone,
         "default_flow_id": data.default_flow_id or None,
         "queue_ids": data.queue_ids or [],
+        "provider": (data.provider or "baileys"),
+        "humanization": (data.humanization.model_dump() if data.humanization else None),
         "status": "disconnected",
         "qr_code": None,
         "last_connected": None,

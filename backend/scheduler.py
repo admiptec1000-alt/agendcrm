@@ -148,7 +148,7 @@ async def _process_ticket_auto_close(db):
                 "status": {"$in": OPEN_STATUSES},
                 "updated_at": {"$lt": cutoff},
             },
-            {"_id": 0, "id": 1, "contact_id": 1, "channel_id": 1, "customer_phone": 1, "connection_id": 1, "customer_name": 1},
+            {"_id": 0, "id": 1, "contact_id": 1, "channel_id": 1, "customer_phone": 1, "connection_id": 1, "customer_name": 1, "flow_vars": 1},
         )
         tickets_to_close = await to_close_cursor.to_list(500)
         if not tickets_to_close:
@@ -179,12 +179,24 @@ async def _process_ticket_auto_close(db):
                         )
                         continue
                     company_name = c.get("name") or ""
+                    # 2026-02-28 — Variaveis SGP no fechamento: extrai
+                    # `nome_cliente` capturado durante o flow (via SGP
+                    # /consultacliente) e expoe como {{nome_sgp}} (completo)
+                    # e {{primeiro_nome_sgp}} (1a palavra). Cai pra "" se
+                    # o flow nao consultou SGP nesse ticket.
+                    fvars = t.get("flow_vars") or {}
+                    nome_sgp = (fvars.get("nome_cliente") or "").strip()
+                    primeiro_nome_sgp = nome_sgp.split()[0] if nome_sgp else ""
                     msg = (
                         message_template
                         .replace("{{nome}}", contact_name)
                         .replace("{nome}", contact_name)
                         .replace("{{empresa}}", company_name)
                         .replace("{empresa}", company_name)
+                        .replace("{{nome_sgp}}", nome_sgp)
+                        .replace("{nome_sgp}", nome_sgp)
+                        .replace("{{primeiro_nome_sgp}}", primeiro_nome_sgp)
+                        .replace("{primeiro_nome_sgp}", primeiro_nome_sgp)
                     )
                     async with httpx.AsyncClient(timeout=10.0) as client:
                         r = await client.post(

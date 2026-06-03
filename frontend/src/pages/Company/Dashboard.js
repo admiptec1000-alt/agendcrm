@@ -74,6 +74,10 @@ const FEATURE_META = {
   meu_site:           { icon: 'Globe',            label: 'Meu Site', group: 'Config Empresa', order: 50 },
   // 'notificacoes' agora vive como aba dentro de Conexoes — nao aparece mais no menu lateral
   configuracoes:      { icon: 'Settings',         label: 'Configuracoes', group: 'Config Empresa', order: 20 },
+  // 2026-02-28 — Sub-menu "Configuracao Agenda" gated por feature
+  // `configuracao_agenda`. So aparece se o Super Admin habilitar a
+  // feature no business-type do cliente.
+  configuracao_agenda: { icon: 'CalendarDays',     label: 'Configuracao Agenda', group: 'Config Empresa', order: 21, parent: 'configuracoes' },
   // SGP Gateway lives directly under "API e Integrações" in the sidebar
   // by request — set order=90 above (right after integrações=80).
   'integrações':      { icon: 'Puzzle',           label: 'API e Integrações', group: 'Config Empresa', order: 80 },
@@ -700,6 +704,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'notificacoes': return <ConexoesPage initialTab="notificacoes" />;
     case 'relatorios': return <FinanceiroPage />;
     case 'configuracoes': return <ConfigPage />;
+    case 'configuracao_agenda': return <ConfiguracaoAgendaPage />;
     case 'integrações': return <IntegracoesPage />;
     case 'indoor': return <IndoorSettingsPage />;
     case 'usuarios': return <UsuariosPage />;
@@ -6307,6 +6312,77 @@ const AsaasConfigCard = () => {
             {testing ? 'Testando…' : 'Testar conexão'}
           </button>
           <a href="https://docs.asaas.com" target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-primary hover:underline">Docs Asaas ↗</a>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ConfiguracaoAgendaPage = () => {
+  // 2026-02-28 — Sub-menu exclusivo do tipo de negocio "scheduling".
+  // Toggle: inverter ordem da pagina publica de agendamento (Profissional
+  // -> Servico). Persiste em `booking_pages.invert_service_professional`.
+  const [bookingPage, setBookingPage] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    schedulingAPI.getBookingPage().then(r => setBookingPage(r.data)).catch(() => {});
+  }, []);
+
+  const toggleInvert = async () => {
+    const next = !bookingPage?.invert_service_professional;
+    setSaving(true);
+    try {
+      await schedulingAPI.updateBookingPage({ invert_service_professional: next });
+      const updated = await schedulingAPI.getBookingPage();
+      setBookingPage(updated.data);
+      toast.success(next ? 'Ordem invertida: Profissional -> Servico' : 'Ordem padrao restaurada: Servico -> Profissional');
+    } catch (e) {
+      toast.error('Erro ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const invertOn = !!bookingPage?.invert_service_professional;
+
+  return (
+    <div className="animate-fade-in" data-testid="configuracao-agenda-page">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-slate-900 font-heading">Configuracao Agenda</h1>
+        <p className="text-sm text-slate-500 mt-1">Ajustes exclusivos do modulo de agendamento.</p>
+      </div>
+
+      <div className="card max-w-2xl mb-6" data-testid="invert-order-card">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="font-semibold text-slate-900 mb-1">Inverter ordem da pagina publica</h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Por padrao a pagina publica de agendamento exibe primeiro o <strong>Servico</strong> e depois o <strong>Profissional</strong>.
+              Ative esta opcao se voce prefere que o cliente escolha primeiro o <strong>Profissional</strong> e depois o <strong>Servico</strong>.
+              A mudanca afeta apenas a tela publica vista pelo cliente final.
+            </p>
+            <div className="mt-3 flex items-center gap-3 text-xs">
+              <span className={`px-2 py-1 rounded ${!invertOn ? 'bg-emerald-100 text-emerald-700 font-semibold' : 'bg-slate-100 text-slate-500'}`}>
+                Servico -> Profissional (padrao)
+              </span>
+              <span className="text-slate-300">|</span>
+              <span className={`px-2 py-1 rounded ${invertOn ? 'bg-emerald-100 text-emerald-700 font-semibold' : 'bg-slate-100 text-slate-500'}`}>
+                Profissional -> Servico
+              </span>
+            </div>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+            <input
+              type="checkbox"
+              className="sr-only peer"
+              checked={invertOn}
+              disabled={saving}
+              onChange={toggleInvert}
+              data-testid="invert-order-switch"
+            />
+            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+          </label>
         </div>
       </div>
     </div>

@@ -1,3 +1,41 @@
+## 2026-02-28 — Pacote 1: Bulk humanizado + SGP close vars + Configuracao Agenda + Meta API skeleton
+
+### 1. Variaveis SGP em mensagens de fechamento (P0)
+- **Auto-close (`scheduler.py`)** + **fechamento manual (`crm_routes.py`)**: agora extraem `flow_vars.nome_cliente` (capturado durante consulta SGP no flow) e expõem:
+  - `{{nome_sgp}}` — nome completo retornado pelo SGP
+  - `{{primeiro_nome_sgp}}` — primeira palavra do nome (usa `.split()[0]`)
+- Variaveis adicionadas em paralelo as ja existentes `{{nome}}` (contato) e `{{empresa}}`. Quando o ticket nao consultou SGP, expressao resolve para string vazia.
+- Projecao do `find` no scheduler atualizada para incluir `flow_vars: 1`.
+
+### 2. Sub-menu "Configuracao Agenda" + toggle de inversao (P0)
+- **Feature catalog**: nova feature `configuracao_agenda` em `ALL_SYSTEM_FEATURES` (`scheduling_routes.py`), categoria "Config Empresa". Super Admin habilita/desabilita por business-type — quando ON, empresa enxerga sub-menu dentro de Configuracoes.
+- **Sidebar (`Dashboard.js`)**: novo entry com icone CalendarDays, `parent: 'configuracoes'`, route `configuracao_agenda`.
+- **Pagina (`ConfiguracaoAgendaPage`)**: card com toggle "Inverter ordem da pagina publica". ON => Profissional -> Servico. OFF (default) => Servico -> Profissional. Persiste em `booking_pages.invert_service_professional`.
+- **Backend**: `BookingPageUpdate` ganhou campo `invert_service_professional`; `/api/public/booking/{slug}` agora retorna esse campo no payload da pagina.
+- **Pagina publica (`BookingPage.js`)**: render condicional dos passos com base em `pageData.invert_service_professional`. Labels do steps indicator, botoes "Voltar" e proximo passo (setStep) trocados dinamicamente. Sem regressao no modo padrao.
+- **Validado via Playwright**: modo default mostra "1. Servico" / "2. Profissional"; modo invertido mostra "1. Profissional" / "2. Servico" sem botao Voltar no passo 1.
+
+### 3. Humanizacao parametrizavel + entrega no flow (P0)
+- **Schema da conexao (`channel_connections.humanization`)**: dict `{enabled, typing_min_ms, typing_max_ms, presence_online}`. Default desligado — mantem comportamento atual (envio instantaneo).
+- **API**: `ConnectionCreate/Update` ganhou campo `humanization` (Pydantic `HumanizationConfig`). PUT `/api/channels/connections/{id}` aceita o objeto completo e persiste — validado via curl.
+- **Helper (`backend/wa_humanize.py`)**: `humanize_kwargs(db, conn_id)` retorna `{humanize_typing_ms, humanize_presence}` com valor randomico em `[min,max]` quando `enabled=true`, senao `{}`.
+- **Plugado em** (sem quebrar fluxos atuais):
+  - `flow_engine._send_whatsapp` (todas mensagens do bot durante flow)
+  - `crm_routes.run_campaign_now` (envio sincrono + async runner em campanhas)
+- **Microservico Baileys (`whatsapp-service/index.js`)**: `/instances/{id}/send` aceita `humanize_typing_ms` (delay ms entre presence "composing" e sendMessage, cap em 8s) + opcional `humanize_presence='available'`. Refresh do "composing" antes do send pra indicator nao expirar em waits longos.
+
+### 4. Provedor da conexao + Meta Cloud API (skeleton para Fase 3) (P1)
+- **Campo `provider`** adicionado ao `ConnectionCreate` com default `"baileys"`. Reservado `"whatsapp_cloud"` para Fase 3 quando cliente prover credenciais Meta.
+- **Playbook completo** salvo em `/app/memory/META_CLOUD_API_PLAYBOOK.md` (multi-numero por WABA, 24h rule, templates HSM, webhook HMAC, pricing BRL, rotacao). Quando o cliente entregar os tokens (META_APP_ID, META_APP_SECRET, META_SYSTEM_USER_TOKEN, META_WABA_ID, META_WEBHOOK_VERIFY_TOKEN), implementar adapter + UI dual-provider.
+
+### Roadmap atualizado
+- **P1**: Bulk dispatcher robusto pra 20k — fila persistente em Mongo (`bulk_jobs`), rotacao multi-conexao automatica, spintax `{a|b|c}`, janela horaria (9h-18h), opt-out automatico, dashboard de progresso por numero.
+- **P1**: Toggle `no_back` por menu no Flowbuilder (esconder "[9] Voltar").
+- **P2**: Acao "Responder" no MessageActionsMenu do CRM.
+- **P2 (Fase 3)**: Integracao Meta Cloud API conforme playbook salvo.
+- **P2 (refactor)**: quebrar `Dashboard.js` (~7.4k linhas) + `crm_routes.py` (~3.1k linhas).
+
+
 # AgentCRM & Booking — PRD
 
 ## Original Problem Statement
