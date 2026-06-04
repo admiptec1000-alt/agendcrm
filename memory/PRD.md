@@ -1,3 +1,55 @@
+## 2026-02-28 (PM) — Meta WhatsApp Cloud API (Fase 3) IMPLEMENTADA
+
+### Modelo de conta: Modelo A (per-tenant)
+Cada empresa tem propria conta Meta Business + WABA + System User Token.
+Credenciais ficam em `companies.meta_credentials = {app_id, app_secret, system_user_token, waba_id, api_version, webhook_verify_token}`.
+**Vantagens**: cliente paga direto Meta (sem intermediario), compliance LGPD limpo, reputacao isolada, limite 25 numeros/WABA eh POR CLIENTE.
+
+### Backend (novos arquivos)
+- `services/meta_cloud.py` — `MetaCloudClient` (per-tenant), `MetaApiError`, `get_company_meta_client()`, `verify_webhook_signature()` (HMAC-SHA256 X-Hub-Signature-256), `META_CATEGORIES` (catalogo estatico Marketing/Utility/Authentication/Service com regras + exemplos OK/EVITAR).
+- `routes/meta_cloud_routes.py` — endpoints completos:
+  - `GET/PUT/DELETE /api/meta/credentials` (masked output; admin only)
+  - `GET /api/meta/categories` (catalogo + flag `allowed` por empresa)
+  - `GET /api/meta/phone-numbers` (lista + cache em `meta_phone_numbers`)
+  - `GET /api/meta/templates` (cache local), `POST /api/meta/templates/sync` (pull Meta), `POST /api/meta/templates` (CRUD criar), `DELETE /api/meta/templates/{name}`
+  - `POST /api/meta/send-text` + `POST /api/meta/send-template`
+  - **Super Admin**: `GET/PUT /api/super-admin/meta/companies/{id}/categories` (lock por categoria)
+  - **Webhook publico**: `GET /api/webhooks/meta` (handshake hub.challenge resolve company por `webhook_verify_token`), `POST /api/webhooks/meta` (assinatura HMAC + roteia por `entry.id`=WABA_ID, persiste em `meta_webhook_events` + processa messages/statuses em `meta_messages` + atualiza `meta_contact_state.last_inbound_at` para regra 24h).
+- `wa_dispatcher.py` — adapter unificado `dispatch_send_text(db, connection_id, to_phone, message)` que le `channel_connections[id].provider` e roteia para Baileys (microservico) ou Meta Cloud API (HTTP). Erro Meta 470 (fora janela 24h) propagado para chamador escolher template.
+- `routes/channels_routes.py` — `ConnectionCreate` ganhou `phone_number_id` (obrigatorio se `provider=whatsapp_cloud`). Validacao bloqueia mesmo numero fisico em 2 providers diferentes (Meta Coexistence quebra Baileys).
+- `routes/scheduling_routes.py` — features `meta_cloud_api` (tenant) + `sa-meta-api` (SA) adicionadas ao catalogo.
+
+### Frontend
+- **`/pages/CRM/MetaCloudAPIPage.js`** (565 linhas) — sub-menu de Conexoes:
+  - Aba **Credenciais**: formulario com mascaramento de token, status visual (badge configurado/nao), URL de webhook copiavel, hints inline.
+  - Aba **Templates HSM**: grid colorido por categoria, badges status (APPROVED/PENDING/REJECTED), CRUD criar com modal explicando regras Meta de cada categoria selecionada.
+  - Aba **Numeros**: sync + listagem com quality_rating (verde/amarelo/vermelho).
+  - Aba **Guia Meta**: passo-a-passo de provisao + cards detalhados por categoria com regras, exemplos OK e exemplos EVITAR + indicador "LIBERADO/BLOQUEADO PELO SUPER ADMIN".
+- **`/pages/SuperAdmin/Dashboard.js`** — novo tab `sa-meta-api` ("API Meta (Categorias)"): lista empresas + painel de toggles por categoria com regras + exemplos expansiveis.
+- **`/services/api.js`** — `metaCloudAPI` exportado com 12 metodos.
+- **`Dashboard.js` (Company)**: sub-menu "API Oficial Meta" sob Conexoes, gated por feature `meta_cloud_api`.
+
+### Validacoes (curl + Playwright)
+- `GET /api/meta/categories` retorna 4 categorias com regras/exemplos.
+- `PUT /api/meta/credentials` salva e retorna token mascarado.
+- `PUT /api/super-admin/meta/companies/{id}/categories` aceita subset, persiste e bloqueia categoria invalida.
+- Webhook GET resolve verify_token contra `meta_credentials.webhook_verify_token` (403 se token desconhecido).
+- SA panel renderiza 4 categorias com toggles + 1 empresa selecionada (Playwright OK).
+- Empresa com feature `meta_cloud_api` ve sub-menu sob Conexoes + abas funcionando (Playwright OK).
+
+### Bloqueio Baileys + Meta no mesmo numero
+Backend rejeita criar conexao com mesmo `phone` em provider diferente. Mensagem clara: "Numero ja em uso pelo provedor 'baileys'. Um numero fisico nao pode rodar Baileys + Meta simultaneamente."
+
+### Como o cliente liga tudo (recapitulando)
+1. Cliente cria conta Meta Business + WABA + numero(s) + System User Token (passo-a-passo no painel "Guia Meta")
+2. Cliente cola credenciais no painel "API Oficial Meta > Credenciais"
+3. Cliente copia URL do webhook + Verify Token, cola na Meta App Dashboard
+4. Cliente clica "Sincronizar Numeros" e "Sincronizar Templates"
+5. Cliente cria conexao com `provider=whatsapp_cloud` + escolhe `phone_number_id`
+6. Cliente cria templates pelo painel (categoria respeita whitelist SA)
+7. Envia normalmente — dispatcher roteia automaticamente Baileys vs Meta
+
+
 ## 2026-02-28 — Pacote 1: Bulk humanizado + SGP close vars + Configuracao Agenda + Meta API skeleton
 
 ### 1. Variaveis SGP em mensagens de fechamento (P0)

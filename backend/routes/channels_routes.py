@@ -214,9 +214,9 @@ class ConnectionCreate(BaseModel):
     default_flow_id: Optional[str] = None  # Flowbuilder flow auto-triggered on first message
     queue_ids: List[str] = []  # filas que recebem tickets dessa conexao
     # 2026-02-28 — Provedor (Baileys=padrao QR ou Meta Official Cloud API).
-    # Por enquanto so "baileys" eh suportado; "whatsapp_cloud" sera ativado
-    # na Fase 3 quando o cliente prover token Meta.
+    # Quando provider=whatsapp_cloud, phone_number_id eh obrigatorio.
     provider: Optional[str] = "baileys"
+    phone_number_id: Optional[str] = None  # Meta Cloud API
     humanization: Optional[HumanizationConfig] = None
 
 class ConnectionUpdate(BaseModel):
@@ -224,6 +224,7 @@ class ConnectionUpdate(BaseModel):
     status: Optional[str] = None
     default_flow_id: Optional[str] = None  # set to "" to clear, or new flow id
     queue_ids: Optional[List[str]] = None  # multi-select de filas
+    phone_number_id: Optional[str] = None  # Meta Cloud API
     humanization: Optional[HumanizationConfig] = None
 
 class TemplateCreate(BaseModel):
@@ -272,6 +273,30 @@ async def create_connection(
     from routes.licenses_routes import enforce_company_limit
     await enforce_company_limit(db, user["company_id"], "connection")
 
+    # 2026-02-28 — Provedor whatsapp_cloud (Meta API) tem regras proprias.
+    provider = (data.provider or "baileys").lower()
+    if provider not in ("baileys", "whatsapp_cloud"):
+        raise HTTPException(status_code=400, detail="Provedor invalido (baileys ou whatsapp_cloud)")
+    if provider == "whatsapp_cloud" and not data.phone_number_id:
+        raise HTTPException(
+            status_code=400,
+            detail="phone_number_id obrigatorio para provider whatsapp_cloud. Cadastre credenciais Meta primeiro.",
+        )
+    # Bloquear o mesmo numero fisico atravessar 2 providers (Meta Coexistence quebra Baileys).
+    if data.phone:
+        digits = "".join(ch for ch in data.phone if ch.isdigit())
+        if digits:
+            clash = await db.channel_connections.find_one({
+                "company_id": user["company_id"],
+                "$or": [{"phone": data.phone}, {"phone": digits}],
+                "provider": {"$ne": provider},
+            })
+            if clash:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Numero ja em uso pelo provedor '{clash.get('provider')}'. Um numero fisico nao pode rodar Baileys + Meta simultaneamente.",
+                )
+
     conn = {
         "id": str(uuid.uuid4()),
         "company_id": user["company_id"],
@@ -280,11 +305,12 @@ async def create_connection(
         "phone": data.phone,
         "default_flow_id": data.default_flow_id or None,
         "queue_ids": data.queue_ids or [],
-        "provider": (data.provider or "baileys"),
+        "provider": provider,
+        "phone_number_id": data.phone_number_id,
         "humanization": (data.humanization.model_dump() if data.humanization else None),
-        "status": "disconnected",
+        "status": "connected" if provider == "whatsapp_cloud" else "disconnected",
         "qr_code": None,
-        "last_connected": None,
+        "last_connected": (datetime.now(timezone.utc).isoformat() if provider == "whatsapp_cloud" else None),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.channel_connections.insert_one(conn)

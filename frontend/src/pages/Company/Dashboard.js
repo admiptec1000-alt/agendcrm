@@ -25,6 +25,7 @@ import WhatsAppConnectionsPage from '../CRM/WhatsAppConnectionsPage';
 import CampaignsPage from '../CRM/CampaignsPage';
 import QueuesPage from '../CRM/QueuesPage';
 import OrcamentosPage from '../CRM/OrcamentosPage';
+import MetaCloudAPIPage from '../CRM/MetaCloudAPIPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 import BotPauseSettingsCard from '../../components/BotPauseSettingsCard';
 import TicketLifecycleSettingsCard from '../../components/TicketLifecycleSettingsCard';
@@ -58,6 +59,8 @@ const FEATURE_META = {
   conexoes_templates:     { icon: 'MessageSquare', label: 'Mensagens Modelo', group: 'Config Empresa', order: 12, parent: 'conexoes' },
   conexoes_notificacoes:  { icon: 'Bell',          label: 'Configuracao de Notificacao', group: 'Config Empresa', order: 13, parent: 'conexoes' },
   conexoes_cobranca:      { icon: 'Receipt',       label: 'Notificacoes de Cobranca', group: 'Config Empresa', order: 14, parent: 'conexoes' },
+  // 2026-02-28 — API Oficial Meta como sub-item de Conexoes.
+  meta_cloud_api:         { icon: 'Shield',         label: 'API Oficial Meta', group: 'Config Empresa', order: 15, parent: 'conexoes' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
   calendario:         { icon: 'Calendar',         label: 'Calendario', group: 'Operacional' },
   agenda:             { icon: 'CalendarCheck',    label: 'Agenda', group: 'Operacional' },
@@ -705,6 +708,7 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'relatorios': return <FinanceiroPage />;
     case 'configuracoes': return <ConfigPage />;
     case 'configuracao_agenda': return <ConfiguracaoAgendaPage />;
+    case 'meta_cloud_api': return <MetaCloudAPIPage />;
     case 'integrações': return <IntegracoesPage />;
     case 'indoor': return <IndoorSettingsPage />;
     case 'usuarios': return <UsuariosPage />;

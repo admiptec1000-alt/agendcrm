@@ -1131,6 +1131,9 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "conexoes_templates", "label": "Conexoes - Mensagens Modelo", "category": "CRM"},
     {"feature_key": "conexoes_notificacoes", "label": "Conexoes - Configuracao de Notificacao", "category": "CRM"},
     {"feature_key": "conexoes_cobranca", "label": "Conexoes - Notificacoes de Cobranca", "category": "CRM"},
+    # 2026-02-28 — API Oficial Meta (Cloud API). Liberada por feature para
+    # o cliente acessar o sub-menu com credenciais + templates + numeros.
+    {"feature_key": "meta_cloud_api", "label": "API Oficial WhatsApp (Meta)", "category": "CRM"},
     {"feature_key": "sgp_gateway", "label": "SGP Gateway", "category": "CRM"},
     {"feature_key": "integrações", "label": "API e Integracoes", "category": "CRM"},
     {"feature_key": "calendario", "label": "Calendario", "category": "Operacional"},
@@ -1185,6 +1188,9 @@ SUPER_ADMIN_FEATURES = [
     {"feature_key": "sa-conexoes-templates", "label": "Conexoes/Mensagens Modelo (SA)", "category": "Super Admin"},
     {"feature_key": "sa-conexoes-notificacoes", "label": "Conexoes/Notificacao (SA)", "category": "Super Admin"},
     {"feature_key": "sa-conexoes-cobranca", "label": "Conexoes/Notificacoes Cobranca (SA)", "category": "Super Admin"},
+    {"feature_key": "sa-report-companies", "label": "Relatorio Empresas (SA)", "category": "Super Admin"},
+    # 2026-02-28 — Controle de categorias Meta Cloud API por empresa.
+    {"feature_key": "sa-meta-api", "label": "API Meta - Categorias (SA)", "category": "Super Admin"},
 ]
 
 @router.get("/all-features")

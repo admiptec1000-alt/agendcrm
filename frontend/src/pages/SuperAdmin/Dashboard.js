@@ -13,7 +13,7 @@ import {
   Columns3, Calendar, CalendarCheck, CalendarDays, Tag, Zap,
   Megaphone, UserCog, Shield, FileText, LifeBuoy, Puzzle,
   PlugZap, FolderOpen, CreditCard, Clock, PieChart, LayoutDashboard,
-  MessageSquare, UserCheck, Bell
+  MessageSquare, UserCheck, Bell, Save
 } from 'lucide-react';
 import SgpRepairTab from './SgpRepairTab';
 import { AdmLancamentosPanel } from './AdmLancamentosPanel';
@@ -121,6 +121,8 @@ const SuperAdminDashboard = () => {
     { key: 'financial', label: 'Financeiro Admin', icon: Receipt },
     // 2026-02-18 — Relatorio Empresas (custo/venda/lucro/vencimento)
     { key: 'sa-report-companies', label: 'Relatorio Empresas', icon: BarChart3 },
+    // 2026-02-28 — Controle Meta Cloud API (categorias liberadas por empresa)
+    { key: 'sa-meta-api', label: 'API Meta (Categorias)', icon: ShieldCheck },
     // 2026-02-16 (J) — Atendimento + Conexao para o SA (usados para
     // enviar lembretes de cobranca via WhatsApp).
     { key: 'sa-atendimentos', label: 'Atendimentos', icon: Headphones },
@@ -406,6 +408,7 @@ const SuperAdminDashboard = () => {
           )}
           {activeTab === 'sgp-repair' && <SgpRepairTab companies={companies} />}
           {activeTab === 'sa-report-companies' && <CompanyReportPanel />}
+          {activeTab === 'sa-meta-api' && <MetaAPIControlPanel companies={companies} />}
           {activeTab === 'settings' && <SettingsTab companies={companies} />}
         </div>
       </main>
@@ -3395,5 +3398,132 @@ const PlanBadge = ({ planType }) => (
     {planType === 'both' ? 'CRM + Agendamento' : planType === 'crm' ? 'CRM' : 'Agendamento'}
   </span>
 );
+
+// 2026-02-28 — Meta API Category control per company.
+// Super Admin libera/bloqueia categorias Meta (Marketing, Utility, etc) por
+// empresa. Quando bloqueado, o admin da empresa nao consegue criar template
+// daquela categoria. Util para travar Marketing em clientes free/trial.
+const MetaAPIControlPanel = ({ companies }) => {
+  const [selected, setSelected] = useState(null);
+  const [data, setData] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const loadCompany = async (companyId) => {
+    setSelected(companyId);
+    setData(null);
+    try {
+      const { data } = await api.get(`/super-admin/meta/companies/${companyId}/categories`);
+      setData(data);
+    } catch { toast.error('Erro ao carregar'); }
+  };
+
+  const toggle = (key) => {
+    if (!data) return;
+    const set = new Set(data.allowed_categories);
+    if (set.has(key)) set.delete(key); else set.add(key);
+    setData({ ...data, allowed_categories: Array.from(set) });
+  };
+
+  const save = async () => {
+    if (!data) return;
+    setSaving(true);
+    try {
+      await api.put(`/super-admin/meta/companies/${selected}/categories`, { allowed_categories: data.allowed_categories });
+      toast.success('Categorias atualizadas');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
+    finally { setSaving(false); }
+  };
+
+  const CAT_COLORS = {
+    MARKETING:      'border-red-300 bg-red-50 text-red-700',
+    UTILITY:        'border-blue-300 bg-blue-50 text-blue-700',
+    AUTHENTICATION: 'border-purple-300 bg-purple-50 text-purple-700',
+    SERVICE:        'border-emerald-300 bg-emerald-50 text-emerald-700',
+  };
+
+  return (
+    <div className="space-y-6" data-testid="sa-meta-api-panel">
+      <div>
+        <h2 className="text-2xl font-bold text-slate-900 font-heading">Controle Meta Cloud API</h2>
+        <p className="text-sm text-slate-500 mt-1">Libere ou bloqueie categorias de templates Meta (Marketing, Utility, Authentication, Service) por empresa.</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Company list */}
+        <div className="card lg:col-span-1 max-h-[600px] overflow-y-auto">
+          <h3 className="font-semibold text-sm mb-3">Empresas ({companies?.length || 0})</h3>
+          <div className="space-y-1">
+            {(companies || []).map(c => (
+              <button
+                key={c.id}
+                onClick={() => loadCompany(c.id)}
+                data-testid={`sa-meta-comp-${c.id}`}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                  selected === c.id ? 'bg-emerald-50 border border-emerald-300' : 'hover:bg-slate-50 border border-transparent'
+                }`}
+              >
+                <p className="font-medium text-slate-900 truncate">{c.name}</p>
+                <p className="text-xs text-slate-400 truncate">{c.email || '-'}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Category toggles */}
+        <div className="card lg:col-span-2">
+          {!data && (
+            <div className="text-center text-slate-400 py-12">
+              <p className="text-sm">Selecione uma empresa a esquerda para configurar categorias.</p>
+            </div>
+          )}
+          {data && (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-slate-900">{data.company_name}</h3>
+                  <p className="text-xs text-slate-500">Categorias liberadas: {data.allowed_categories.length} / {data.all_categories.length}</p>
+                </div>
+                <button onClick={save} disabled={saving} className="btn-primary text-sm flex items-center gap-2" data-testid="sa-meta-save">
+                  <Save className="w-4 h-4" />
+                  {saving ? 'Salvando...' : 'Salvar'}
+                </button>
+              </div>
+              <div className="space-y-3">
+                {data.all_categories.map(c => {
+                  const enabled = data.allowed_categories.includes(c.key);
+                  return (
+                    <div key={c.key} className={`border-2 rounded-lg p-3 ${enabled ? CAT_COLORS[c.key] : 'border-slate-200 bg-slate-50 opacity-60'}`} data-testid={`sa-meta-cat-${c.key}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-bold text-sm">{c.label}</span>
+                            <span className="text-[10px] text-slate-500">Preco: {c.price_tier}</span>
+                          </div>
+                          <p className="text-xs text-slate-700 mb-2">{c.description}</p>
+                          <details className="text-[11px]">
+                            <summary className="cursor-pointer text-slate-600 font-medium">Ver regras + exemplos</summary>
+                            <div className="mt-2 space-y-1 text-slate-600">
+                              <ul className="list-disc list-inside space-y-0.5">{c.rules.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                              <p className="font-semibold text-emerald-700 mt-2">OK:</p>
+                              {c.examples_good.map((e, i) => <pre key={i} className="bg-white border rounded p-1 mb-1 whitespace-pre-wrap">{e}</pre>)}
+                            </div>
+                          </details>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                          <input type="checkbox" checked={enabled} onChange={() => toggle(c.key)} className="sr-only peer" data-testid={`sa-meta-toggle-${c.key}`} />
+                          <div className="w-11 h-6 bg-slate-300 rounded-full peer peer-checked:bg-emerald-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default SuperAdminDashboard;

@@ -289,6 +289,24 @@ export const channelsAPI = {
   probeLid: (instanceId, lidJid) => api.post(`/channels/instances/${instanceId}/probe-lid`, { lid_jid: lidJid }),
 };
 
+// Meta WhatsApp Cloud API (Official) — Fase 3
+export const metaCloudAPI = {
+  getCredentials: () => api.get('/meta/credentials'),
+  updateCredentials: (data) => api.put('/meta/credentials', data),
+  deleteCredentials: () => api.delete('/meta/credentials'),
+  getCategories: () => api.get('/meta/categories'),
+  listPhoneNumbers: () => api.get('/meta/phone-numbers'),
+  listTemplates: () => api.get('/meta/templates'),
+  syncTemplates: () => api.post('/meta/templates/sync'),
+  createTemplate: (data) => api.post('/meta/templates', data),
+  deleteTemplate: (name) => api.delete(`/meta/templates/${encodeURIComponent(name)}`),
+  sendText: (data) => api.post('/meta/send-text', data),
+  sendTemplate: (data) => api.post('/meta/send-template', data),
+  // Super Admin per-company control
+  saGetCompanyCategories: (companyId) => api.get(`/super-admin/meta/companies/${companyId}/categories`),
+  saUpdateCompanyCategories: (companyId, data) => api.put(`/super-admin/meta/companies/${companyId}/categories`, data),
+};
+
 // Reports API
 export const reportsAPI = {
   getCommissions: (params) => api.get('/reports/commissions', { params }),
