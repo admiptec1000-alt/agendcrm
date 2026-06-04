@@ -34,6 +34,7 @@ from routes.super_admin_finance_routes import router as super_admin_finance_rout
 from routes.internal_routes import router as internal_router, ensure_wa_cache_indexes
 from routes.licenses_routes import router as licenses_router
 from routes.meta_cloud_routes import router as meta_cloud_router
+from routes.bulk_routes import router as bulk_router
 
 # Import auth functions
 from auth import get_password_hash
@@ -73,6 +74,7 @@ api_router.include_router(super_admin_finance_router)
 api_router.include_router(internal_router)
 api_router.include_router(licenses_router)
 api_router.include_router(meta_cloud_router)
+api_router.include_router(bulk_router)
 
 # Include the API router in the main app
 app.include_router(api_router)

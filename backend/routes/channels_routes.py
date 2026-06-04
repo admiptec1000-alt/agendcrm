@@ -868,6 +868,17 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         "created_at": datetime.now(timezone.utc).isoformat()
     })
 
+    # 2026-02-28 — Bulk opt-out detection: se a mensagem de entrada bate
+    # com palavra-chave de opt-out configurada em qualquer bulk_job da
+    # empresa, registra o opt-out e cancela envios pendentes pra esse
+    # numero. Apenas mensagens de entrada (from_me=False) sao avaliadas.
+    if not from_me and text:
+        try:
+            from routes.bulk_routes import check_and_record_opt_out
+            await check_and_record_opt_out(db, company_id, phone, text)
+        except Exception as e:
+            logger.warning(f"[webhook] opt-out check failed: {e}")
+
     # Find or create open ticket for this phone (so it appears in Atendimentos UI)
     if not phone:
         return {"ok": True}

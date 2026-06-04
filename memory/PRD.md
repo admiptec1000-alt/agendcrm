@@ -1,3 +1,65 @@
+## 2026-02-28 (LATE PM) — Bulk Dispatcher pra 20k+ COMPLETO
+
+### Arquitetura
+- **Fila persistente em MongoDB** (3 colecoes novas):
+  - `bulk_jobs` — campanha-level com config + counters (status, audience_size, sent/failed/opted_out/skipped, next_rotation_idx, last_tick_at)
+  - `bulk_job_recipients` — estado por destinatario (pending/sent/failed/opted_out), connection_used, message_rendered, error, provider, message_id
+  - `bulk_opt_outs` — opt-outs scoped por company_id
+- **Worker integrado ao scheduler** (`process_bulk_tick`): roda a cada 60s, processa jobs em status=`running`, escolhe ate 5 destinatarios pendentes por tick, faz round-robin nas conexoes selecionadas, respeita janela horaria + daily_cap_per_connection, chama `wa_dispatcher.dispatch_send_text` (que decide automaticamente Baileys vs Meta).
+
+### Recursos anti-bloqueio
+- **Spintax** (`backend/bulk_spintax.py`): parser `{a|b|c}` resolve nested + preserva `{{variaveis}}`. Regex exige pipe pra nao colidir com vars. Cada envio sorteia uma variacao diferente → quebra deduplicacao do WhatsApp.
+- **Variaveis**: `{{nome}}`, `{{telefone}}`, `{{numero}}` + custom_vars por destinatario.
+- **Rotacao multi-conexao**: round-robin com fallback pra conexoes nao-capadas (cap diario por conexao default 800/dia).
+- **Mistura multi-provider** transparente: usuario seleciona conexoes Baileys + Meta na mesma campanha; dispatcher roteia cada envio para o provider certo.
+- **Janela horaria**: configuravel por job (start/end HH:MM, dias da semana 0=Seg..6=Dom). Fora da janela, worker pula o job no tick.
+- **Inter-message delay**: random em `[interval_min_sec, interval_max_sec]` por job, cap em 6s pra nao starvar outros jobs no tick.
+- **Opt-out automatico**:
+  - Inbound Baileys (`/webhook/message`) E Meta (`/webhooks/meta`) chamam `check_and_record_opt_out`
+  - Match exato com keyword OU "keyword + espaco + algo" (evita falso positivo tipo "i will STOP later")
+  - Insere em `bulk_opt_outs` + marca recipients pendentes desse telefone como `opted_out` em TODOS os jobs da empresa
+  - Default keywords: PARAR, SAIR, DESCADASTRAR, STOP (customizavel por job)
+  - Adicao de destinatarios checa `bulk_opt_outs` previo: se ja optou out, salva como `opted_out` direto sem tentar enviar.
+
+### API (12 endpoints)
+- `POST/GET /api/bulk/jobs` — criar/listar
+- `GET /api/bulk/jobs/{id}` — detalhe com breakdown por conexao
+- `POST /api/bulk/jobs/{id}/action {start|pause|resume|cancel}` — state machine validada
+- `POST/GET /api/bulk/jobs/{id}/recipients` — bulk insert ate 500 por chamada, dedupe por digits, opt-out pre-existente vira `opted_out`
+- `GET /api/bulk/opt-outs`, `POST /api/bulk/opt-outs`, `DELETE /api/bulk/opt-outs/{phone}` — gestao manual
+
+### Frontend (`BulkCampaignsPage.js`)
+- **Lista de jobs** com barra de progresso e stats live (auto-refresh 10s)
+- **Wizard 3 etapas pra criar** disparo:
+  1. Nome + mensagem com guia visual de spintax/variaveis
+  2. Conexoes (multi-select com badge Baileys/Meta) + intervalos + cap diario + janela horaria + keywords opt-out
+  3. Cole de destinatarios (1 por linha, formato `phone, nome`)
+- **Tela de detalhe**: progress geral + breakdown por conexao + lista paginada de destinatarios com filtros (pending/sent/failed/opted_out) + acoes Pausar/Retomar/Cancelar.
+- Sub-menu **"Disparo em Massa"** sob CRM, gated por feature `disparo_massa`.
+
+### Validacoes (curl E2E + Playwright)
+- Job criado, 3+1+1 destinatarios processados:
+  - Pendentes inseridos OK
+  - Duplicado detectado (mesmo phone na mesma chamada): `skipped_duplicates: 2`
+  - Telefone invalido (sem digito): pulado
+  - Pos-opt-out: novo destinatario marcado `opted_out` automaticamente
+  - Start action transiciona pra `running`
+  - Worker tick processou 3 pendentes em rotation, renderizou spintax distinto pra cada um (`'Oi Alice, confira nossa oferta!'`, `'Oi Bob, nao perca essa promo!'`, `'Boa noite Carlos, confira nossa oferta!'`)
+  - Sem Baileys conectado, falhou com erro claro propagado pelo dispatcher
+- UI completa renderiza job list + detail com breakdown + filtros funcionais.
+
+### Capacidade estimada (com cap diario 800/conexao)
+- 1 conexao  → 800/dia
+- 3 conexoes → 2.400/dia → **20k em 8.5 dias**
+- 10 conexoes → 8k/dia → **20k em 2.5 dias**
+- Misturar Meta (limite 1k/dia tier inicial, sobe pra 10k+) acelera muito.
+
+### Pontos pendentes (opcionais)
+- Upload CSV (hoje so paste textarea — funciona, mas CSV cresceria UX)
+- Pre-check via `onWhatsApp([])` Baileys antes de enfileirar (evita gastar tentativa em numero nao-WA)
+- Re-categorize template Meta automatico fora da janela 24h
+
+
 ## 2026-02-28 (PM) — Meta WhatsApp Cloud API (Fase 3) IMPLEMENTADA
 
 ### Modelo de conta: Modelo A (per-tenant)

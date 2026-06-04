@@ -695,6 +695,12 @@ async def tick():
         await _process_billing_reminders(db)
     except Exception as e:
         logger.error(f"[scheduler] billing reminders error: {e}")
+    # 2026-02-28 — Bulk dispatcher tick (rotacao multi-conexao + multi-provider).
+    try:
+        from routes.bulk_routes import process_bulk_tick
+        await process_bulk_tick(db)
+    except Exception as e:
+        logger.error(f"[scheduler] bulk dispatcher error: {e}")
 
 
 async def start_scheduler_loop():

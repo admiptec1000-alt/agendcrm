@@ -1122,6 +1122,8 @@ ALL_SYSTEM_FEATURES = [
     {"feature_key": "tags", "label": "Tags", "category": "CRM"},
     {"feature_key": "chat_interno", "label": "Chat Interno", "category": "CRM"},
     {"feature_key": "campanhas", "label": "Campanhas", "category": "CRM"},
+    # 2026-02-28 — Disparo em massa robusto pra 20k+ (fila Mongo, rotacao, spintax, opt-out).
+    {"feature_key": "disparo_massa", "label": "Disparo em Massa", "category": "CRM"},
     {"feature_key": "flowbuilder", "label": "Flowbuilder", "category": "CRM"},
     {"feature_key": "filas_chatbot", "label": "Filas & Chatbot", "category": "CRM"},
     {"feature_key": "agente_ia", "label": "Agente de IA", "category": "CRM"},

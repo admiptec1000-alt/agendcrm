@@ -477,6 +477,15 @@ async def _process_meta_events(db: AsyncIOMotorDatabase, company_id: str, payloa
             # respect the 24h window when later sending free-form text.
             for msg in (value.get("messages") or []):
                 wa_id = (value.get("contacts") or [{}])[0].get("wa_id")
+                # 2026-02-28 — Bulk opt-out detection via Meta webhook.
+                try:
+                    if msg.get("type") == "text":
+                        body_txt = (msg.get("text") or {}).get("body") or ""
+                        if body_txt and wa_id:
+                            from routes.bulk_routes import check_and_record_opt_out
+                            await check_and_record_opt_out(db, company_id, wa_id, body_txt)
+                except Exception as _e:
+                    logger.warning("[meta-webhook] opt-out check failed: %s", _e)
                 if wa_id:
                     await db.meta_contact_state.update_one(
                         {"company_id": company_id, "wa_id": wa_id},
