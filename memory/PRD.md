@@ -1,3 +1,49 @@
+## 2026-02-28 (NIGHT 2) — 4 fixes: P0 travamento + P1 permissoes + P1 dashboard + P2 relatorio
+
+### 🔴 P0 — Travamento de fluxo+atendimento a cada ~20h (CRITICO PROD)
+**Causa raiz** (via troubleshoot_agent): Motor (MongoDB driver) sem pool config explicito + sem keepalive. Connecoes idle morriam apos ~30min, mas o driver so percebia no proximo query — que entao pendurava `serverSelectionTimeoutMS` (default 30s). Como `scheduler.tick()` rodava todas as tasks **serialmente sem timeout**, 1 query pendurada congelava o tick inteiro → flow, billing, bulk dispatcher, ticket auto-close, opt-out check **TUDO travado simultaneamente** (bate exatamente com o sintoma do cliente: "atendimento e fluxo param juntos").
+
+**Fixes aplicados**:
+- `database.py`: `AsyncIOMotorClient` agora com `maxIdleTimeMS=45000`, `socketTimeoutMS=20000`, `serverSelectionTimeoutMS=5000`, `connectTimeoutMS=10000`, `maxPoolSize=50`, `minPoolSize=10`, `retryWrites=True` → conexoes idle reciclam antes de morrerem, falhas detectadas em segundos.
+- `scheduler.py`: tick agora faz **health check `db.command("ping")` com timeout 3s** no inicio — se Mongo nao responde, aborta o tick inteiro logando o erro, ao inves de pendurar tudo. Cada step (reminders, surveys, billing, bulk, ticket close) embrulhado em `asyncio.wait_for(..., timeout=60s)` (90s pro bulk dispatcher). 1 step pendurado **nao bloqueia mais os outros**.
+- `channels_routes.py` webhook inbound: opt-out check tambem com `asyncio.wait_for(..., timeout=2s)` — se falhar, NUNCA bloqueia o inbound (continua pra logica de tickets/flow).
+
+### 🟠 P1 — Permissoes cruzando entre tipos de negocio
+**Problema**: Editor de Perfis de Acesso (`/scheduling/all-features`) mostrava features de OUTROS tipos de negocio porque usava `companies.features` (dessincronizado quando SA edita o `business_type` sem propagar pra todas as empresas).
+
+**Fix em `scheduling_routes.list_all_features`**: Source of truth virou `business_types.features` da empresa + UNION com `companies.features` (overrides). Agora UI mostra **APENAS features habilitadas no tipo de negocio + overrides da empresa**.
+
+### 🟡 P1 — Dashboard Inicio adaptativo por tipo de negocio
+**Problema**: Tela "Inicio" sempre mostrava 4 cards fixos (Agend Hoje, Tickets, Servicos, Profissionais) — Atendimento puro nao via "Aguardando" / "Em atendimento" separados.
+
+**Fix em `Dashboard.js` HomePage**: Detecta features liberadas para a empresa e renderiza cards condicionalmente:
+- **Tem agendamento** (`agenda`/`servicos`/`profissionais`): mostra Agend Hoje + Servicos + Profissionais
+- **Tem atendimento** (`atendimentos`/`kanban`): mostra **Aguardando + Em Atendimento + Fechados Hoje** (split por status)
+- **Sem atendimento**: mostra Tickets agregado (modo legacy)
+
+Endpoint nao precisou de mudanca — split feito client-side via filter de status dos tickets que ja existiam.
+
+### 🟢 P2 — Relatorio Empresas: "Venda" = "Valor Devido"
+**Problema**: Coluna "Venda" mostrava valor bruto das licencas, nao o que de fato sera cobrado (com acrescimos de multa/juros).
+
+**Fix em `super_admin_finance_routes.reports/companies`**:
+- Coluna `venda` agora retorna **valor_devido** = base - desconto + multa + juros (via `compute_late_fee_amount`)
+- Adicionados `venda_bruta` e `acrescimo` separados para auditoria
+- Frontend `CompanyReportPanel.js`: header mudou para "Venda (valor devido)" + tooltip mostra breakdown "Bruto X − Desconto Y + Acrescimo Z" + badge laranja "+R$ Z" quando ha acrescimo
+
+### Validacao
+- Backend restart OK, ping respondendo 200
+- Relatorio Empresas: TEST_BillReminder mostra venda=R$ 199,90 (valor devido) corretamente (Playwright OK)
+- Header "valor devido" visivel
+- Lint: 96 issues pre-existentes nao tocados (E701/E702/F541/F811/F601 — nao introduzidos por esta mudanca)
+
+### Como verificar em PROD
+1. Aguardar 20+ horas pos-deploy → flow + atendimento NAO devem mais travar
+2. Olhar logs do backend: deve aparecer ocasional `[scheduler] MongoDB health check FAILED` se Mongo flakar (e o tick aborta limpinho); jamais ver mais um tick que "some" sem log de fim
+3. Em "Perfis de Acesso", lista deve mostrar apenas features do business_type da empresa
+4. Tela Inicio de cliente Atendimento mostra "Aguardando / Em Atendimento / Fechados Hoje"
+
+
 ## 2026-02-28 (NIGHT) — Bulk Dispatcher CONSOLIDADO dentro de Campanhas
 
 ### Refatoracao: 1 modulo so

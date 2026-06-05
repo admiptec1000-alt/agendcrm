@@ -909,18 +909,44 @@ async def adm_report_companies(
         if _tsp > 0:
             venda = _tsp
         desconto = float(c.get("discount") or 0)
-        valor_devido = max(0.0, venda - desconto)
-        lucro = venda - custo
-
+        # 2026-02-28 — `venda` na linha do relatorio agora reflete o
+        # **valor devido** da parcela em aberto (venda - desconto +
+        # multa/juros), nao mais o bruto. Isso e o que o operador
+        # cobra de fato — pediu o cliente para "valor de venda trazer
+        # sempre o valor devido = total - desconto + acrescimos".
         parcela = await db.super_admin_transactions.find_one(
             {
                 "company_id": c["id"],
                 "direction": "entrada",
                 "due_date": {"$gte": start_iso, "$lte": end_iso},
             },
-            {"_id": 0, "status": 1, "due_date": 1, "amount": 1, "paid_at": 1},
+            {"_id": 0, "status": 1, "due_date": 1, "amount": 1, "paid_at": 1, "late_fee": 1, "discount": 1},
             sort=[("due_date", 1)],
         )
+        from finance_helpers import compute_late_fee_amount
+        # Default: total bruto - desconto (sem acrescimos)
+        valor_devido = max(0.0, venda - desconto)
+        acrescimo_aplicado = 0.0
+        if parcela and (parcela.get("status") or "").lower() != "pago":
+            lf = parcela.get("late_fee") or {}
+            # Use parcela amount only when > 0; senao usa venda (licencas).
+            _parc_amt = float(parcela.get("amount") or 0)
+            base_amount = _parc_amt if _parc_amt > 0 else venda
+            lf_disc = float(parcela.get("discount") or desconto)
+            lfc = compute_late_fee_amount(
+                base_amount=base_amount,
+                due_date_iso=parcela.get("due_date"),
+                multa_pct=float(lf.get("multa_pct") or 0),
+                juros_dia_pct=float(lf.get("juros_dia_pct") or 0),
+                discount=lf_disc,
+            )
+            valor_devido = float(lfc.get("valor_devido") or 0) or valor_devido
+            acrescimo_aplicado = float(lfc.get("total") or 0)
+        # `venda` na linha = valor_devido (o que cliente entende como "venda").
+        # Mantemos `venda_bruta` separada para auditoria.
+        venda_bruta = venda
+        venda = valor_devido
+        lucro = venda - custo
 
         status_label = "sem_cobranca"
         days_to_due = None
@@ -948,6 +974,8 @@ async def adm_report_companies(
             "database_type": c.get("database_type") or "Padrao",
             "custo": round(custo, 2),
             "venda": round(venda, 2),
+            "venda_bruta": round(venda_bruta, 2),
+            "acrescimo": round(acrescimo_aplicado, 2),
             "desconto": round(desconto, 2),
             "valor_devido": round(valor_devido, 2),
             "lucro": round(lucro, 2),

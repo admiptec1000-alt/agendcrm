@@ -874,14 +874,38 @@ const DashboardPage = ({ setActivePage, menuGroups }) => {
       schedulingAPI.getAppointments().catch(() => ({ data: [] })),
       schedulingAPI.getServices().catch(() => ({ data: [] })),
       schedulingAPI.getProfessionals().catch(() => ({ data: [] })),
-    ]).then(([t, a, s, p]) => setData({
-      tickets: t.data.length,
-      appointments: a.data.length,
-      services: s.data.length,
-      professionals: p.data.length,
-      today: a.data.filter(x => x.date === today).length,
-    }));
+    ]).then(([t, a, s, p]) => {
+      // 2026-02-28 — Split tickets by status para o tipo "Atendimento"
+      // ver imediatamente quantos estao aguardando vs em atendimento.
+      const all = t.data || [];
+      const aguardando = all.filter(x => (x.status || '').toLowerCase() === 'aguardando').length;
+      const atendendo  = all.filter(x => (x.status || '').toLowerCase() === 'atendendo').length;
+      const fechadosHoje = all.filter(x => {
+        const s = (x.status || '').toLowerCase();
+        if (s !== 'fechado' && s !== 'closed') return false;
+        const at = x.closed_at || x.updated_at || '';
+        return at.startsWith(today);
+      }).length;
+      setData({
+        tickets: all.length,
+        tickets_aguardando: aguardando,
+        tickets_atendendo: atendendo,
+        tickets_fechados_hoje: fechadosHoje,
+        appointments: (a.data || []).length,
+        services: (s.data || []).length,
+        professionals: (p.data || []).length,
+        today: (a.data || []).filter(x => x.date === today).length,
+      });
+    });
   }, []);
+
+  // 2026-02-28 — Selecao dinamica de widgets pelo tipo de negocio.
+  // Mostra so o que faz sentido pro contexto da empresa.
+  const enabledKeys = useMemo(() => new Set(Object.keys(FEATURE_META).filter(k =>
+    Object.values(menuGroups || {}).flat().some(it => it.key === k)
+  )), [menuGroups]);
+  const hasScheduling = enabledKeys.has('agenda') || enabledKeys.has('servicos') || enabledKeys.has('profissionais');
+  const hasAtendimento = enabledKeys.has('atendimentos') || enabledKeys.has('kanban');
 
   // Flatten menu groups into ordered list (excluding 'dashboard' itself)
   const shortcuts = useMemo(() => {
@@ -895,12 +919,26 @@ const DashboardPage = ({ setActivePage, menuGroups }) => {
 
   return (
     <div className="animate-fade-in space-y-6" data-testid="dashboard-page">
-      {/* Quick Stats */}
+      {/* Quick Stats — adaptam ao tipo de negocio */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Agend. Hoje" value={data.today} icon={<CalendarCheck className="w-5 h-5" />} color="bg-emerald-500" />
-        <StatCard label="Tickets" value={data.tickets} icon={<Headphones className="w-5 h-5" />} color="bg-blue-500" />
-        <StatCard label="Servicos" value={data.services} icon={<Scissors className="w-5 h-5" />} color="bg-violet-500" />
-        <StatCard label="Profissionais" value={data.professionals} icon={<Briefcase className="w-5 h-5" />} color="bg-amber-500" />
+        {hasScheduling && (
+          <StatCard label="Agend. Hoje" value={data.today} icon={<CalendarCheck className="w-5 h-5" />} color="bg-emerald-500" />
+        )}
+        {hasAtendimento ? (
+          <>
+            <StatCard label="Aguardando"   value={data.tickets_aguardando}   icon={<Headphones className="w-5 h-5" />} color="bg-amber-500" />
+            <StatCard label="Em Atendimento" value={data.tickets_atendendo}  icon={<Headphones className="w-5 h-5" />} color="bg-blue-500" />
+            <StatCard label="Fechados Hoje" value={data.tickets_fechados_hoje} icon={<Headphones className="w-5 h-5" />} color="bg-slate-500" />
+          </>
+        ) : (
+          <StatCard label="Tickets" value={data.tickets} icon={<Headphones className="w-5 h-5" />} color="bg-blue-500" />
+        )}
+        {hasScheduling && (
+          <>
+            <StatCard label="Servicos" value={data.services} icon={<Scissors className="w-5 h-5" />} color="bg-violet-500" />
+            <StatCard label="Profissionais" value={data.professionals} icon={<Briefcase className="w-5 h-5" />} color="bg-amber-500" />
+          </>
+        )}
       </div>
 
       {/* Menu Grid */}

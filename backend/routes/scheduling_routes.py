@@ -1227,9 +1227,25 @@ async def list_all_features(
 
     permission_only_keys = {"edit_appointment", "edit_appointment_price", "own_appointments_only"}
 
-    # Load company features (set by Super Admin toggles)
-    company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0, "features": 1})
-    enabled_keys = set()
+    # 2026-02-28 — Source of truth = `business_types.features` da empresa.
+    # Antes usavamos `companies.features` que ficava dessincronizado quando
+    # o SA editava o business_type sem rodar reaplicar-em-todas-empresas.
+    # Resultado: o editor de Perfis de Acesso mostrava features de OUTROS
+    # tipos de negocio. Agora cruzamos:
+    #   features liberadas do business_type da empresa (SA-controlled)
+    # +  overrides especificos liberados em `companies.features`
+    company = await db.companies.find_one(
+        {"id": user["company_id"]}, {"_id": 0, "features": 1, "business_type_id": 1}
+    )
+    enabled_keys: set[str] = set()
+    # 1) Da business_type (fonte primaria)
+    bt_id = (company or {}).get("business_type_id")
+    if bt_id:
+        bt = await db.business_types.find_one({"id": bt_id}, {"_id": 0, "features": 1})
+        for f in (bt or {}).get("features", []):
+            if f.get("enabled"):
+                enabled_keys.add(f["feature_key"])
+    # 2) Overrides especificos por empresa (admin SA pode liberar extra)
     for f in (company or {}).get("features", []):
         if f.get("enabled"):
             enabled_keys.add(f["feature_key"])

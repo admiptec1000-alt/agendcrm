@@ -675,32 +675,31 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
 async def tick():
     db = await get_database()
     base_url = os.environ.get("FRONTEND_PUBLIC_URL", "")
+    # 2026-02-28 — Fail-fast MongoDB health check. Sem isso, conexoes
+    # idle expiravam apos ~20h em prod e ate o proximo query pendurava
+    # por serverSelectionTimeoutMS, congelando o scheduler inteiro
+    # (flow + atendimento + billing tudo travado).
     try:
-        await _process_reminders(db, base_url)
+        await asyncio.wait_for(db.command("ping"), timeout=3.0)
     except Exception as e:
-        logger.error(f"[scheduler] reminders error: {e}")
-    try:
-        await _process_surveys(db, base_url)
-    except Exception as e:
-        logger.error(f"[scheduler] surveys error: {e}")
-    try:
-        await _process_scheduled_bulk(db)
-    except Exception as e:
-        logger.error(f"[scheduler] bulk error: {e}")
-    try:
-        await _process_ticket_auto_close(db)
-    except Exception as e:
-        logger.error(f"[scheduler] ticket auto-close error: {e}")
-    try:
-        await _process_billing_reminders(db)
-    except Exception as e:
-        logger.error(f"[scheduler] billing reminders error: {e}")
-    # 2026-02-28 — Bulk dispatcher tick (rotacao multi-conexao + multi-provider).
-    try:
-        from routes.bulk_routes import process_bulk_tick
-        await process_bulk_tick(db)
-    except Exception as e:
-        logger.error(f"[scheduler] bulk dispatcher error: {e}")
+        logger.error(f"[scheduler] MongoDB health check FAILED, skipping tick: {e}")
+        return
+
+    async def _run_step(name, coro_factory, timeout_s=60.0):
+        try:
+            await asyncio.wait_for(coro_factory(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            logger.error(f"[scheduler] {name} TIMEOUT (>{timeout_s}s)")
+        except Exception as e:
+            logger.error(f"[scheduler] {name} error: {e}")
+
+    await _run_step("reminders",          lambda: _process_reminders(db, base_url))
+    await _run_step("surveys",            lambda: _process_surveys(db, base_url))
+    await _run_step("scheduled_bulk",     lambda: _process_scheduled_bulk(db))
+    await _run_step("ticket_auto_close",  lambda: _process_ticket_auto_close(db))
+    await _run_step("billing_reminders",  lambda: _process_billing_reminders(db))
+    from routes.bulk_routes import process_bulk_tick
+    await _run_step("bulk_dispatcher",    lambda: process_bulk_tick(db), timeout_s=90.0)
 
 
 async def start_scheduler_loop():

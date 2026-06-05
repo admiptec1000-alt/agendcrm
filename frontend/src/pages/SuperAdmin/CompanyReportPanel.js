@@ -255,7 +255,7 @@ export const CompanyReportPanel = () => {
                     <Th right>Conexao/Empresa</Th>
                     <Th right>Usuario</Th>
                     <Th right>Custo</Th>
-                    <Th right>Venda</Th>
+                    <Th right>Venda <span className="text-[8px] font-normal opacity-70 normal-case">(valor devido)</span></Th>
                     <Th right>Lucro</Th>
                     <Th>Vencimento</Th>
                     <Th>Status</Th>
@@ -273,7 +273,10 @@ export const CompanyReportPanel = () => {
                       <td className="px-3 py-2.5 text-right font-mono text-xs text-slate-600">{r.max_connections}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs text-slate-600">{r.max_users}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs">{fmtBRL(r.custo)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-xs">{fmtBRL(r.venda)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs" title={r.acrescimo ? `Bruto: ${fmtBRL(r.venda_bruta)} − Desconto: ${fmtBRL(r.desconto)} + Acrescimo: ${fmtBRL(r.acrescimo)}` : `Bruto: ${fmtBRL(r.venda_bruta)} − Desconto: ${fmtBRL(r.desconto)}`}>
+                        {fmtBRL(r.venda)}
+                        {r.acrescimo > 0 && <span className="ml-1 text-[9px] text-amber-600">+{fmtBRL(r.acrescimo)}</span>}
+                      </td>
                       <td className={`px-3 py-2.5 text-right font-mono text-xs font-semibold ${r.lucro >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                         {fmtBRL(r.lucro)}
                       </td>
