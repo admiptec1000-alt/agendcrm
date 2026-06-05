@@ -390,6 +390,27 @@ class CampaignAntiBlock(BaseModel):
     only_with_phone_validated: bool = True
 
 
+class BulkConfig(BaseModel):
+    """Per-campaign bulk dispatch config. When `enabled=True`, the
+    `Enviar agora` route boots a `bulk_job` instead of the legacy
+    synchronous send — unlocking spintax, multi-conexao rotation,
+    janela horaria, opt-out automatico, daily caps per connection.
+
+    2026-02-28 — Bulk dispatcher integrado a Campanhas.
+    """
+    enabled: bool = False
+    connection_ids: List[str] = []  # multi-rotation pool (overrides connection_id)
+    interval_min_sec: int = 8
+    interval_max_sec: int = 25
+    daily_cap_per_connection: int = 800
+    opt_out_keywords: List[str] = ["PARAR", "SAIR", "DESCADASTRAR", "STOP"]
+    window_enabled: bool = True
+    window_start: str = "09:00"
+    window_end: str = "18:00"
+    # ISO weekday numbers (0=Mon..6=Sun). Default Mon-Sat.
+    window_days: List[int] = [0, 1, 2, 3, 4, 5]
+
+
 class CampaignCreate(BaseModel):
     name: str
     type: str = "broadcast"  # broadcast | drip
@@ -411,6 +432,8 @@ class CampaignCreate(BaseModel):
     attachment_url: Optional[str] = None
     # Anti-block parameters
     anti_block: Optional[CampaignAntiBlock] = None
+    # 2026-02-28 — Modo Disparo em Massa (multi-conexao + spintax + janela + opt-out)
+    bulk_config: Optional[BulkConfig] = None
     # Legacy fields (kept for backwards compatibility)
     message_template: Optional[str] = None
     target_audience: Optional[str] = None
@@ -431,6 +454,7 @@ class CampaignUpdate(BaseModel):
     messages: Optional[List[str]] = None
     attachment_url: Optional[str] = None
     anti_block: Optional[CampaignAntiBlock] = None
+    bulk_config: Optional[BulkConfig] = None
     status: Optional[str] = None  # draft | programada | em_execucao | concluida | cancelada
 
 # AI Chat Models

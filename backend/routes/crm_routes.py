@@ -1545,6 +1545,8 @@ async def create_campaign(
             "hourly_limit": 50, "escalate_after": 100, "escalate_factor": 1.5,
             "only_with_phone_validated": True,
         }),
+        # 2026-02-28 — Modo Disparo em Massa armazenado na campanha.
+        "bulk_config": (data.bulk_config.model_dump() if data.bulk_config else None),
         "status": "programada" if data.scheduled_at else "draft",
         "sent_count": 0,
         "failed_count": 0,
@@ -1664,10 +1666,53 @@ async def run_campaign_now(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    """Send the campaign immediately (ignores scheduled_at)."""
+    """Send the campaign immediately (ignores scheduled_at).
+
+    2026-02-28 — Se a campanha tem `bulk_config.enabled=true`, encaminha
+    para o bulk dispatcher (fila persistente, multi-conexao, spintax,
+    janela, opt-out, daily cap). Caso contrario, usa o pipeline classico.
+    """
     camp = await db.campaigns.find_one({"id": campaign_id, "company_id": user["company_id"]}, {"_id": 0})
     if not camp:
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+
+    # ─── Bulk mode: roteia pro dispatcher de massa ──────────────────
+    bulk_cfg = camp.get("bulk_config") or {}
+    if bulk_cfg.get("enabled"):
+        connection_ids = bulk_cfg.get("connection_ids") or ([camp.get("connection_id")] if camp.get("connection_id") else [])
+        if not connection_ids:
+            raise HTTPException(status_code=400, detail="Modo Disparo em Massa: selecione ao menos 1 conexao em bulk_config.connection_ids")
+        from routes.bulk_routes import (
+            create_bulk_job_from_campaign,
+            JobFromCampaign,
+            WindowConfig,
+        )
+        payload = JobFromCampaign(
+            connection_ids=connection_ids,
+            interval_min_sec=int(bulk_cfg.get("interval_min_sec", 8)),
+            interval_max_sec=int(bulk_cfg.get("interval_max_sec", 25)),
+            daily_cap_per_connection=int(bulk_cfg.get("daily_cap_per_connection", 800)),
+            opt_out_keywords=bulk_cfg.get("opt_out_keywords") or ["PARAR", "SAIR", "DESCADASTRAR"],
+            window=WindowConfig(
+                enabled=bool(bulk_cfg.get("window_enabled", True)),
+                start=bulk_cfg.get("window_start", "09:00"),
+                end=bulk_cfg.get("window_end", "18:00"),
+                days_of_week=bulk_cfg.get("window_days") or [0, 1, 2, 3, 4, 5],
+            ),
+            auto_start=True,
+        )
+        job = await create_bulk_job_from_campaign(campaign_id, payload, user=user, db=db)
+        await db.campaigns.update_one(
+            {"id": campaign_id}, {"$set": {"status": "em_execucao", "last_bulk_job_id": job.get("id")}}
+        )
+        return {
+            "mode": "bulk",
+            "job_id": job.get("id"),
+            "audience": job.get("audience_size"),
+            "message": "Disparo em Massa iniciado. Acompanhe na aba 'Disparos em Massa'.",
+        }
+
+    # ─── Classic mode: pipeline sincrono original ───────────────────
     audience = await _resolve_campaign_audience(db, user["company_id"], camp)
     if not audience:
         raise HTTPException(status_code=400, detail="Audiencia vazia")

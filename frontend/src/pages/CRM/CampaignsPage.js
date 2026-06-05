@@ -204,6 +204,19 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
     ticket_status: campaign?.ticket_status || 'fechado',
     messages: campaign?.messages?.length ? campaign.messages : ['', '', '', '', ''],
     attachment_url: campaign?.attachment_url || '',
+    // 2026-02-28 — Modo Disparo em Massa: parametros extras para 20k+
+    bulk_config: campaign?.bulk_config || {
+      enabled: false,
+      connection_ids: [],
+      interval_min_sec: 8,
+      interval_max_sec: 25,
+      daily_cap_per_connection: 800,
+      opt_out_keywords: ['PARAR', 'SAIR', 'DESCADASTRAR'],
+      window_enabled: true,
+      window_start: '09:00',
+      window_end: '18:00',
+      window_days: [0, 1, 2, 3, 4, 5],
+    },
   });
   const [activeMsg, setActiveMsg] = useState(0);
   const [tags, setTags] = useState([]);
@@ -248,6 +261,7 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
       ticket_status: form.ticket_status,
       messages: cleanMessages,
       attachment_url: form.attachment_url || null,
+      bulk_config: form.bulk_config,
     };
     try {
       if (isEditing) await crmAPI.updateCampaign(campaign.id, payload);
@@ -366,6 +380,135 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
           </div>
 
           </>
+
+          {/* ═══ MODO DISPARO EM MASSA ═══ */}
+          <div className="border-t border-slate-200 pt-4">
+            <label className="flex items-start gap-2 p-3 rounded-lg border-2 cursor-pointer transition-colors"
+              style={{ borderColor: form.bulk_config.enabled ? '#7c3aed' : '#e2e8f0', background: form.bulk_config.enabled ? '#faf5ff' : 'transparent' }}>
+              <input
+                type="checkbox"
+                checked={form.bulk_config.enabled}
+                onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, enabled: e.target.checked } })}
+                className="mt-1"
+                data-testid="bulk-mode-toggle"
+              />
+              <div className="flex-1">
+                <p className="text-sm font-bold flex items-center gap-1.5"><Rocket className="w-4 h-4 text-violet-600" /> Modo Disparo em Massa <span className="text-[10px] bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">RECOMENDADO PARA 1k+</span></p>
+                <p className="text-[11px] text-slate-500 leading-relaxed mt-0.5">
+                  Ativa fila persistente com <strong>rotacao multi-conexao</strong> (Baileys + API Oficial Meta), <strong>spintax</strong> {'{a|b|c}'}, <strong>janela horaria</strong>, <strong>cap diario por numero</strong> e <strong>opt-out automatico</strong>. Quando clicar em "Enviar agora", vira um disparo monitorado.
+                </p>
+              </div>
+            </label>
+
+            {form.bulk_config.enabled && (
+              <div className="mt-3 space-y-3 p-3 rounded-lg bg-violet-50/40 border border-violet-200" data-testid="bulk-config-section">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-violet-700">Conexoes para rotacionar (Baileys + Meta — quanto mais, mais seguro)</label>
+                  <div className="mt-1 max-h-32 overflow-y-auto border border-violet-200 rounded p-2 space-y-1 bg-white">
+                    {conns.filter(c => c.type === 'whatsapp').map(c => {
+                      const checked = form.bulk_config.connection_ids.includes(c.id);
+                      return (
+                        <label key={c.id} className="flex items-center gap-2 p-1 hover:bg-violet-50 rounded cursor-pointer">
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setForm({
+                              ...form,
+                              bulk_config: {
+                                ...form.bulk_config,
+                                connection_ids: checked
+                                  ? form.bulk_config.connection_ids.filter(x => x !== c.id)
+                                  : [...form.bulk_config.connection_ids, c.id]
+                              }
+                            })}
+                            data-testid={`bulk-conn-${c.id}`} />
+                          <div className="flex-1 text-xs">
+                            <span className="font-medium">{c.name}</span>
+                            <span className="ml-2 text-[10px] text-slate-400">
+                              {c.phone || '-'} · {c.provider === 'whatsapp_cloud' ? '🛡 API Oficial Meta' : '📱 Baileys (QR)'}
+                              {c.status === 'connected' || c.provider === 'whatsapp_cloud' ? ' · ativa' : ' · desconectada'}
+                            </span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                    {conns.length === 0 && <p className="text-xs text-slate-400">Nenhuma conexao cadastrada.</p>}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">{form.bulk_config.connection_ids.length} selecionada(s).</p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-violet-700">Intervalo MIN (s)</label>
+                    <input type="number" value={form.bulk_config.interval_min_sec}
+                      onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, interval_min_sec: parseInt(e.target.value) || 1 } })}
+                      className="input-field w-full text-sm" data-testid="bulk-int-min" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-violet-700">Intervalo MAX (s)</label>
+                    <input type="number" value={form.bulk_config.interval_max_sec}
+                      onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, interval_max_sec: parseInt(e.target.value) || 1 } })}
+                      className="input-field w-full text-sm" data-testid="bulk-int-max" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-violet-700">Cap diario / numero</label>
+                    <input type="number" value={form.bulk_config.daily_cap_per_connection}
+                      onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, daily_cap_per_connection: parseInt(e.target.value) || 100 } })}
+                      className="input-field w-full text-sm" data-testid="bulk-cap" />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded p-2 border border-violet-200">
+                  <label className="flex items-center gap-2 mb-2">
+                    <input type="checkbox" checked={form.bulk_config.window_enabled}
+                      onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, window_enabled: e.target.checked } })}
+                      data-testid="bulk-window-enabled" />
+                    <span className="text-xs font-semibold">Janela horaria de envio</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <input type="time" value={form.bulk_config.window_start}
+                      onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, window_start: e.target.value } })}
+                      className="input-field w-full text-xs" disabled={!form.bulk_config.window_enabled} />
+                    <input type="time" value={form.bulk_config.window_end}
+                      onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, window_end: e.target.value } })}
+                      className="input-field w-full text-xs" disabled={!form.bulk_config.window_enabled} />
+                  </div>
+                  <div className="flex gap-1 flex-wrap">
+                    {['Seg','Ter','Qua','Qui','Sex','Sab','Dom'].map((lbl, idx) => (
+                      <button key={lbl} type="button"
+                        onClick={() => {
+                          const has = form.bulk_config.window_days.includes(idx);
+                          setForm({
+                            ...form,
+                            bulk_config: {
+                              ...form.bulk_config,
+                              window_days: has
+                                ? form.bulk_config.window_days.filter(x => x !== idx)
+                                : [...form.bulk_config.window_days, idx]
+                            }
+                          });
+                        }}
+                        disabled={!form.bulk_config.window_enabled}
+                        className={`text-[10px] px-2 py-1 rounded ${form.bulk_config.window_days.includes(idx) ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-violet-700 flex items-center gap-1"><ShieldOff className="w-3 h-3" /> Palavras-chave de Opt-out (separadas por virgula)</label>
+                  <input value={(form.bulk_config.opt_out_keywords || []).join(', ')}
+                    onChange={e => setForm({ ...form, bulk_config: { ...form.bulk_config, opt_out_keywords: e.target.value.split(',').map(s => s.trim()).filter(Boolean) } })}
+                    className="input-field w-full text-sm" data-testid="bulk-optout-kw" />
+                  <p className="text-[10px] text-slate-500 mt-1">Quem responder uma dessas palavras nunca mais recebera disparos seus.</p>
+                </div>
+
+                <div className="text-[11px] bg-white rounded p-2 border border-violet-200">
+                  <p className="font-semibold text-violet-700 mb-1">💡 Dica: use spintax nas mensagens</p>
+                  <p className="text-slate-600">Escreva <code>{'{Ola|Oi|Boa noite} {{nome}}, {confira|veja} nossa oferta!'}</code> — cada envio sorteia uma variacao diferente, dificultando o WhatsApp detectar como spam.</p>
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="border-t border-slate-200 pt-4">
             <p className="text-[11px] font-semibold text-slate-700 mb-2 flex items-center gap-1"><MessageSquare className="w-3.5 h-3.5" /> Mensagens (envio sequencial)</p>
