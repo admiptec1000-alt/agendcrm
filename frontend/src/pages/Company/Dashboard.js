@@ -26,7 +26,6 @@ import CampaignsPage from '../CRM/CampaignsPage';
 import QueuesPage from '../CRM/QueuesPage';
 import OrcamentosPage from '../CRM/OrcamentosPage';
 import MetaCloudAPIPage from '../CRM/MetaCloudAPIPage';
-import BulkCampaignsPage from '../CRM/BulkCampaignsPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 import BotPauseSettingsCard from '../../components/BotPauseSettingsCard';
 import TicketLifecycleSettingsCard from '../../components/TicketLifecycleSettingsCard';
@@ -48,8 +47,6 @@ const FEATURE_META = {
   contatos:           { icon: 'Users',            label: 'Clientes / Leads', group: 'CRM' },
   tags:               { icon: 'Tag',              label: 'Tags', group: 'CRM' },
   campanhas:          { icon: 'Megaphone',        label: 'Campanhas', group: 'CRM' },
-  // 2026-02-28 — Disparo em massa com fila persistente, multi-provider e opt-out.
-  disparo_massa:      { icon: 'Send',             label: 'Disparo em Massa', group: 'CRM', order: 11 },
   flowbuilder:        { icon: 'GitBranch',        label: 'Flowbuilder', group: 'CRM' },
   sgp_gateway:        { icon: 'PlugZap',          label: 'SGP Gateway', group: 'Config Empresa', order: 90 },
   // 'api' was a placeholder feature without page; merged into 'integrações'
@@ -712,7 +709,6 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'configuracoes': return <ConfigPage />;
     case 'configuracao_agenda': return <ConfiguracaoAgendaPage />;
     case 'meta_cloud_api': return <MetaCloudAPIPage />;
-    case 'disparo_massa': return <BulkCampaignsPage />;
     case 'integrações': return <IntegracoesPage />;
     case 'indoor': return <IndoorSettingsPage />;
     case 'usuarios': return <UsuariosPage />;

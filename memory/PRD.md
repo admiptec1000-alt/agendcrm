@@ -1,3 +1,37 @@
+## 2026-02-28 (NIGHT) — Bulk Dispatcher CONSOLIDADO dentro de Campanhas
+
+### Refatoracao: 1 modulo so
+- **Antes**: Disparo em Massa era sub-menu separado, sem reuso da audiencia de Campanhas.
+- **Agora**: tudo dentro de `Campanhas` (1 menu so, 1 modelo de audiencia, 1 lugar pra gerenciar).
+
+### Mudancas
+1. **Backend (`POST /api/bulk/jobs/from-campaign/{id}`)** novo endpoint:
+   - Resolve audience via `_resolve_campaign_audience` reusando 100% da logica existente (tags / list / all / no_tag)
+   - Mensagem default = `campaign.messages[0]` (operador pode sobrescrever)
+   - Filtra opt-outs pre-existentes automaticamente
+   - Linka `bulk_job.campaign_id` -> rastreabilidade
+   - Auto-start opcional (default true)
+2. **Frontend (`CampaignsPage.js`)**:
+   - Novo botao 🚀 (Rocket) por linha de campanha → abre modal `BulkLaunchModal` 2-etapas
+   - Nova tab "Disparos em Massa" lado a lado com Listagem/Listas/Parametros
+   - Lista de jobs com refresh auto 10s + detalhe completo (breakdown por conexao + filtros de status + pausar/retomar/cancelar)
+3. **Removido**: `BulkCampaignsPage.js` (~400 linhas) deletado, sub-menu `disparo_massa` removido do catalogo de features + sidebar.
+
+### Validacao E2E
+- Black Friday (audience_mode=all, 188 contatos) → boot job from-campaign
+- Backend resolve 188 destinatarios, cria 188 recipients, status=running, audience=188, opted_out=0 (sem opt-out pre)
+- UI: tab Disparos em Massa lista o job linkado a campanha (`[Campanha] Black Friday`) + Test 20k antigo (completed)
+- Botao Rocket presente em 3 campanhas existentes
+- Sidebar antigo "Disparo em Massa" removido (count 0)
+
+### Resultado UX
+Operador agora:
+1. Cria campanha normal (define audiencia por tag/lista/etc + mensagem padrao)
+2. Clica 🚀 na linha da campanha
+3. Escolhe conexoes (multi), spintax, janela, opt-out
+4. Inicia disparo robusto sem precisar redigitar nada
+
+
 ## 2026-02-28 (LATE PM) — Bulk Dispatcher pra 20k+ COMPLETO
 
 ### Arquitetura

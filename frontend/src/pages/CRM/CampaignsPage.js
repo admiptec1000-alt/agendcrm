@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { crmAPI, channelsAPI } from '../../services/api';
+import api from '../../services/api';
 import { toast } from 'sonner';
 import {
-  Plus, Pencil, Trash2, X, Search, Send, Eye,
-  Megaphone, Tag as TagIcon, Users, MessageSquare, FileText, Calendar
+  Plus, Pencil, Trash2, X, Search, Send, Eye, Rocket,
+  Megaphone, Tag as TagIcon, Users, MessageSquare, FileText, Calendar,
+  Pause, Play, Square, CheckCircle2, AlertCircle, ShieldOff, Clock,
+  ChevronLeft, ChevronRight, Activity, RefreshCw,
 } from 'lucide-react';
 
 const STATUS_LABEL = {
@@ -21,13 +24,15 @@ const fmtDateTime = (iso) => {
 };
 
 const CampaignsPage = () => {
-  const [tab, setTab] = useState('listagem'); // listagem | listas | params
+  const [tab, setTab] = useState('listagem'); // listagem | listas | params | disparos
   const [campaigns, setCampaigns] = useState([]);
   const [search, setSearch] = useState('');
   const [showCampModal, setShowCampModal] = useState(false);
   const [editingCamp, setEditingCamp] = useState(null);
   const [previewing, setPreviewing] = useState(null);
   const [audienceData, setAudienceData] = useState(null);
+  // 2026-02-28 — Disparo em massa: modal de boot + tab de monitoramento.
+  const [bulkLaunchFor, setBulkLaunchFor] = useState(null);
 
   const reload = async () => {
     try { const r = await crmAPI.getCampaigns(); setCampaigns(r.data); } catch (e) {}
@@ -77,6 +82,7 @@ const CampaignsPage = () => {
       <div className="flex gap-1 mb-4 border-b border-slate-200">
         <TabBtn active={tab === 'listagem'} onClick={() => setTab('listagem')} label="Listagem" testId="tab-listagem" />
         <TabBtn active={tab === 'listas'} onClick={() => setTab('listas')} label="Listas de Contato" testId="tab-listas" />
+        <TabBtn active={tab === 'disparos'} onClick={() => setTab('disparos')} label="Disparos em Massa" testId="tab-disparos" />
         <TabBtn active={tab === 'params'} onClick={() => setTab('params')} label="Parametros" testId="tab-params-page" />
       </div>
 
@@ -124,7 +130,8 @@ const CampaignsPage = () => {
                       <td className="px-4 py-2.5">
                         <div className="flex items-center justify-end gap-0.5">
                           <button onClick={() => handlePreview(c)} className="p-1.5 rounded hover:bg-slate-100" title="Audiencia"><Eye className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleRun(c)} className="p-1.5 rounded hover:bg-emerald-100 text-emerald-700" title="Enviar agora" data-testid={`run-campaign-${c.id}`}><Send className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => handleRun(c)} className="p-1.5 rounded hover:bg-emerald-100 text-emerald-700" title="Enviar agora (modo classico)" data-testid={`run-campaign-${c.id}`}><Send className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => setBulkLaunchFor(c)} className="p-1.5 rounded hover:bg-violet-100 text-violet-700" title="Disparo em massa (multi-conexao, spintax, janela, opt-out)" data-testid={`bulk-launch-${c.id}`}><Rocket className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleEdit(c)} className="p-1.5 rounded hover:bg-slate-100" title="Editar"><Pencil className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleDelete(c)} className="p-1.5 rounded hover:bg-red-50 text-red-600" title="Excluir"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
@@ -139,6 +146,7 @@ const CampaignsPage = () => {
       )}
 
       {tab === 'listas' && <ContactListsTab />}
+      {tab === 'disparos' && <BulkJobsTab />}
       {tab === 'params' && <AntiBlockSettingsTab />}
 
       {showCampModal && (
@@ -154,6 +162,14 @@ const CampaignsPage = () => {
           campaign={previewing}
           data={audienceData}
           onClose={() => { setPreviewing(null); setAudienceData(null); }}
+        />
+      )}
+
+      {bulkLaunchFor && (
+        <BulkLaunchModal
+          campaign={bulkLaunchFor}
+          onClose={() => setBulkLaunchFor(null)}
+          onLaunched={() => { setBulkLaunchFor(null); setTab('disparos'); toast.success('Disparo criado! Veja a aba "Disparos em Massa".'); }}
         />
       )}
     </div>
@@ -697,3 +713,336 @@ const ContactListModal = ({ list, onClose, onSaved }) => {
 };
 
 export default CampaignsPage;
+
+/* ════════════════════════════════════════════════════════════════════
+ * BULK LAUNCH MODAL — boota um bulk_job reutilizando uma Campanha
+ * existente (audiencia + mensagem) + adiciona os parametros de
+ * disparo robusto (multi-conexao, spintax, janela, opt-out).
+ * 2026-02-28 — Integracao Campanhas ⟶ Bulk Dispatcher.
+ * ════════════════════════════════════════════════════════════════════ */
+const BulkLaunchModal = ({ campaign, onClose, onLaunched }) => {
+  const [conns, setConns] = useState([]);
+  const [audienceCount, setAudienceCount] = useState(null);
+  const [form, setForm] = useState({
+    connection_ids: [],
+    message_template_override: (campaign.messages || []).find(Boolean) || '',
+    interval_min_sec: 8,
+    interval_max_sec: 25,
+    window: { enabled: true, start: '09:00', end: '18:00', days_of_week: [0,1,2,3,4,5] },
+    opt_out_keywords: ['PARAR', 'SAIR', 'DESCADASTRAR'],
+    daily_cap_per_connection: 800,
+    auto_start: true,
+  });
+  const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState(1);
+
+  useEffect(() => {
+    channelsAPI.getConnections().then(r => setConns((r.data || []).filter(c => c.status === 'connected' || c.provider === 'whatsapp_cloud'))).catch(() => {});
+    crmAPI.previewCampaignAudience(campaign.id).then(r => setAudienceCount(r.data?.count || 0)).catch(() => setAudienceCount(0));
+  }, [campaign.id]);
+
+  const toggleConn = (id) => setForm(f => ({ ...f, connection_ids: f.connection_ids.includes(id) ? f.connection_ids.filter(x => x !== id) : [...f.connection_ids, id] }));
+  const toggleDow = (d) => setForm(f => ({ ...f, window: { ...f.window, days_of_week: f.window.days_of_week.includes(d) ? f.window.days_of_week.filter(x => x !== d) : [...f.window.days_of_week, d] } }));
+
+  const submit = async () => {
+    if (form.connection_ids.length === 0) { toast.error('Selecione ao menos 1 conexao'); return; }
+    setSaving(true);
+    try {
+      await api.post(`/bulk/jobs/from-campaign/${campaign.id}`, form);
+      onLaunched();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro ao criar disparo');
+    } finally { setSaving(false); }
+  };
+
+  const DOW_LABELS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[92vh] overflow-y-auto" data-testid="bulk-launch-modal">
+        <div className="p-5 border-b flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-lg flex items-center gap-2"><Rocket className="w-5 h-5 text-violet-600" /> Disparo em Massa</h3>
+            <p className="text-xs text-slate-500">Campanha: <strong>{campaign.name}</strong> · Audiencia: {audienceCount ?? '...'} destinatarios</p>
+          </div>
+          <button onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {step === 1 && (
+            <>
+              <div className="card bg-violet-50 border-violet-200 text-xs space-y-1">
+                <p className="font-semibold text-violet-800">O que e diferente do "Enviar agora"?</p>
+                <p>O disparo em massa usa <strong>fila persistente</strong>, rotaciona <strong>varios numeros</strong>, suporta <strong>spintax</strong> (variacao por envio), respeita <strong>janela horaria</strong>, e tem <strong>opt-out automatico</strong> via palavra-chave. Recomendado pra 1k+ destinatarios.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Mensagem (heranca da campanha — pode editar)</label>
+                <textarea value={form.message_template_override} onChange={e => setForm({ ...form, message_template_override: e.target.value })} rows={5}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono" data-testid="bulk-msg-override" />
+                <div className="mt-2 text-[11px] text-slate-500 bg-slate-50 rounded p-2 space-y-1">
+                  <p><strong>Variaveis:</strong> {'{{nome}}'} (do contato), {'{{telefone}}'}, {'{{numero}}'}</p>
+                  <p><strong>Spintax:</strong> {'{Ola|Oi|Boa noite}'} — sorteia variacao por envio. Ex: <code>{'{Ola|Oi} {{nome}}, {confira|veja} nossa oferta!'}</code></p>
+                </div>
+              </div>
+            </>
+          )}
+
+          {step === 2 && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-2">
+                  Conexoes ({form.connection_ids.length} selecionadas) — quanto mais, mais seguro
+                </label>
+                <div className="space-y-1 max-h-40 overflow-y-auto border rounded p-2">
+                  {conns.length === 0 && <p className="text-xs text-slate-400">Nenhuma conexao ativa.</p>}
+                  {conns.map(c => (
+                    <label key={c.id} className="flex items-center gap-2 p-1.5 hover:bg-slate-50 rounded cursor-pointer">
+                      <input type="checkbox" checked={form.connection_ids.includes(c.id)} onChange={() => toggleConn(c.id)} data-testid={`bulk-conn-${c.id}`} />
+                      <div className="flex-1 text-xs">
+                        <p className="font-medium">{c.name}</p>
+                        <p className="text-[10px] text-slate-400">{c.phone || '-'} · {c.provider === 'whatsapp_cloud' ? 'Meta Cloud API' : 'Baileys (QR)'}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-xs font-medium mb-1">Intervalo MIN (s)</label>
+                  <input type="number" value={form.interval_min_sec} onChange={e => setForm({ ...form, interval_min_sec: parseInt(e.target.value) || 1 })} className="w-full px-2 py-1.5 border rounded" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Intervalo MAX (s)</label>
+                  <input type="number" value={form.interval_max_sec} onChange={e => setForm({ ...form, interval_max_sec: parseInt(e.target.value) || 1 })} className="w-full px-2 py-1.5 border rounded" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Limite diario por conexao</label>
+                <input type="number" value={form.daily_cap_per_connection} onChange={e => setForm({ ...form, daily_cap_per_connection: parseInt(e.target.value) || 100 })} className="w-full px-2 py-1.5 border rounded text-sm" />
+                <p className="text-[10px] text-slate-400 mt-1">Recomendado 600-1000 por numero pra evitar bloqueio.</p>
+              </div>
+              <div className="card bg-slate-50 p-3">
+                <p className="text-xs font-medium mb-2">Janela horaria</p>
+                <div className="flex items-center gap-2 mb-2 text-xs">
+                  <input type="checkbox" checked={form.window.enabled} onChange={e => setForm({ ...form, window: { ...form.window, enabled: e.target.checked } })} />
+                  <span>Habilitar janela</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <input type="time" value={form.window.start} onChange={e => setForm({ ...form, window: { ...form.window, start: e.target.value } })} className="px-2 py-1 border rounded text-xs" />
+                  <input type="time" value={form.window.end} onChange={e => setForm({ ...form, window: { ...form.window, end: e.target.value } })} className="px-2 py-1 border rounded text-xs" />
+                </div>
+                <div className="flex gap-1 flex-wrap">
+                  {DOW_LABELS.map((lbl, idx) => (
+                    <button key={lbl} type="button" onClick={() => toggleDow(idx)}
+                      className={`text-[10px] px-2 py-1 rounded ${form.window.days_of_week.includes(idx) ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Palavras opt-out (separadas por virgula)</label>
+                <input value={form.opt_out_keywords.join(', ')} onChange={e => setForm({ ...form, opt_out_keywords: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} className="w-full px-2 py-1.5 border rounded text-sm" />
+                <p className="text-[10px] text-slate-400 mt-1">Contato que enviar essa palavra entra no opt-out automaticamente.</p>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="p-5 border-t flex justify-between gap-2">
+          <button onClick={() => step === 1 ? onClose() : setStep(1)} className="btn-secondary text-sm flex items-center gap-1">
+            <ChevronLeft className="w-4 h-4" /> {step === 1 ? 'Cancelar' : 'Voltar'}
+          </button>
+          {step === 1 ? (
+            <button onClick={() => setStep(2)} className="btn-primary text-sm flex items-center gap-1" data-testid="bulk-launch-next">
+              Proximo <ChevronRight className="w-4 h-4" />
+            </button>
+          ) : (
+            <button onClick={submit} disabled={saving} className="btn-primary text-sm flex items-center gap-1 bg-violet-600 hover:bg-violet-700" data-testid="bulk-launch-submit">
+              <Rocket className="w-4 h-4" /> {saving ? 'Iniciando...' : 'Iniciar Disparo'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════
+ * BULK JOBS TAB — listagem + detalhe dos disparos em massa ativos.
+ * Tudo integrado dentro da pagina Campanhas (aba "Disparos em Massa").
+ * ════════════════════════════════════════════════════════════════════ */
+const BULK_STATUS_BADGE = {
+  draft: 'bg-slate-100 text-slate-700', running: 'bg-emerald-100 text-emerald-700',
+  paused: 'bg-amber-100 text-amber-700', cancelled: 'bg-red-100 text-red-700',
+  completed: 'bg-blue-100 text-blue-700',
+};
+const REC_STATUS_BADGE = {
+  pending: 'bg-slate-100 text-slate-600', sent: 'bg-emerald-100 text-emerald-700',
+  failed: 'bg-red-100 text-red-700', opted_out: 'bg-amber-100 text-amber-700',
+};
+
+const BulkJobsTab = () => {
+  const [jobs, setJobs] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+
+  const load = useCallback(async () => {
+    try { const r = await api.get('/bulk/jobs'); setJobs(r.data || []); } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  if (selectedId) return <BulkJobDetail jobId={selectedId} onBack={() => { setSelectedId(null); load(); }} />;
+
+  return (
+    <div data-testid="bulk-jobs-tab">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-slate-500">Disparos criados a partir das campanhas — multi-conexao, spintax, janela e opt-out.</p>
+        <button onClick={load} className="btn-secondary text-xs flex items-center gap-1"><RefreshCw className="w-3 h-3" /> Atualizar</button>
+      </div>
+      {jobs.length === 0 && (
+        <div className="card text-center py-10 text-slate-400 text-sm">
+          <Rocket className="w-10 h-10 mx-auto mb-2 text-slate-300" />
+          <p>Nenhum disparo em massa. Use o icone 🚀 (foguete) na lista de campanhas para criar.</p>
+        </div>
+      )}
+      <div className="space-y-2">
+        {jobs.map(j => {
+          const pct = j.audience_size > 0 ? Math.min(100, Math.round(((j.sent_count + j.failed_count + j.opted_out_count) / j.audience_size) * 100)) : 0;
+          return (
+            <div key={j.id} onClick={() => setSelectedId(j.id)} className="card cursor-pointer hover:shadow-md transition" data-testid={`bulk-job-${j.id}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-sm">{j.name}</h3>
+                  <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${BULK_STATUS_BADGE[j.status] || 'bg-slate-100'}`}>{j.status.toUpperCase()}</span>
+                </div>
+                <span className="text-[10px] text-slate-400">{new Date(j.created_at).toLocaleString()}</span>
+              </div>
+              <div className="grid grid-cols-5 gap-2 text-xs mb-2">
+                <BulkStat label="Audiencia" value={j.audience_size} icon={Users} />
+                <BulkStat label="Enviadas" value={j.sent_count} icon={CheckCircle2} color="text-emerald-600" />
+                <BulkStat label="Falhas" value={j.failed_count} icon={AlertCircle} color="text-red-500" />
+                <BulkStat label="Opt-outs" value={j.opted_out_count} icon={ShieldOff} color="text-amber-600" />
+                <BulkStat label="Conexoes" value={(j.connection_ids || []).length} icon={Activity} />
+              </div>
+              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const BulkStat = ({ label, value, icon: Ic, color = 'text-slate-600' }) => (
+  <div className="flex items-center gap-1.5">
+    <Ic className={`w-3 h-3 ${color}`} />
+    <div>
+      <p className="text-[9px] uppercase text-slate-400 leading-tight">{label}</p>
+      <p className={`font-bold text-xs ${color}`}>{value || 0}</p>
+    </div>
+  </div>
+);
+
+const BulkJobDetail = ({ jobId, onBack }) => {
+  const [job, setJob] = useState(null);
+  const [recipients, setRecipients] = useState([]);
+  const [filter, setFilter] = useState('');
+  const [acting, setActing] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.get(`/bulk/jobs/${jobId}`);
+      setJob(r.data);
+      const q = filter ? `?status=${filter}&limit=300` : '?limit=300';
+      const rr = await api.get(`/bulk/jobs/${jobId}/recipients${q}`);
+      setRecipients(rr.data || []);
+    } catch { /* ignore */ }
+  }, [jobId, filter]);
+  useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
+
+  const act = async (action) => {
+    setActing(true);
+    try { await api.post(`/bulk/jobs/${jobId}/action`, { action }); toast.success(`Acao '${action}' aplicada`); load(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Erro'); }
+    finally { setActing(false); }
+  };
+
+  if (!job) return <div className="text-sm text-slate-500">Carregando...</div>;
+  const pct = job.audience_size > 0 ? Math.min(100, Math.round(((job.sent_count + job.failed_count + job.opted_out_count) / job.audience_size) * 100)) : 0;
+
+  return (
+    <div data-testid="bulk-job-detail">
+      <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-3"><ChevronLeft className="w-4 h-4" /> Voltar</button>
+      <div className="card mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="font-bold text-lg">{job.name}</h2>
+            <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${BULK_STATUS_BADGE[job.status] || 'bg-slate-100'}`}>{job.status.toUpperCase()}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {job.status === 'running' && <button onClick={() => act('pause')} disabled={acting} className="btn-secondary text-xs flex items-center gap-1" data-testid="bulk-pause"><Pause className="w-3 h-3" /> Pausar</button>}
+            {job.status === 'paused'  && <button onClick={() => act('resume')} disabled={acting} className="btn-primary text-xs flex items-center gap-1" data-testid="bulk-resume"><Play className="w-3 h-3" /> Retomar</button>}
+            {['draft', 'running', 'paused'].includes(job.status) && (
+              <button onClick={() => { if (window.confirm('Cancelar este disparo?')) act('cancel'); }} disabled={acting} className="text-red-600 hover:bg-red-50 text-xs flex items-center gap-1 px-2 py-1 rounded" data-testid="bulk-cancel"><Square className="w-3 h-3" /> Cancelar</button>
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-5 gap-2 mb-3">
+          <BulkStat label="Audiencia" value={job.audience_size} icon={Users} />
+          <BulkStat label="Enviadas" value={job.sent_count} icon={CheckCircle2} color="text-emerald-600" />
+          <BulkStat label="Falhas" value={job.failed_count} icon={AlertCircle} color="text-red-500" />
+          <BulkStat label="Opt-outs" value={job.opted_out_count} icon={ShieldOff} color="text-amber-600" />
+          <BulkStat label="Restantes" value={Math.max(0, job.audience_size - job.sent_count - job.failed_count - job.opted_out_count)} icon={Clock} />
+        </div>
+        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+          <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+        </div>
+        <p className="text-[10px] text-slate-400 mt-1">{pct}% processado{job.last_tick_at ? ` · Ultimo tick: ${new Date(job.last_tick_at).toLocaleString()}` : ''}</p>
+      </div>
+
+      <div className="card mb-4">
+        <h3 className="font-semibold text-sm mb-2">Distribuicao por conexao</h3>
+        {Object.entries(job.connection_breakdown || {}).map(([conn, byStatus]) => (
+          <div key={conn} className="flex items-center gap-2 text-xs py-1 border-b last:border-0">
+            <code className="text-[10px] text-slate-400 flex-shrink-0">{conn.substring(0, 8)}</code>
+            <div className="flex gap-1 flex-wrap">
+              {Object.entries(byStatus).map(([s, c]) => (
+                <span key={s} className={`px-2 py-0.5 rounded text-[10px] ${REC_STATUS_BADGE[s] || 'bg-slate-100'}`}>{s}: {c}</span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-sm">Destinatarios</h3>
+          <div className="flex gap-1">
+            {['', 'pending', 'sent', 'failed', 'opted_out'].map(s => (
+              <button key={s || 'all'} onClick={() => setFilter(s)} className={`text-[10px] px-2 py-1 rounded ${filter === s ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                {s || 'Todos'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-1 max-h-96 overflow-y-auto">
+          {recipients.map(r => (
+            <div key={r.id} className="flex items-center gap-2 text-xs py-1 border-b last:border-0">
+              <code className="text-slate-500 w-32">{r.phone}</code>
+              <span className="flex-1 truncate">{r.name || '-'}</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded ${REC_STATUS_BADGE[r.status] || 'bg-slate-100'}`}>{r.status}</span>
+              {r.error && <span className="text-[10px] text-red-500 truncate max-w-xs" title={r.error}>{r.error}</span>}
+            </div>
+          ))}
+          {recipients.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Nenhum destinatario {filter ? `com status "${filter}"` : ''}.</p>}
+        </div>
+      </div>
+    </div>
+  );
+};

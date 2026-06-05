@@ -366,6 +366,135 @@ async def remove_opt_out(
     return {"removed": digits}
 
 
+class JobFromCampaign(BaseModel):
+    """Override fields when creating a bulk_job from an existing campaign.
+
+    The campaign provides: audience (resolved via _resolve_campaign_audience),
+    message template, and basic metadata. This payload lets the operator
+    upgrade it to the bulk pipeline (multi-conn, spintax, window, opt-out).
+    """
+    connection_ids: list[str]
+    message_template_override: Optional[str] = None  # if None, uses campaign.messages[0]
+    interval_min_sec: int = 8
+    interval_max_sec: int = 25
+    window: WindowConfig = WindowConfig()
+    opt_out_keywords: list[str] = ["PARAR", "SAIR", "DESCADASTRAR", "STOP"]
+    daily_cap_per_connection: int = 800
+    auto_start: bool = True
+
+
+@router.post("/bulk/jobs/from-campaign/{campaign_id}")
+async def create_bulk_job_from_campaign(
+    campaign_id: str,
+    data: JobFromCampaign,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Boot a bulk_job pre-populated from an existing campaign:
+      - Audience resolved via _resolve_campaign_audience (tags/list/all/no_tag)
+      - Message template defaults to campaign.messages[0] (spintax allowed)
+      - Pre-existing opt-outs filtered automatically
+    Auto-starts if `auto_start=True`.
+    """
+    from routes.crm_routes import _resolve_campaign_audience
+    camp = await db.campaigns.find_one(
+        {"id": campaign_id, "company_id": user["company_id"]}, {"_id": 0}
+    )
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    if not data.connection_ids:
+        raise HTTPException(status_code=400, detail="Selecione ao menos uma conexao")
+    # Validate connections belong to this company.
+    valid = await db.channel_connections.count_documents({
+        "company_id": user["company_id"],
+        "id": {"$in": data.connection_ids},
+    })
+    if valid != len(data.connection_ids):
+        raise HTTPException(status_code=400, detail="Conexao(oes) invalida(s)")
+
+    msg_template = (
+        data.message_template_override
+        or (camp.get("messages") or [None])[0]
+        or "Ola {{nome}}!"
+    )
+    audience = await _resolve_campaign_audience(db, user["company_id"], camp)
+    if not audience:
+        raise HTTPException(status_code=400, detail="Audiencia da campanha esta vazia")
+
+    job_id = str(uuid.uuid4())
+    job_doc = {
+        "id": job_id,
+        "company_id": user["company_id"],
+        "name": f"[Campanha] {camp.get('name')}",
+        "message_template": msg_template,
+        "connection_ids": data.connection_ids,
+        "rotation_strategy": "round_robin",
+        "interval_min_sec": max(1, int(data.interval_min_sec)),
+        "interval_max_sec": max(1, int(data.interval_max_sec)),
+        "window": data.window.model_dump(),
+        "opt_out_keywords": [k.strip().upper() for k in data.opt_out_keywords if k.strip()],
+        "daily_cap_per_connection": data.daily_cap_per_connection,
+        "campaign_id": campaign_id,
+        "status": "draft",
+        "audience_size": 0,
+        "sent_count": 0,
+        "failed_count": 0,
+        "opted_out_count": 0,
+        "skipped_count": 0,
+        "next_rotation_idx": 0,
+        "created_by": user.get("id") or user.get("email"),
+        "created_at": _now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "last_tick_at": None,
+    }
+    await db.bulk_jobs.insert_one(job_doc)
+
+    # Insert recipients (dedup + opt-out filter)
+    opt_outs = await db.bulk_opt_outs.find(
+        {"company_id": user["company_id"]}, {"_id": 0, "phone": 1}
+    ).to_list(50000)
+    opted_set = {_digits(o["phone"]) for o in opt_outs}
+    seen: set[str] = set()
+    docs: list[dict] = []
+    for person in audience:
+        d = _digits(person.get("phone") or "")
+        if not d or d in seen:
+            continue
+        seen.add(d)
+        docs.append({
+            "id": str(uuid.uuid4()),
+            "job_id": job_id,
+            "company_id": user["company_id"],
+            "phone": d,
+            "name": person.get("name") or "",
+            "custom_vars": {},
+            "status": "opted_out" if d in opted_set else "pending",
+            "connection_used": None,
+            "message_rendered": None,
+            "attempted_at": None,
+            "sent_at": None,
+            "error": "Pre-existing opt-out" if d in opted_set else None,
+            "created_at": _now_iso(),
+        })
+    if docs:
+        await db.bulk_job_recipients.insert_many(docs)
+        pending = sum(1 for d in docs if d["status"] == "pending")
+        opted = sum(1 for d in docs if d["status"] == "opted_out")
+        await db.bulk_jobs.update_one(
+            {"id": job_id},
+            {"$inc": {"audience_size": pending + opted, "opted_out_count": opted}},
+        )
+
+    if data.auto_start:
+        await db.bulk_jobs.update_one(
+            {"id": job_id},
+            {"$set": {"status": "running", "started_at": _now_iso()}},
+        )
+
+    return await db.bulk_jobs.find_one({"id": job_id}, {"_id": 0})
+
+
 # ─── Worker (called by scheduler) ──────────────────────────────────────
 async def process_bulk_tick(db: AsyncIOMotorDatabase):
     """Single tick of the bulk worker. Designed to be called every ~15s."""
