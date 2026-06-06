@@ -870,27 +870,22 @@ const DashboardPage = ({ setActivePage, menuGroups }) => {
   useEffect(() => {
     const today = new Date().toISOString().split('T')[0];
     Promise.all([
-      crmAPI.getTickets().catch(() => ({ data: [] })),
+      // 2026-02-28 — Usa endpoint dedicado `/crm/tickets/counts` (aggregate
+      // count_documents — sem paginacao). Antes usavamos getTickets() que
+      // retornava lista truncada -> contadores Aguardando/Atendendo zeravam
+      // mesmo com 1000+ tickets reais (bate exatamente com bug do prod
+      // Incinera: Atendimentos tab mostrava 1296/916, Inicio mostrava 0/0).
+      crmAPI.getTicketCounts().catch(() => ({ data: { atendendo: 0, aguardando: 0, fechados_hoje: 0, total: 0 } })),
       schedulingAPI.getAppointments().catch(() => ({ data: [] })),
       schedulingAPI.getServices().catch(() => ({ data: [] })),
       schedulingAPI.getProfessionals().catch(() => ({ data: [] })),
-    ]).then(([t, a, s, p]) => {
-      // 2026-02-28 — Split tickets by status para o tipo "Atendimento"
-      // ver imediatamente quantos estao aguardando vs em atendimento.
-      const all = t.data || [];
-      const aguardando = all.filter(x => (x.status || '').toLowerCase() === 'aguardando').length;
-      const atendendo  = all.filter(x => (x.status || '').toLowerCase() === 'atendendo').length;
-      const fechadosHoje = all.filter(x => {
-        const s = (x.status || '').toLowerCase();
-        if (s !== 'fechado' && s !== 'closed') return false;
-        const at = x.closed_at || x.updated_at || '';
-        return at.startsWith(today);
-      }).length;
+    ]).then(([tc, a, s, p]) => {
+      const c = tc.data || {};
       setData({
-        tickets: all.length,
-        tickets_aguardando: aguardando,
-        tickets_atendendo: atendendo,
-        tickets_fechados_hoje: fechadosHoje,
+        tickets: c.total || 0,
+        tickets_aguardando: c.aguardando || 0,
+        tickets_atendendo: c.atendendo || 0,
+        tickets_fechados_hoje: c.fechados_hoje || 0,
         appointments: (a.data || []).length,
         services: (s.data || []).length,
         professionals: (p.data || []).length,

@@ -208,7 +208,19 @@ async def get_ticket_counts(
     })
     grupos = await db.tickets.count_documents({**base, "status": {"$nin": ["fechado", "cancelado"]}, "channel": "whatsapp_group"})
     total = await db.tickets.count_documents(base)
-    return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "total": total}
+    # 2026-02-28 — Adicionado contador "fechados_hoje" pro card da
+    # tela Inicio. Usa `closed_at` quando disponivel, senao `updated_at`.
+    from datetime import datetime as _dt, timezone as _tz
+    today_prefix = _dt.now(_tz.utc).date().isoformat()
+    fechados_hoje = await db.tickets.count_documents({
+        **base,
+        "status": {"$in": ["fechado", "closed"]},
+        "$or": [
+            {"closed_at": {"$regex": f"^{today_prefix}"}},
+            {"closed_at": {"$exists": False}, "updated_at": {"$regex": f"^{today_prefix}"}},
+        ],
+    })
+    return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "total": total, "fechados_hoje": fechados_hoje}
 
 
 @router.post("/tickets/open-for-client")

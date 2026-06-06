@@ -1,3 +1,27 @@
+## 2026-02-28 (NIGHT 3) — Fix divergencia Atendendo/Aguardando + valida toggle bulk
+
+### Bug: Tela Inicio mostrava 0/0 enquanto Atendimentos mostrava 1296/916
+**Causa raiz**: HomePage chamava `crmAPI.getTickets()` que retorna lista paginada/truncada (default 1000). Em prod com 2k+ tickets, a lista era cortada e o filter `status === 'aguardando'` nao batia porque o status REAL no banco e algo como "aberto"/"em_atendimento" — a logica "Aguardando" e baseada em `assigned_to` ausente (nao no campo `status`).
+
+**Fix**:
+- Backend `/crm/tickets/counts` ja existia com a logica correta (`assigned_to` null = aguardando). Adicionado `fechados_hoje` no retorno (filtro por `closed_at`/`updated_at` prefix com data atual UTC).
+- Frontend `Dashboard.js` HomePage: trocou `crmAPI.getTickets()` por `crmAPI.getTicketCounts()` — agora le os mesmos contadores do tab Atendimentos. Inicio e Atendimentos vao bater sempre.
+
+### Validado: Toggle "Modo Disparo em Massa" funcionando E2E
+Playwright confirmou que clicar em "Nova Campanha" -> ativar o toggle exibe o banner violeta + secao expandida com:
+- Lista de conexoes mostrando tipo (Baileys QR / Meta Cloud API) + status (ativa/desconectada)
+- Intervalos MIN/MAX, Cap diario por numero
+- Janela horaria (toggle + horarios + dias da semana)
+- Palavras-chave de opt-out
+- Dica de spintax inline
+
+Quando o operador salvar com `bulk_config.enabled=true` e clicar "Enviar agora", backend roteia para o bulk dispatcher (codigo ja implementado em `crm_routes.run_campaign_now` na sessao anterior).
+
+### Validacao
+- `GET /api/crm/tickets/counts` retorna `{atendendo, aguardando, fechados_hoje, total, grupos}` corretamente
+- UI Inicio agora le do endpoint dedicado (count_documents nativo do MongoDB — sem limite de linhas)
+
+
 ## 2026-02-28 (NIGHT 2) — 4 fixes: P0 travamento + P1 permissoes + P1 dashboard + P2 relatorio
 
 ### 🔴 P0 — Travamento de fluxo+atendimento a cada ~20h (CRITICO PROD)
