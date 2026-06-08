@@ -1803,9 +1803,11 @@ const BookFromClientForm = ({ services, professionals, onSave }) => {
 /* ========== QUICK RESPONSES ========== */
 const QuickResponsesPage = () => {
   const [items, setItems] = useState([]);
-  const [showAdd, setShowAdd] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);  // null = creating, id = editing
   const [form, setForm] = useState({ title: '', content: '', shortcut: '', attachment_filename: '', attachment_mimetype: '', attachment_data_b64: '' });
-  useEffect(() => { crmAPI.getQuickResponses().then(r => setItems(r.data)).catch(() => {}); }, []);
+  const reload = () => crmAPI.getQuickResponses().then(r => setItems(r.data)).catch(() => {});
+  useEffect(() => { reload(); }, []);
   const handleFile = (file) => {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) { toast.error('Arquivo muito grande (max 5MB)'); return; }
@@ -1816,56 +1818,106 @@ const QuickResponsesPage = () => {
     };
     reader.readAsDataURL(file);
   };
-  const handleSave = async () => {
-    await crmAPI.createQuickResponse(form);
-    toast.success('Resposta criada!');
-    setShowAdd(false);
+  const openNew = () => {
+    setEditingId(null);
     setForm({ title: '', content: '', shortcut: '', attachment_filename: '', attachment_mimetype: '', attachment_data_b64: '' });
-    crmAPI.getQuickResponses().then(r => setItems(r.data));
+    setShowModal(true);
   };
+  const openEdit = (item) => {
+    setEditingId(item.id);
+    setForm({
+      title: item.title || '',
+      content: item.content || '',
+      shortcut: item.shortcut || '',
+      attachment_filename: item.attachment_filename || '',
+      attachment_mimetype: item.attachment_mimetype || '',
+      attachment_data_b64: '',  // se vazio no save, mantem anexo atual
+    });
+    setShowModal(true);
+  };
+  const handleSave = async () => {
+    if (!form.title?.trim()) { toast.error('Titulo obrigatorio'); return; }
+    try {
+      if (editingId) {
+        // Em editar: so envia attachment_data_b64 se o operador subiu novo
+        // arquivo. Senao, NAO envia esse campo (backend mantem o que tem).
+        const payload = { title: form.title, content: form.content, shortcut: form.shortcut };
+        if (form.attachment_data_b64) {
+          payload.attachment_filename = form.attachment_filename;
+          payload.attachment_mimetype = form.attachment_mimetype;
+          payload.attachment_data_b64 = form.attachment_data_b64;
+        }
+        await crmAPI.updateQuickResponse(editingId, payload);
+        toast.success('Resposta atualizada!');
+      } else {
+        await crmAPI.createQuickResponse(form);
+        toast.success('Resposta criada!');
+      }
+      setShowModal(false);
+      reload();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro ao salvar');
+    }
+  };
+  const handleDelete = async (id) => {
+    if (!window.confirm('Apagar esta resposta rapida?')) return;
+    try {
+      await crmAPI.deleteQuickResponse(id);
+      toast.success('Resposta apagada');
+      reload();
+    } catch { toast.error('Erro ao apagar'); }
+  };
+  const removeAttachment = () => setForm(f => ({ ...f, attachment_filename: '', attachment_mimetype: '', attachment_data_b64: '' }));
   return (
     <div className="animate-fade-in" data-testid="quick-responses-page">
       <div className="flex items-center justify-between mb-4">
         <p className="text-slate-600 text-sm">{items.length} respostas rapidas</p>
-        <button onClick={() => setShowAdd(true)} className="btn-primary text-sm flex items-center gap-2"><Plus className="w-4 h-4" /> Nova</button>
+        <button onClick={openNew} className="btn-primary text-sm flex items-center gap-2" data-testid="quick-new-btn"><Plus className="w-4 h-4" /> Nova</button>
       </div>
       <div className="grid gap-3">
         {items.map(i => (
-          <div key={i.id} className="card !p-4">
+          <div key={i.id} className="card !p-4" data-testid={`quick-item-${i.id}`}>
             <div className="flex items-center justify-between mb-1">
               <p className="font-medium text-sm text-slate-900">{i.title}</p>
-              {i.shortcut && <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">/{i.shortcut}</code>}
+              <div className="flex items-center gap-2">
+                {i.shortcut && <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">/{i.shortcut}</code>}
+                <button onClick={() => openEdit(i)} className="text-slate-500 hover:text-emerald-600 p-1" data-testid={`quick-edit-${i.id}`} title="Editar">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => handleDelete(i.id)} className="text-slate-500 hover:text-red-600 p-1" data-testid={`quick-delete-${i.id}`} title="Excluir">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-            <p className="text-sm text-slate-600">{i.content}</p>
+            <p className="text-sm text-slate-600 whitespace-pre-wrap">{i.content}</p>
             {i.attachment_filename && (
               <p className="text-[11px] text-emerald-700 mt-1 inline-flex items-center gap-1"><Paperclip className="w-3 h-3" />{i.attachment_filename}</p>
             )}
           </div>
         ))}
       </div>
-      {showAdd && (
-        <Modal title="Nova Resposta Rapida" onClose={() => setShowAdd(false)}>
+      {showModal && (
+        <Modal title={editingId ? 'Editar Resposta Rapida' : 'Nova Resposta Rapida'} onClose={() => setShowModal(false)}>
           <div className="space-y-3">
-            <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="Titulo" className="input-field" />
-            <textarea value={form.content} onChange={e => setForm({...form, content: e.target.value})} placeholder="Conteudo da resposta" className="input-field" rows={3} />
-            <input value={form.shortcut} onChange={e => setForm({...form, shortcut: e.target.value})} placeholder="Atalho (ex: ola)" className="input-field" />
+            <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="Titulo" className="input-field" data-testid="quick-form-title" />
+            <textarea value={form.content} onChange={e => setForm({...form, content: e.target.value})} placeholder="Conteudo da resposta" className="input-field" rows={4} data-testid="quick-form-content" />
+            <input value={form.shortcut} onChange={e => setForm({...form, shortcut: e.target.value})} placeholder="Atalho (ex: ola, oi)" className="input-field" data-testid="quick-form-shortcut" />
+            <p className="text-[11px] text-slate-500 -mt-2">No chat de atendimento, digite <code>/</code> e o atalho pra inserir a resposta rapidamente.</p>
             <div>
               <label className="text-[10px] font-bold uppercase text-slate-400">Anexo (opcional)</label>
-              <input
-                type="file"
-                onChange={e => handleFile(e.target.files?.[0])}
-                className="text-xs w-full"
-                data-testid="quick-response-file"
-              />
+              <input type="file" onChange={e => handleFile(e.target.files?.[0])} className="text-xs w-full" data-testid="quick-form-file" />
               {form.attachment_filename && (
                 <div className="flex items-center justify-between mt-1 text-xs bg-emerald-50 px-2 py-1 rounded">
-                  <span className="text-emerald-700 truncate">{form.attachment_filename}</span>
-                  <button onClick={() => setForm(f => ({ ...f, attachment_filename: '', attachment_mimetype: '', attachment_data_b64: '' }))} className="text-red-500 ml-2">×</button>
+                  <span className="text-emerald-700 truncate">{form.attachment_filename}{!form.attachment_data_b64 && editingId && <span className="ml-1 text-[10px] text-slate-500">(atual)</span>}</span>
+                  <button onClick={removeAttachment} className="text-red-500 ml-2">×</button>
                 </div>
               )}
             </div>
           </div>
-          <div className="flex justify-end gap-2 mt-4"><button onClick={() => setShowAdd(false)} className="btn-secondary text-sm">Cancelar</button><button onClick={handleSave} className="btn-primary text-sm">Salvar</button></div>
+          <div className="flex justify-end gap-2 mt-4">
+            <button onClick={() => setShowModal(false)} className="btn-secondary text-sm">Cancelar</button>
+            <button onClick={handleSave} className="btn-primary text-sm" data-testid="quick-form-save">{editingId ? 'Salvar' : 'Criar'}</button>
+          </div>
         </Modal>
       )}
     </div>

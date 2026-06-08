@@ -193,12 +193,18 @@ const FlowBuilderPage = () => {
   const reload = () => crmAPI.listFlows().then(r => setFlows(r.data)).catch(() => {});
   const [tagsList, setTagsList] = useState([]);
   const [queuesList, setQueuesList] = useState([]);
+  // 2026-02-28 — Lista de usuarios da empresa pra usar no Ticket node
+  // como rota direta a um analista especifico.
+  const [usersList, setUsersList] = useState([]);
   const importFileRef = useRef(null);
   useEffect(() => {
     reload();
     aiAPI.listAgents().then(r => setAiAgents(r.data)).catch(() => {});
     crmAPI.listTags().then(r => setTagsList(r.data)).catch(() => {});
     crmAPI.listQueues().then(r => setQueuesList(r.data)).catch(() => {});
+    import('../../services/api').then(({ schedulingAPI }) => {
+      if (schedulingAPI?.getCompanyUsers) schedulingAPI.getCompanyUsers().then(r => setUsersList(r.data || [])).catch(() => {});
+    });
   }, []);
 
   const deleteNode = useCallback((nodeId) => {
@@ -607,6 +613,7 @@ const FlowBuilderPage = () => {
           aiAgents={aiAgents}
           tagsList={tagsList}
           queuesList={queuesList}
+          usersList={usersList}
           onClose={() => setSelectedNode(null)}
           onSave={(config) => { updateNodeConfig(selectedNode.id, config); setSelectedNode(null); }}
           onDelete={() => deleteNode(selectedNode.id)}
@@ -637,7 +644,7 @@ function buildSummary(nodeType, config) {
   }
 }
 
-const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, onSave, onDelete }) => {
+const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], usersList = [], onClose, onSave, onDelete }) => {
   const [config, setConfig] = useState(node.data?.config || {});
   const cfg = NODE_TYPE_BY_KEY[node.data?.nodeType];
   const Icon = cfg?.icon || MessageSquare;
@@ -849,6 +856,26 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], onClose, o
                   {queuesList.map(q => <option key={q.id} value={q.id}>{q.name}</option>)}
                 </select>
                 {queuesList.length === 0 && <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-1">Nenhuma fila cadastrada. Va em "Filas" para criar.</p>}
+              </div>
+              {/* 2026-02-28 — Roteamento opcional para um ANALISTA especifico
+                  (alem da fila). Default "Auto" deixa o ticket cair na fila
+                  normalmente; se selecionar usuario, ticket vai direto pra ele. */}
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-400">Analista (opcional)</label>
+                <select
+                  value={config.assigned_user_id || ''}
+                  onChange={e => setConfig({ ...config, assigned_user_id: e.target.value })}
+                  className="input-field text-sm"
+                  data-testid="ticket-user-select"
+                >
+                  <option value="">Auto (cair na fila)</option>
+                  {usersList.map(u => (
+                    <option key={u.id} value={u.id}>{u.name || u.email || u.id}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Se selecionar um analista, o ticket vai direto pra ele (status "Em atendimento"). Caso contrario, fica disponivel na fila para qualquer analista pegar.
+                </p>
               </div>
               <div><label className="text-[10px] font-bold uppercase text-slate-400">Status</label>
                 <select value={config.status || 'aguardando'} onChange={e => setConfig({...config, status: e.target.value})} className="input-field text-sm">

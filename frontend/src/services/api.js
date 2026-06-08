@@ -127,6 +127,8 @@ export const crmAPI = {
   // Quick Responses + Campaigns
   getQuickResponses: () => api.get('/crm/quick-responses'),
   createQuickResponse: (data) => api.post('/crm/quick-responses', data),
+  updateQuickResponse: (id, data) => api.put(`/crm/quick-responses/${id}`, data),
+  deleteQuickResponse: (id) => api.delete(`/crm/quick-responses/${id}`),
   getCampaigns: () => api.get('/crm/campaigns'),
   createCampaign: (data) => api.post('/crm/campaigns', data),
   // Flows

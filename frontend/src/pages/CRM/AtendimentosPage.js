@@ -172,6 +172,15 @@ const AtendimentosPage = () => {
   const [allTags, setAllTags] = useState([]);
   const [presenceMap, setPresenceMap] = useState({}); // phone -> {presence, updated_at}
   const [sending, setSending] = useState(false);
+  // 2026-02-28 — Respostas Rapidas inline via `/` no input. Operador digita
+  // "/" + parte do atalho/titulo -> popover acima do input mostra matches,
+  // setas/Enter selecionam, Escape fecha. Se a resposta tem anexo, dispara
+  // tambem o sendMedia logo apos o texto. Sem isso, operador tem que ir na
+  // tela de Respostas Rapidas, copiar e voltar — fluxo inutil pra chat.
+  const [quickResponses, setQuickResponses] = useState([]);
+  const [quickMenuOpen, setQuickMenuOpen] = useState(false);
+  const [quickHighlight, setQuickHighlight] = useState(0);
+  const messageInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const selectedRef = useRef(null);
 
@@ -224,6 +233,62 @@ const AtendimentosPage = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { loadTags(); loadAux(); }, []);
+
+  // 2026-02-28 — Carrega respostas rapidas uma vez (e dispara um reload
+  // quando o operador volta pra essa pagina). NAO recarrega no polling
+  // pra evitar requests inuteis — operador raramente cria/edita resposta
+  // enquanto atende.
+  useEffect(() => {
+    crmAPI.getQuickResponses().then(r => setQuickResponses(r.data || [])).catch(() => {});
+  }, []);
+
+  // Lista filtrada com base no texto apos `/`. Quando input nao comeca
+  // com `/`, devolve [] (menu fica fechado).
+  const quickFilter = (() => {
+    if (!messageInput.startsWith('/')) return '';
+    return messageInput.slice(1).toLowerCase();
+  })();
+  const filteredQuick = (() => {
+    if (!messageInput.startsWith('/')) return [];
+    const term = quickFilter;
+    if (!term) return quickResponses.slice(0, 8);
+    return quickResponses.filter(q =>
+      (q.shortcut || '').toLowerCase().includes(term) ||
+      (q.title || '').toLowerCase().includes(term) ||
+      (q.content || '').toLowerCase().includes(term)
+    ).slice(0, 8);
+  })();
+
+  // Insere a resposta rapida: substitui o texto `/xxx` pelo conteudo
+  // e, se tiver anexo, dispara o sendMedia (operador entao revisa o
+  // texto e clica Enviar). Mantemos esse comportamento em 2 passos pra
+  // o operador conseguir editar/personalizar antes de enviar.
+  const pickQuickResponse = async (q) => {
+    if (!q) return;
+    setMessageInput(q.content || '');
+    setQuickMenuOpen(false);
+    setQuickHighlight(0);
+    // Foco de volta no input pra continuar digitando se quiser
+    setTimeout(() => messageInputRef.current?.focus(), 0);
+    // Anexo: envia direto (operador nao precisa anexar de novo).
+    if (q.attachment_data_b64 && q.attachment_filename && selectedTicket) {
+      try {
+        await crmAPI.sendMedia(selectedTicket.id, {
+          filename: q.attachment_filename,
+          mimetype: q.attachment_mimetype || 'application/octet-stream',
+          data_base64: q.attachment_data_b64,
+        });
+        toast.success('Anexo enviado');
+        // refresh chat
+        try {
+          const r = await crmAPI.getTicket(selectedTicket.id);
+          setSelectedTicket(r.data);
+        } catch {}
+      } catch (e) {
+        toast.error('Falha ao enviar anexo da resposta rapida');
+      }
+    }
+  };
 
   // Auto-open ticket via sessionStorage. Two keys supported:
   //   - `open_ticket_id`  (Kanban "open atendimento" icon)
@@ -1277,14 +1342,92 @@ const AtendimentosPage = () => {
               </button>
               <div className="flex-1 relative min-w-0">
                 <input
+                  ref={messageInputRef}
                   value={messageInput}
-                  onChange={(e) => setMessageInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                  placeholder={withSignature ? "Digite uma mensagem (com assinatura)" : "Digite uma mensagem"}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setMessageInput(v);
+                    setQuickMenuOpen(v.startsWith('/'));
+                    setQuickHighlight(0);
+                  }}
+                  onKeyDown={(e) => {
+                    // 2026-02-28 — Atalho `/` para respostas rapidas.
+                    // Setas navegam, Enter seleciona, Escape fecha.
+                    if (quickMenuOpen && filteredQuick.length > 0) {
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setQuickHighlight(h => (h + 1) % filteredQuick.length);
+                        return;
+                      }
+                      if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setQuickHighlight(h => (h - 1 + filteredQuick.length) % filteredQuick.length);
+                        return;
+                      }
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        pickQuickResponse(filteredQuick[quickHighlight]);
+                        return;
+                      }
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        setQuickMenuOpen(false);
+                        return;
+                      }
+                      if (e.key === 'Tab') {
+                        e.preventDefault();
+                        pickQuickResponse(filteredQuick[quickHighlight]);
+                        return;
+                      }
+                    }
+                    if (e.key === 'Enter' && !e.shiftKey) handleSendMessage();
+                  }}
+                  onBlur={() => { setTimeout(() => setQuickMenuOpen(false), 150); }}
+                  onFocus={() => { if (messageInput.startsWith('/')) setQuickMenuOpen(true); }}
+                  placeholder={withSignature ? "Digite uma mensagem (use / para respostas rapidas)" : "Digite uma mensagem (use / para respostas rapidas)"}
                   className="w-full px-4 py-2.5 bg-slate-50 rounded-full border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                   data-testid="message-input"
                   disabled={sending}
                 />
+                {/* 2026-02-28 — Popover de Respostas Rapidas (aparece quando
+                    o input comeca com `/`). Posiciona logo acima do input. */}
+                {quickMenuOpen && filteredQuick.length > 0 && (
+                  <div
+                    className="absolute bottom-full left-0 right-0 mb-2 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-72 overflow-y-auto"
+                    data-testid="quick-response-menu"
+                  >
+                    <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-slate-400 border-b border-slate-100 bg-slate-50">
+                      Respostas Rapidas — {filteredQuick.length}{quickFilter ? ` para "${quickFilter}"` : ''}
+                    </div>
+                    {filteredQuick.map((q, i) => (
+                      <button
+                        key={q.id}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); pickQuickResponse(q); }}
+                        onMouseEnter={() => setQuickHighlight(i)}
+                        className={`w-full text-left px-3 py-2 flex items-start gap-2 transition-colors ${i === quickHighlight ? 'bg-primary/10' : 'hover:bg-slate-50'}`}
+                        data-testid={`quick-response-item-${q.id}`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-slate-900 truncate">{q.title || '(sem titulo)'}</span>
+                            {q.shortcut && <code className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">/{q.shortcut}</code>}
+                            {q.attachment_filename && <Paperclip className="w-3 h-3 text-emerald-600 shrink-0" />}
+                          </div>
+                          <p className="text-[11px] text-slate-500 truncate mt-0.5">{q.content}</p>
+                        </div>
+                      </button>
+                    ))}
+                    <div className="px-3 py-1.5 text-[10px] text-slate-400 border-t border-slate-100 bg-slate-50">
+                      ↑↓ navegar · Enter selecionar · Esc fechar
+                    </div>
+                  </div>
+                )}
+                {quickMenuOpen && filteredQuick.length === 0 && quickFilter && (
+                  <div className="absolute bottom-full left-0 right-0 mb-2 bg-white border border-slate-200 rounded-xl shadow-lg z-50 px-3 py-2 text-xs text-slate-500" data-testid="quick-response-menu-empty">
+                    Nenhuma resposta rapida para "{quickFilter}"
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => setWithSignature(s => !s)}

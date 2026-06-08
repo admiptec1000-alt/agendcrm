@@ -1223,6 +1223,14 @@ async def advance_flow(
                 patch["queue_id"] = queue_id
                 if queue_name:
                     patch["queue_name"] = queue_name  # cache para UI
+            # 2026-02-28 — Roteamento opcional para um ANALISTA especifico
+            # (alem da fila). Se o operador escolher um usuario no node
+            # Ticket, o ticket vai direto pra ele (assigned_to + status
+            # atendendo). Sem isso, cai na logica padrao de fila.
+            assigned_user_id = cfg.get("assigned_user_id")
+            if assigned_user_id:
+                patch["assigned_to"] = assigned_user_id
+                patch["status"] = "atendendo"  # vai direto pra "Em atendimento"
             if new_status:
                 # Status visivel ao operador (aguardando | atendendo | aberto)
                 patch["status"] = new_status

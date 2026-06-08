@@ -1303,6 +1303,72 @@ async def create_quick_response(
     await db.quick_responses.insert_one(response)
     return {k: v for k, v in response.items() if k != "_id"}
 
+
+# 2026-02-28 — Edit/Delete de respostas rapidas. Antes so existia
+# GET + POST; operador nao conseguia corrigir texto/atalho. Substitui
+# anexo se o usuario subir um novo (comportamento intuitivo).
+class QuickResponseUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    shortcut: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    attachment_mimetype: Optional[str] = None
+    attachment_data_b64: Optional[str] = None
+
+
+@router.put("/quick-responses/{response_id}")
+async def update_quick_response(
+    response_id: str,
+    data: QuickResponseUpdate,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    payload = data.model_dump(exclude_unset=True)
+    update_set: dict = {}
+    for field in ("title", "content", "shortcut"):
+        if field in payload:
+            update_set[field] = payload[field]
+    # Anexo: se vier `attachment_data_b64` nao vazio, substitui (junto com
+    # nome+mimetype); se vier explicitamente vazio, REMOVE.
+    if "attachment_data_b64" in payload:
+        b64 = payload.get("attachment_data_b64") or ""
+        if b64:
+            update_set["attachment_filename"] = payload.get("attachment_filename") or ""
+            update_set["attachment_mimetype"] = payload.get("attachment_mimetype") or ""
+            update_set["attachment_data_b64"] = b64
+        else:
+            update_set["attachment_filename"] = None
+            update_set["attachment_mimetype"] = None
+            update_set["attachment_data_b64"] = None
+    if not update_set:
+        raise HTTPException(status_code=400, detail="Nada para atualizar")
+    update_set["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.quick_responses.update_one(
+        {"id": response_id, "company_id": user["company_id"]},
+        {"$set": update_set},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Resposta nao encontrada")
+    doc = await db.quick_responses.find_one(
+        {"id": response_id, "company_id": user["company_id"]}, {"_id": 0}
+    )
+    return doc
+
+
+@router.delete("/quick-responses/{response_id}")
+async def delete_quick_response(
+    response_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    result = await db.quick_responses.delete_one(
+        {"id": response_id, "company_id": user["company_id"]}
+    )
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Resposta nao encontrada")
+    return {"deleted": response_id}
+
+
 # === CAMPAIGN GLOBAL SETTINGS (anti-block policy per company) ===
 class CampaignSettingsUpdate(BaseModel):
     anti_block: dict

@@ -31,6 +31,12 @@ class TicketStatus(str, Enum):
     BLOQUEADO = "bloqueado"
     PROPOSTA = "proposta"
     ABERTO = "aberto"
+    # 2026-02-28 — Adicionados estados operacionais usados pelo CRM
+    # (aba Atendimentos). Sem isso, qualquer PUT /tickets/{id} com
+    # `status:"atendendo"` ou `"aguardando"` retornava 422 do Pydantic
+    # — quebrando transferencia entre usuarios, claim e mudanca manual.
+    AGUARDANDO = "aguardando"
+    ATENDENDO = "atendendo"
     FECHADO = "fechado"
 
 class AppointmentStatus(str, Enum):
