@@ -337,7 +337,18 @@ const FlowBuilderPage = () => {
       style: { strokeWidth: 2, stroke: '#6366f1', ...(e.style || {}) },
       markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed },
     }));
-    const incomingNodes = flow.nodes || [];
+    // 2026-02-28 — Defensive: legacy/test flows occasionally have nodes
+    // sem `position` ou `data` definidos (seed antigo). React-flow crasha
+    // dentro de createNodeInternals quando le `node.position.x`. Aqui
+    // garantimos defaults pra abrir QUALQUER fluxo sem quebrar a UI.
+    const incomingNodes = (flow.nodes || []).map((n, idx) => ({
+      ...n,
+      type: n.type || 'flow',
+      position: (n.position && typeof n.position.x === 'number' && typeof n.position.y === 'number')
+        ? n.position
+        : { x: 80 + (idx % 4) * 220, y: 80 + Math.floor(idx / 4) * 140 },
+      data: n.data || { nodeType: n.nodeType || 'message', label: n.label || 'No', config: {} },
+    }));
     setNodes(incomingNodes.map(n => decorateNode(n, incomingEdges, incomingNodes)));
     setEdges(incomingEdges);
   };

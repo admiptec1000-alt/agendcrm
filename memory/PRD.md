@@ -1,3 +1,43 @@
+## 2026-02-28 (NIGHT 4) — 4 melhorias CRM (transfer, atalho /, Analista no Flow, Editar Resposta Rapida)
+
+### ✅ Fix: Transferencia de ticket entre usuarios (P0)
+**Causa raiz**: `TicketStatus` Enum em `models.py` nao listava `aguardando` nem `atendendo`. Front mandava esses valores no PUT `/api/crm/tickets/{id}` e Pydantic rejeitava com 422, impedindo transferencia.
+**Fix**: Adicionados AGUARDANDO e ATENDENDO ao enum. Validado E2E: `PUT /tickets/{id}` com `{status:"atendendo", assigned_to:"<uid>"}` retorna HTTP 200.
+
+### ✅ Feature: Atalho `/` para Respostas Rapidas no chat de Atendimentos
+**Implementacao em `AtendimentosPage.js`**:
+- Estado novo: `quickResponses`, `quickMenuOpen`, `quickHighlight`. Lista carregada via `crmAPI.getQuickResponses()` no mount.
+- Quando o input comeca com `/`, popover aparece acima do input mostrando ate 8 matches (filtra por `shortcut`, `title` ou `content`).
+- Teclas: `ArrowUp/Down` navega, `Enter` ou `Tab` seleciona, `Esc` fecha.
+- Se a resposta tem anexo (`attachment_data_b64`), o anexo e enviado direto via `sendMedia`; o conteudo de texto fica no input pro operador revisar antes de Enviar.
+- `data-testid`: `quick-response-menu`, `quick-response-item-{id}`, `quick-response-menu-empty`.
+
+### ✅ Feature: Editar Respostas Rapidas (Dashboard)
+**Backend**: novo `PUT /api/crm/quick-responses/{id}` (e `DELETE`) com Pydantic `QuickResponseUpdate`. Atualiza title/content/shortcut/anexo via `exclude_unset` — quando `attachment_data_b64` nao vem, anexo atual e preservado; quando vem vazio, anexo e removido.
+**Frontend** (`Dashboard.js > QuickResponsesPage`): pencil icon ao lado de cada item abre modal "Editar Resposta Rapida" com `title`/`content`/`shortcut` pre-preenchidos + opcao de trocar anexo. Botao Salvar persiste via `crmAPI.updateQuickResponse`. data-testid: `quick-edit-{id}`, `quick-form-title`, `quick-form-save`.
+
+### ✅ Feature: Selecionar Analista no node Ticket do Flowbuilder
+**Frontend** (`FlowBuilderPage.js`): novo dropdown "Analista (opcional)" no editor do node Ticket (linhas 860-879). Carrega `usersList` via `schedulingAPI.getCompanyUsers()` no mount. Salva `assigned_user_id` no config do node. data-testid: `ticket-user-select`.
+**Backend** (`flow_engine.py`): ao executar um node Ticket com `assigned_user_id`, aplica `assigned_to=<user_id>` + `status='atendendo'` no ticket — vai direto pra "Em atendimento" do analista escolhido. Se nao escolher (Auto), comportamento padrao de fila.
+
+### 🐛 Bug defensivo no Flowbuilder
+Flows legados com nodes sem `position` quebravam o react-flow (`Cannot read properties of undefined (reading 'x')`) ao abrir. `openFlow()` agora normaliza nodes: garante `position` default (grade 4 colunas) e `data` minimo. Editor agora abre QUALQUER fluxo sem crash.
+
+### Validacao
+- Backend: pytest iter58 3/3 PASS (`PUT /tickets/{id}` aceita `atendendo`/`aguardando`; QR CRUD preserva anexo; `/scheduling/company-users` lista usuarios)
+- Frontend e2e (Playwright): T1 Editar QR persiste; T2 atalho `/` abre popover + Enter seleciona + Esc fecha; T3 dropdown Analista renderiza com 16 opcoes e select_option grava o uid corretamente.
+
+### Arquivos alterados nesta noite
+- `/app/backend/models.py` (TicketStatus enum)
+- `/app/backend/routes/crm_routes.py` (PUT /tickets, CRUD quick-responses)
+- `/app/backend/flow_engine.py` (assigned_user_id no Ticket node)
+- `/app/frontend/src/pages/CRM/AtendimentosPage.js` (atalho `/` + popover)
+- `/app/frontend/src/pages/CRM/FlowBuilderPage.js` (dropdown Analista + openFlow defensivo)
+- `/app/frontend/src/pages/Company/Dashboard.js` (Editar QR ja estava — UI mantida)
+
+---
+
+
 ## 2026-02-28 (NIGHT 3) — Fix divergencia Atendendo/Aguardando + valida toggle bulk
 
 ### Bug: Tela Inicio mostrava 0/0 enquanto Atendimentos mostrava 1296/916
