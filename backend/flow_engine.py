@@ -245,6 +245,69 @@ def _entry_node(nodes: List[dict]) -> Optional[dict]:
     return nodes[0] if nodes else None
 
 
+# 2026-02-28 — Helpers para o node Ticket multi-analista (menu numerado).
+async def _build_ticket_menu_options(db, cfg: dict, company_id: str) -> List[dict]:
+    """Resolve a lista ordenada de opcoes que o cliente vai ver.
+
+    Cada opcao: {"kind": "user"|"queue", "label": str, "user_id"?: str}
+    `user` -> ticket atribuido direto pro analista (status atendendo)
+    `queue` -> cai na fila (status aguardando, assigned_to=None)
+    """
+    out: List[dict] = []
+    ids = cfg.get("assigned_user_ids")
+    if not isinstance(ids, list):
+        # Retrocompat: aceita o campo singular antigo
+        legacy = cfg.get("assigned_user_id")
+        ids = [legacy] if legacy else []
+    ids = [str(x) for x in ids if x]
+    if ids:
+        try:
+            cursor = db.users.find({"id": {"$in": ids}, "company_id": company_id})
+            users_by_id = {u.get("id"): u async for u in cursor}
+        except Exception as _e:
+            logger.warning(f"[flow_engine] failed to fetch users for ticket menu: {_e}")
+            users_by_id = {}
+        # Preserva a ordem que o operador montou no editor
+        for uid in ids:
+            u = users_by_id.get(uid)
+            if not u:
+                continue
+            label = u.get("full_name") or u.get("name") or u.get("email") or uid
+            out.append({"kind": "user", "label": label, "user_id": uid})
+    if cfg.get("include_any_option"):
+        out.append({
+            "kind": "queue",
+            "label": (cfg.get("any_option_label") or "Qualquer Analista").strip()
+                     or "Qualquer Analista",
+        })
+    return out
+
+
+def _render_ticket_menu(text_template: str, options: List[dict], vars_: dict,
+                        queue_name: Optional[str], customer_name: Optional[str]) -> str:
+    """Monta a mensagem final do menu do node Ticket:
+    aplica {{options}} (lista numerada), {{queue_name}}, {{nome}} e demais vars.
+    """
+    base = (text_template or "Com qual atendente voce prefere falar?").strip()
+    lines = [f"[ {i + 1} ] - {o['label']}" for i, o in enumerate(options)]
+    options_block = "\n".join(lines)
+    if "{{options}}" in base:
+        out = base.replace("{{options}}", options_block)
+    else:
+        out = base + "\n\n" + options_block
+    # Interpolar variaveis padrao
+    out = (out
+           .replace("{{queue_name}}", queue_name or "")
+           .replace("{queue_name}", queue_name or "")
+           .replace("{{nome}}", customer_name or "")
+           .replace("{nome}", customer_name or ""))
+    for vk, vv in (vars_ or {}).items():
+        out = out.replace("{{" + str(vk) + "}}", str(vv))
+    return out
+
+
+
+
 async def _send_whatsapp_interactive(ticket: dict, payload: dict):
     """Send a buttons/list message via the local microservice.
 
@@ -936,6 +999,82 @@ async def advance_flow(
             if not dry_run:
                 await _save_state(db, ticket["id"], flow_id, None, vars_)
             return sent
+        # 2026-02-28 — Process customer reply for ticket-as-menu (multi-analista).
+        # Quando o operador configurou >= 2 opcoes no node Ticket, pausamos
+        # nele e persistimos `__ticket_menu_options` em flow_vars. Aqui
+        # resolvemos o digito do cliente, atribuimos o ticket e encerramos
+        # o fluxo. Opcao invalida -> cai na fila padrao (per requisito do
+        # usuario, sem re-pergunta).
+        if _node_type(prev) in ("ticket", "queue", "transfer") and \
+                isinstance(vars_.get("__ticket_menu_options"), list) and \
+                vars_["__ticket_menu_options"]:
+            menu_opts = vars_["__ticket_menu_options"]
+            cfg_prev = (prev.get("data") or {}).get("config") or {}
+            queue_id = cfg_prev.get("queue_id") or cfg_prev.get("queue")
+            queue_name = cfg_prev.get("queue_name")
+            picked: Optional[dict] = None
+            s = (incoming_text or "").strip()
+            if s.isdigit():
+                idx = int(s) - 1
+                if 0 <= idx < len(menu_opts):
+                    picked = menu_opts[idx]
+            invalid = picked is None
+            patch: Dict[str, Any] = {
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "active_flow_node_id": None,
+                "active_flow_id": None,
+            }
+            if queue_id:
+                patch["queue_id"] = queue_id
+                if queue_name:
+                    patch["queue_name"] = queue_name
+            if invalid or (picked and picked.get("kind") == "queue"):
+                patch["assigned_to"] = None
+                patch["status"] = "aguardando"
+            else:
+                patch["assigned_to"] = picked.get("user_id")
+                patch["status"] = "atendendo"
+            new_vars = {k: v for k, v in vars_.items() if k != "__ticket_menu_options"}
+            patch["flow_vars"] = new_vars
+            if not dry_run:
+                await db.tickets.update_one({"id": ticket["id"]}, {"$set": patch})
+            # Mensagem de encaminhamento (se configurada).
+            transfer_msg = (cfg_prev.get("transfer_message") or "").strip()
+            if transfer_msg and not dry_run:
+                try:
+                    rendered = (
+                        transfer_msg
+                        .replace("{{queue_name}}", queue_name or "")
+                        .replace("{queue_name}", queue_name or "")
+                        .replace("{{nome}}", ticket.get("customer_name") or "")
+                        .replace("{nome}", ticket.get("customer_name") or "")
+                    )
+                    for vk, vv in (new_vars or {}).items():
+                        rendered = rendered.replace("{{" + str(vk) + "}}", str(vv))
+                    sent_msg_id = await _send_whatsapp(ticket, rendered, db=db)
+                    if sent_msg_id:
+                        sent.append(sent_msg_id)
+                        await db.tickets.update_one(
+                            {"id": ticket["id"]},
+                            {"$push": {"messages": {
+                                "from": "bot",
+                                "text": rendered,
+                                "type": "text",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "system": True,
+                                "reason": "transfer",
+                            }}},
+                        )
+                except Exception as _te:
+                    logger.warning(
+                        f"[flow_engine] ticket-menu transfer_message send failed ticket={ticket['id']}: {_te}"
+                    )
+            logger.info(
+                f"[flow_engine] ticket-menu resolved ticket={ticket['id']} "
+                f"reply={incoming_text!r} picked={picked} invalid={invalid}"
+            )
+            return sent
+
         # Process customer reply for menu nodes
         if _node_type(prev) == "menu":
             cfg = (prev.get("data") or {}).get("config") or {}
@@ -1215,6 +1354,33 @@ async def advance_flow(
             queue_id = cfg.get("queue_id") or cfg.get("queue")
             queue_name = cfg.get("queue_name")
             new_status = cfg.get("status")
+
+            # 2026-02-28 — Multi-analista com menu numerado. Se o operador
+            # configurou >= 2 opcoes (analistas + opcao "qualquer"), o bot
+            # apresenta um menu e pausa esperando o numero do cliente. Se
+            # configurou <= 1 opcao, vai direto (comportamento classico).
+            menu_options = await _build_ticket_menu_options(db, cfg, company_id)
+            if len(menu_options) >= 2:
+                # Renderiza menu, persiste a lista em flow_vars (pra resolver
+                # a resposta), pausa o flow neste node.
+                menu_text = _render_ticket_menu(
+                    cfg.get("menu_message"),
+                    menu_options,
+                    vars_,
+                    queue_name,
+                    ticket.get("customer_name"),
+                )
+                await _emit_and_persist(menu_text)
+                vars_["__ticket_menu_options"] = menu_options
+                pending_node_id = current_id
+                current_id = None
+                logger.info(
+                    f"[flow_engine] ticket node {pending_node_id} posted multi-analista menu "
+                    f"({len(menu_options)} options); waiting for customer reply"
+                )
+                break
+
+            # ─── Comportamento direto (<=1 opcao) ─────────────────────────
             patch = {"updated_at": datetime.now(timezone.utc).isoformat(),
                      "active_flow_node_id": None,
                      "active_flow_id": None,
@@ -1223,14 +1389,19 @@ async def advance_flow(
                 patch["queue_id"] = queue_id
                 if queue_name:
                     patch["queue_name"] = queue_name  # cache para UI
-            # 2026-02-28 — Roteamento opcional para um ANALISTA especifico
-            # (alem da fila). Se o operador escolher um usuario no node
-            # Ticket, o ticket vai direto pra ele (assigned_to + status
-            # atendendo). Sem isso, cai na logica padrao de fila.
-            assigned_user_id = cfg.get("assigned_user_id")
-            if assigned_user_id:
-                patch["assigned_to"] = assigned_user_id
-                patch["status"] = "atendendo"  # vai direto pra "Em atendimento"
+            # Se houver 1 unica opcao do tipo "user", aplica direto.
+            # Se for 1 unica opcao "queue" (so include_any marcado), tambem
+            # cai na fila padrao.
+            if menu_options and menu_options[0]["kind"] == "user":
+                patch["assigned_to"] = menu_options[0]["user_id"]
+                patch["status"] = "atendendo"
+            elif menu_options and menu_options[0]["kind"] == "queue":
+                patch["assigned_to"] = None
+                patch["status"] = "aguardando"
+            # Retrocompat: campo singular antigo `assigned_user_id`
+            elif cfg.get("assigned_user_id"):
+                patch["assigned_to"] = cfg.get("assigned_user_id")
+                patch["status"] = "atendendo"
             if new_status:
                 # Status visivel ao operador (aguardando | atendendo | aberto)
                 patch["status"] = new_status
@@ -1260,7 +1431,7 @@ async def advance_flow(
                         rendered = rendered.replace("{{" + str(vk) + "}}", str(vv))
                     sent_msg_id = await _send_whatsapp(ticket, rendered, db=db)
                     if sent_msg_id:
-                        sent += 1
+                        sent.append(sent_msg_id)
                         # Persiste no historico do ticket pra UI ver.
                         await db.tickets.update_one(
                             {"id": ticket["id"]},

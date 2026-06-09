@@ -1,3 +1,50 @@
+## 2026-02-28 (NIGHT 5) — Multi-analista com menu numerado no node Ticket
+
+### Pedido do usuario
+No node Ticket, permitir selecionar VARIOS analistas. Quando 2+ analistas
+sao selecionados, o bot envia um menu numerado pra o cliente escolher com
+qual atendente quer falar. Tem opcao adicional opcional "qualquer atendente
+da fila" — quando selecionada, ticket cai na fila publica.
+
+### Backend (`flow_engine.py`)
+- Helper `_build_ticket_menu_options(db, cfg, company_id)`: resolve `assigned_user_ids` em users do DB e adiciona opcao "qualquer" (kind="queue") se `include_any_option=true`.
+- Helper `_render_ticket_menu(template, options, vars_, queue_name, nome)`: monta texto final com substituicao de `{{options}}`, `{{queue_name}}`, `{{nome}}` e demais flow_vars.
+- No node Ticket:
+  - Se `len(options) >= 2`: emite menu, salva `vars_["__ticket_menu_options"]`, pausa o flow no node ticket (`active_flow_node_id=ticket`).
+  - Se `len(options) <= 1`: roteamento direto (1 user → assigned_to, status=atendendo; 1 queue ou nenhum → fila padrao).
+- No handler de resposta (advance_flow incoming_text): quando `prev` e um node ticket com `__ticket_menu_options` setado, parseia digito, atribui o ticket (user OU queue) e ENCERRA o fluxo. Opcao invalida → cai na fila padrao (sem re-prompt).
+- Retrocompat: campo legado `assigned_user_id` (singular) continua funcionando.
+- Bug-fix bonus: substituido `sent += 1` por `sent.append(sent_msg_id)` no envio de transfer_message — antes era um TypeError silenciado.
+
+### Frontend (`FlowBuilderPage.js`)
+- `<select>` simples removido. Substituido por:
+  - Lista de checkboxes `ANALISTAS (OPCIONAL)` (multi-select) com `data-testid="ticket-user-multiselect"` e `ticket-user-option-{id}` por linha.
+  - Checkbox `Incluir opcao "qualquer atendente da fila"` (`ticket-include-any-checkbox`); quando marcado, mostra input `Texto da opcao` (`ticket-any-option-label`) com placeholder "Qualquer Analista".
+  - Textarea `MENSAGEM DO MENU` (`ticket-menu-message`) — aparece dinamicamente quando o total de opcoes (`assigned_user_ids.length + (include_any_option ? 1 : 0)`) >= 2. Variaveis: `{{options}}`, `{{queue_name}}`, `{{nome}}`.
+- Mantida retrocompat: se `assigned_user_id` (singular) ja existir, e tratado como `assigned_user_ids: [valor]` na hora do render dos checkboxes.
+
+### Testes (`/app/backend/tests/test_flow_engine_ticket_menu.py`)
+8 testes — TODOS PASS:
+- single analyst → routes direct sem menu ✅
+- legacy `assigned_user_id` (singular) → ainda funciona ✅
+- 0 analistas → cai na fila ✅
+- 2 analistas → renderiza menu, pausa flow ✅
+- 1 analista + include_any → renderiza menu ✅
+- menu reply "2" valido → assigned_to=usuario certo, flow encerra ✅
+- menu reply pra opcao "qualquer" → assigned_to=None, status=aguardando ✅
+- menu reply invalido ("5" com so 2 opcoes) → cai na fila padrao, flow encerra (sem re-prompt) ✅
+
+### Validacao manual no preview
+Playwright confirmou: multi-select com 15 usuarios, checkbox include_any, textarea menu_message aparecendo dinamicamente. Backend integration tests 8/8 PASS.
+
+### Arquivos alterados
+- `/app/backend/flow_engine.py`
+- `/app/frontend/src/pages/CRM/FlowBuilderPage.js`
+- `/app/backend/tests/test_flow_engine_ticket_menu.py` (novo)
+
+---
+
+
 ## 2026-02-28 (NIGHT 4) — 4 melhorias CRM (transfer, atalho /, Analista no Flow, Editar Resposta Rapida)
 
 ### ✅ Fix: Transferencia de ticket entre usuarios (P0)

@@ -868,26 +868,105 @@ const NodeEditor = ({ node, aiAgents, tagsList = [], queuesList = [], usersList 
                 </select>
                 {queuesList.length === 0 && <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-1">Nenhuma fila cadastrada. Va em "Filas" para criar.</p>}
               </div>
-              {/* 2026-02-28 — Roteamento opcional para um ANALISTA especifico
-                  (alem da fila). Default "Auto" deixa o ticket cair na fila
-                  normalmente; se selecionar usuario, ticket vai direto pra ele. */}
+              {/* 2026-02-28 — Roteamento opcional para um ou MAIS analistas.
+                  Quando >= 2 opcoes (analistas selecionados + "qualquer"),
+                  o bot envia um menu numerado e espera o cliente escolher.
+                  Quando <= 1 opcao, mantem o comportamento direto. */}
               <div>
-                <label className="text-[10px] font-bold uppercase text-slate-400">Analista (opcional)</label>
-                <select
-                  value={config.assigned_user_id || ''}
-                  onChange={e => setConfig({ ...config, assigned_user_id: e.target.value })}
-                  className="input-field text-sm"
-                  data-testid="ticket-user-select"
+                <label className="text-[10px] font-bold uppercase text-slate-400">Analistas (opcional)</label>
+                <div
+                  className="border border-slate-200 rounded-lg max-h-40 overflow-y-auto bg-white"
+                  data-testid="ticket-user-multiselect"
                 >
-                  <option value="">Auto (cair na fila)</option>
-                  {usersList.map(u => (
-                    <option key={u.id} value={u.id}>{u.name || u.email || u.id}</option>
-                  ))}
-                </select>
+                  {usersList.length === 0 && (
+                    <p className="text-[11px] text-slate-500 p-2">Nenhum analista disponivel.</p>
+                  )}
+                  {usersList.map(u => {
+                    const ids = Array.isArray(config.assigned_user_ids)
+                      ? config.assigned_user_ids
+                      : (config.assigned_user_id ? [config.assigned_user_id] : []);
+                    const checked = ids.includes(u.id);
+                    return (
+                      <label
+                        key={u.id}
+                        className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer text-sm border-b border-slate-100 last:border-b-0 ${checked ? 'bg-primary/5' : 'hover:bg-slate-50'}`}
+                        data-testid={`ticket-user-option-${u.id}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            const cur = ids.slice();
+                            const next = checked ? cur.filter(x => x !== u.id) : [...cur, u.id];
+                            // Mantem retrocompat: assigned_user_id (single) zera quando vira multi
+                            setConfig({
+                              ...config,
+                              assigned_user_ids: next,
+                              assigned_user_id: next.length === 1 ? next[0] : '',
+                            });
+                          }}
+                          className="w-3.5 h-3.5"
+                        />
+                        <span className="text-slate-700">{u.name || u.email || u.id}</span>
+                      </label>
+                    );
+                  })}
+                </div>
                 <p className="text-[10px] text-slate-500 mt-1">
-                  Se selecionar um analista, o ticket vai direto pra ele (status "Em atendimento"). Caso contrario, fica disponivel na fila para qualquer analista pegar.
+                  Marque um para roteamento direto, ou varios para apresentar um menu numerado ao cliente.
                 </p>
               </div>
+              {/* Opcao adicional: "Qualquer atendente" — sempre cai na fila */}
+              <div className="border border-slate-200 rounded-lg p-2 bg-slate-50">
+                <label className="flex items-start gap-2 text-xs cursor-pointer" data-testid="ticket-include-any-label">
+                  <input
+                    type="checkbox"
+                    checked={!!config.include_any_option}
+                    onChange={e => setConfig({ ...config, include_any_option: e.target.checked })}
+                    className="mt-0.5"
+                    data-testid="ticket-include-any-checkbox"
+                  />
+                  <span className="text-slate-700">Incluir opcao "qualquer atendente da fila"</span>
+                </label>
+                {config.include_any_option && (
+                  <div className="mt-2">
+                    <label className="text-[10px] font-bold uppercase text-slate-400">Texto da opcao</label>
+                    <input
+                      type="text"
+                      value={config.any_option_label || ''}
+                      onChange={e => setConfig({ ...config, any_option_label: e.target.value })}
+                      placeholder="Qualquer Analista"
+                      className="input-field text-sm"
+                      data-testid="ticket-any-option-label"
+                    />
+                  </div>
+                )}
+              </div>
+              {/* Mensagem do menu (so usada quando ha 2+ opcoes) */}
+              {(() => {
+                const userIds = Array.isArray(config.assigned_user_ids)
+                  ? config.assigned_user_ids
+                  : (config.assigned_user_id ? [config.assigned_user_id] : []);
+                const totalOptions = userIds.length + (config.include_any_option ? 1 : 0);
+                if (totalOptions < 2) return null;
+                return (
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-slate-400">Mensagem do menu</label>
+                    <textarea
+                      value={config.menu_message || ''}
+                      onChange={e => setConfig({ ...config, menu_message: e.target.value })}
+                      rows={3}
+                      className="input-field text-sm font-mono"
+                      placeholder={"Com qual atendente voce prefere falar?\n{{options}}"}
+                      data-testid="ticket-menu-message"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Variaveis: <code className="font-mono">{'{{options}}'}</code> (lista numerada), <code className="font-mono">{'{{queue_name}}'}</code>, <code className="font-mono">{'{{nome}}'}</code>.
+                      Se o cliente digitar uma opcao invalida, o ticket cai direto na fila.
+                    </p>
+                  </div>
+                );
+              })()}
               <div><label className="text-[10px] font-bold uppercase text-slate-400">Status</label>
                 <select value={config.status || 'aguardando'} onChange={e => setConfig({...config, status: e.target.value})} className="input-field text-sm">
                   <option value="aguardando">Aguardando</option>
