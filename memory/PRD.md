@@ -1,3 +1,29 @@
+## 2026-02-28 (NIGHT 6) — Filtrar analistas pela fila + renomear "atendente" → "analista"
+
+### Pedidos do usuario
+1. No node Ticket, a lista de analistas deve mostrar APENAS os usuarios vinculados a fila selecionada (via `allowed_queue_ids`).
+2. Renomear todos os textos "qualquer atendente" para "qualquer analista".
+
+### Implementacao (`FlowBuilderPage.js`)
+- Lista de analistas agora aplica filtro: `usersList.filter(u => u.allowed_queue_ids?.includes(config.queue_id))`.
+- Sem fila selecionada: mensagem amarela "Selecione uma fila acima para ver os analistas vinculados."
+- Fila selecionada mas zero usuarios vinculados: mensagem cinza "Nenhum analista vinculado a esta fila. Vincule em Usuarios."
+- onChange do select da Fila: agora limpa analistas orfaos (usuarios que estavam selecionados mas nao pertencem a nova fila).
+- Textos atualizados: "Qualquer atendente" → "Qualquer Analista" (checkbox label, placeholder do texto da opcao, placeholder do menu_message default).
+
+### Validacao
+- Sem fila: 0 opcoes + mensagem amarela ✅
+- Fila "Vendas" sem usuarios linkados: mensagem cinza ✅
+- Fila "Vendas" com CRM Admin linkado: 1 opcao "CRM Admin" ✅
+- Checkbox texto: "Incluir opcao 'qualquer analista da fila'" ✅
+- Trocar fila com analistas selecionados: lista limpa automaticamente os IDs orfaos ✅
+
+### Arquivos alterados
+- `/app/frontend/src/pages/CRM/FlowBuilderPage.js`
+
+---
+
+
 ## 2026-02-28 (NIGHT 5) — Multi-analista com menu numerado no node Ticket
 
 ### Pedido do usuario
