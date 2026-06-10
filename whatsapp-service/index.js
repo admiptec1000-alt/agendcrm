@@ -628,43 +628,31 @@ setInterval(async () => {
 }, 30000);
 
 // ── Connection watchdog ─────────────────────────────────────────────────────
-// Every 45s, sweep every instance flagged as 'connected' and verify the
-// underlying WebSocket is actually alive. Sometimes Baileys' internal
-// keepalive misses a TCP-level FIN (e.g. proxy/CDN silently drops the
-// connection) and we end up holding a "zombie" socket — status=connected
-// but no messages flow through. The user sees: "WhatsApp ligado, mas o
-// fluxo parou de responder". This watchdog detects that and forces a
-// fresh reconnect.
-//
-// 2026-02-28 — Tightened thresholds (was 90s/5min, now 45s/3min) and added
-// a forced presence probe every ~2.25 minutes regardless of activity, to
-// catch zombie sockets BEFORE the customer notices.
+// 2026-02-28 — REVERTIDO para versao conservadora apos a versao "agressiva"
+// (45s + probe forcado a cada 2.25min) ter causado reconexoes em cascata em
+// producao (10 conexoes ativas). Voltamos para 45s de interval (mantemos a
+// melhoria de cadencia) mas com a janela de stale em 5min e SEM probe
+// forcado em conexoes ativas — probe so dispara quando idle ja >5min.
 //
 // Strategy:
 //   1. Check sock.ws.readyState (1 = OPEN). If not OPEN -> reconnect.
-//   2. If no inbound activity for 3+ minutes OR every 3rd sweep, send a
-//      no-op presence update. If that throws -> reconnect.
-const ACTIVITY_STALE_MS = 3 * 60 * 1000;    // 3 minutes of silence
+//   2. If no inbound activity for 5+ minutes, send a no-op presence
+//      subscribe to ourselves. If that throws -> reconnect.
+const ACTIVITY_STALE_MS = 5 * 60 * 1000;    // 5 minutes of silence
 const WATCHDOG_INTERVAL_MS = 45 * 1000;     // sweep every 45s
-const FORCED_PROBE_EVERY_N_SWEEPS = 3;       // ~135s = 2.25min
-let _watchdogTick = 0;
 setInterval(async () => {
-  _watchdogTick += 1;
-  const forceProbe = (_watchdogTick % FORCED_PROBE_EVERY_N_SWEEPS) === 0;
   for (const [instanceId, inst] of Object.entries(connections)) {
     if (!inst || inst.status !== 'connected' || !inst.sock) continue;
     const sock = inst.sock;
-    // 1) Hard liveness check — WebSocket layer (any layer can be the carrier)
+    // 1) Hard liveness check — WebSocket layer (3 layers checked).
     try {
       const rsCandidates = [
         sock.ws?.readyState,
         sock.ws?.socket?.readyState,
         sock.ws?._socket?.readyState,
       ].filter(v => typeof v === 'number');
-      // If we have a definitive reading and ANY layer is not OPEN, treat
-      // as zombie and reconnect.
       if (rsCandidates.length > 0 && !rsCandidates.includes(1)) {
-        console.warn(`[${instanceId}] watchdog: ws layers ${JSON.stringify(rsCandidates)} (none OPEN) — forcing reconnect`);
+        recordEvent(instanceId, 'watchdog_zombie_socket', `ws layers ${JSON.stringify(rsCandidates)} not OPEN`);
         inst.status = 'disconnected';
         inst.lastError = 'watchdog: zombie socket';
         createConnection(instanceId).catch(e => console.error(`[${instanceId}] watchdog reconnect failed:`, e.message));
@@ -672,18 +660,17 @@ setInterval(async () => {
       }
     } catch (e) { /* ignore */ }
 
-    // 2) Soft liveness check — fire when idle OR on the periodic forced
-    // probe tick. Even active connections get probed every ~2.25min to
-    // catch silently broken TLS sessions.
-    const idle = Date.now() - (inst.lastActivityAt || 0);
-    if (idle > ACTIVITY_STALE_MS || forceProbe) {
+    // 2) Soft liveness check — only when truly idle (>5min)
+    const idle = Date.now() - (inst.lastInboundAt || inst.lastActivityAt || 0);
+    if (idle > ACTIVITY_STALE_MS) {
       try {
         if (typeof sock.sendPresenceUpdate === 'function') {
           await sock.sendPresenceUpdate('available');
+          // NAO atualiza lastInboundAt — esse so muda em messages.upsert real
           inst.lastActivityAt = Date.now();
         }
       } catch (e) {
-        console.warn(`[${instanceId}] watchdog: presence-ping failed (${e.message}) — forcing reconnect`);
+        recordEvent(instanceId, 'watchdog_ping_failed', e.message);
         inst.status = 'disconnected';
         inst.lastError = `watchdog ping: ${e.message}`;
         createConnection(instanceId).catch(err => console.error(`[${instanceId}] watchdog reconnect failed:`, err.message));
@@ -691,6 +678,32 @@ setInterval(async () => {
     }
   }
 }, WATCHDOG_INTERVAL_MS);
+
+// ── Health/event tracking ────────────────────────────────────────────────
+// 2026-02-28 — Per-instance event log + counters. Operator-visible via
+// /instances/:id/health endpoint. Logs are kept in-memory (50 events
+// rolling per instance) for diagnostic during instability investigations.
+const eventLog = {};            // { [instanceId]: [{ts, type, msg}] }
+const reconnectStats = {};      // { [instanceId]: { count24h, lastAt, history: [ts...] } }
+
+function recordEvent(instanceId, type, msg) {
+  if (!eventLog[instanceId]) eventLog[instanceId] = [];
+  const arr = eventLog[instanceId];
+  arr.unshift({ ts: Date.now(), type, msg: String(msg || '').slice(0, 200) });
+  if (arr.length > 50) arr.length = 50;
+  console.log(`[${instanceId}] event ${type}: ${msg}`);
+}
+
+function recordReconnect(instanceId) {
+  if (!reconnectStats[instanceId]) reconnectStats[instanceId] = { count24h: 0, lastAt: 0, history: [] };
+  const now = Date.now();
+  const cutoff = now - 24 * 3600 * 1000;
+  const s = reconnectStats[instanceId];
+  s.history = s.history.filter(t => t >= cutoff);
+  s.history.push(now);
+  s.count24h = s.history.length;
+  s.lastAt = now;
+}
 
 // ── Pre-key refill watchdog (v2.1.12) ───────────────────────────────────────
 // Every 30 minutes, ask Baileys to upload more pre-keys to the WhatsApp
@@ -823,6 +836,7 @@ async function createConnection(instanceId, options = {}) {
 
     if (qr) {
       instance.qr = qr;
+      if (instance.status !== 'waiting_qr') recordEvent(instanceId, 'qr_generated', 'aguardando leitura do QR code');
       instance.status = 'waiting_qr';
       try {
         instance.qrBase64 = await QRCode.toDataURL(qr);
@@ -838,6 +852,7 @@ async function createConnection(instanceId, options = {}) {
       const shouldReconnect = !isLoggedOut && !isConflict;
       instance.status = 'disconnected';
       instance.lastError = errMsg;
+      recordEvent(instanceId, 'disconnected', `${errMsg} (status=${statusCode})`);
       console.log(`[${instanceId}] Disconnected: ${errMsg} (status=${statusCode})`);
 
       if (isConflict) {
@@ -845,6 +860,7 @@ async function createConnection(instanceId, options = {}) {
         // rapid reconnect caused duplicate socket). Reconnecting immediately
         // would fight the other session forever — wait longer and only retry
         // once. User should close other sessions first.
+        recordEvent(instanceId, 'conflict', 'outra sessao assumiu o numero — aguardando 60s antes de tentar de novo');
         console.log(`[${instanceId}] CONFLICT — waiting 60s before single retry (close other WhatsApp Web sessions!)`);
         setTimeout(() => {
           if (connections[instanceId]?.status === 'disconnected') {
@@ -858,6 +874,7 @@ async function createConnection(instanceId, options = {}) {
         instance.reconnectAttempts = (instance.reconnectAttempts || 0) + 1;
         const attempt = instance.reconnectAttempts;
         const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 5 * 60 * 1000);
+        recordEvent(instanceId, 'reconnect_scheduled', `tentativa #${attempt} em ${Math.round(delayMs / 1000)}s`);
         console.log(`[${instanceId}] Reconnecting (attempt #${attempt}) in ${Math.round(delayMs / 1000)}s...`);
         setTimeout(() => {
           // Verify the instance was not explicitly disconnected by an
@@ -868,6 +885,7 @@ async function createConnection(instanceId, options = {}) {
         }, delayMs);
       } else {
         // Logged out - clean auth
+        recordEvent(instanceId, 'logged_out', 'sessao encerrada (logout) — auth removida, QR necessario');
         try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (e) {}
         delete connections[instanceId];
       }
@@ -878,6 +896,10 @@ async function createConnection(instanceId, options = {}) {
       instance.user = sock.user;
       instance.reconnectAttempts = 0;  // reset backoff after a healthy connect
       instance.lastActivityAt = Date.now();
+      instance.lastInboundAt = instance.lastInboundAt || Date.now();
+      instance.connectedAt = Date.now();   // uptime tracker (health monitor)
+      recordReconnect(instanceId);
+      recordEvent(instanceId, 'connected', `as ${sock.user?.id || '?'}`);
       console.log(`[${instanceId}] Connected as ${sock.user?.id}`);
 
       // 2026-02-17 (v2.1.12) — Replenish pre-keys 30s after connect.
@@ -1066,6 +1088,10 @@ async function createConnection(instanceId, options = {}) {
     // Capture both 'notify' (real-time push) and 'append' (background sync)
     if (type !== 'notify' && type !== 'append') return;
     instance.lastActivityAt = Date.now();
+    // 2026-02-28 — Tracker dedicado para mensagens REAIS recebidas (separa
+    // do lastActivityAt que tambem incrementa em presence pings). Usado
+    // pelo /health endpoint pra detectar "conectado mas zumbi".
+    instance.lastInboundAt = Date.now();
     for (const msg of messages) {
       // fromMe === true means the operator sent this message from the
       // linked device (cellphone WhatsApp app, WhatsApp Web, etc). We
@@ -1295,6 +1321,7 @@ app.post('/instances/:id/connect', async (req, res) => {
     // Body pode trazer `sync_history: true` (vindo do backend Python
     // quando o operador marcou o checkbox na criacao da conexao).
     const syncHistory = !!(req.body && req.body.sync_history);
+    recordEvent(id, 'connect_requested', syncHistory ? 'com sync de historico 30d' : 'pelo operador/backend');
     const instance = await createConnection(id, { syncHistory });
     res.json({ status: instance.status, message: 'Connecting...', sync_history: syncHistory });
   } catch (e) {
@@ -1826,6 +1853,7 @@ app.post('/instances/:id/disconnect', async (req, res) => {
   const instance = connections[req.params.id];
   if (!instance?.sock) return res.json({ status: 'already_disconnected' });
   try {
+    recordEvent(req.params.id, 'manual_disconnect', 'logout solicitado pelo operador');
     await instance.sock.logout();
     instance.status = 'disconnected';
     delete connections[req.params.id];
@@ -1846,6 +1874,7 @@ app.post('/instances/:id/disconnect', async (req, res) => {
 //   - Manual button "Forcar reconexao" in the operator UI.
 app.post('/instances/:id/restart', async (req, res) => {
   const id = req.params.id;
+  recordEvent(id, 'manual_restart', 'soft restart (operador ou auto-deteccao do backend)');
   const instance = connections[id];
   if (instance && instance.sock) {
     try {
@@ -1866,6 +1895,40 @@ app.post('/instances/:id/restart', async (req, res) => {
   }
 });
 
+// ── Health Monitor endpoints (2026-06) ─────────────────────────────────────
+// Telemetria por instancia para o painel "Saude da Conexao" no frontend:
+// uptime, ultima mensagem recebida, reconexoes nas ultimas 24h e log de
+// eventos (rolling 50). Tudo in-memory — zera no redeploy do microservico.
+function buildInstanceHealth(id) {
+  const inst = connections[id];
+  const now = Date.now();
+  const stats = reconnectStats[id] || {};
+  return {
+    id,
+    status: inst ? inst.status : 'disconnected',
+    connected_at: inst?.connectedAt || null,
+    uptime_ms: (inst?.status === 'connected' && inst?.connectedAt) ? now - inst.connectedAt : null,
+    last_inbound_at: inst?.lastInboundAt || null,
+    last_inbound_ago_ms: inst?.lastInboundAt ? now - inst.lastInboundAt : null,
+    last_activity_at: inst?.lastActivityAt || null,
+    reconnects_24h: stats.count24h || 0,
+    last_reconnect_at: stats.lastAt || null,
+    last_error: inst?.lastError || null,
+    events: eventLog[id] || [],
+  };
+}
+
+app.get('/instances/health-all', (req, res) => {
+  const ids = new Set([...Object.keys(connections), ...Object.keys(eventLog)]);
+  const out = {};
+  for (const id of ids) out[id] = buildInstanceHealth(id);
+  res.json(out);
+});
+
+app.get('/instances/:id/health', (req, res) => {
+  res.json(buildInstanceHealth(req.params.id));
+});
+
 app.get('/instances', (req, res) => {
   const list = Object.values(connections).map(c => ({
     id: c.id, status: c.status, connected: c.status === 'connected',
@@ -1878,7 +1941,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.18',
+    version: 'v2.1.20',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1891,8 +1954,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.18',
-    built_at: '2026-02-18',
+    version: 'v2.1.20',
+    built_at: '2026-06-01',
     features: {
       sent_message_store: true,
       multi_message_types: true,
@@ -1943,6 +2006,11 @@ app.get('/version', (req, res) => {
       // v2.1.18 — bumped Baileys to 6.7.22 to patch the zero-day
       // message-spoofing vulnerability in 6.7.21.
       baileys_6_7_22_security_patch: true,
+      // v2.1.20 — watchdog conservador (revert do agressivo que causou
+      // reconexoes em cascata em prod) + monitor de saude por conexao
+      // (uptime, lastInboundAt, log de eventos via /instances/health-all).
+      conservative_watchdog: true,
+      health_event_log: true,
     },
     fastapi_url: FASTAPI_URL,
   });

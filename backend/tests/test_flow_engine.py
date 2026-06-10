@@ -154,7 +154,8 @@ def test_ticket_node_clears_flow_state():
     _run(flow_engine.advance_flow(db, snap, flow, incoming_text="2", is_initial=False))
     saved = db.tickets.docs["t1"]
     assert saved["active_flow_id"] is None
-    assert saved.get("queue") == "Suporte"
+    # 2026-05-27 — engine grava no campo canonico `queue_id` (nao `queue`)
+    assert saved.get("queue_id") == "Suporte"
 
 
 def test_dry_run_does_not_persist():
@@ -382,7 +383,8 @@ def test_flatten_fatura2via_real_sgp_shape():
     assert out["boleto_url"] == "https://web.sgp.net.br/boleto/40675-B3ZN09AC6D/"
     assert "75691.33510" in out["linha_digitavel"]
     assert out["valor_fatura"] == "319.95"
-    assert out["vencimento_fatura"] == "2026-05-20"
+    # 2026-05-25 — vencimento agora formatado em PT-BR (dd-mm-aaaa)
+    assert out["vencimento_fatura"] == "20-05-2026"
     assert out["pix_qr_url"].startswith("https://web.sgp.net.br/pix/")
     assert out["pix_copia_e_cola"].startswith("00020101")
     assert out["fatura_encontrada"] is True

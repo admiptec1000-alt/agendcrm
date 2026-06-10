@@ -3289,6 +3289,29 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
   - `6233334444` -> `(62) 3333-4444`
   - `3,10` -> `R$ 3,10`; `1.234,56` -> `R$ 1.234,56`; `R$ 0,50/kg` -> mantido; `10% sobre franquia` -> mantido.
 
+## 2026-06-10 — Monitor de Saude das Conexoes WhatsApp (Health Monitor & Event Log)
+**Contexto**: apos o incidente do "watchdog agressivo" em producao (revertido na sessao anterior), o usuario pediu visibilidade: indicador visual de saude por conexao + log de eventos, para detectar conexoes mortas antes do cliente reclamar.
+
+**Microservico (`whatsapp-service/index.js`, v2.1.20)**:
+- `connectedAt` por instancia (uptime); ja existiam `lastInboundAt`/`lastActivityAt` e `eventLog`/`reconnectStats` (rolling 50 eventos, janela 24h de reconexoes).
+- `recordEvent` agora cobre: `qr_generated` (so na transicao), `conflict`, `reconnect_scheduled`, `logged_out`, `connect_requested`, `manual_disconnect`, `manual_restart` (+ ja existentes `connected`, `disconnected`, `watchdog_*`).
+- Novos endpoints: `GET /instances/health-all` (mapa por instancia) e `GET /instances/:id/health`. Payload: status, connected_at, uptime_ms, last_inbound_at/_ago_ms, reconnects_24h, last_reconnect_at, last_error, events[].
+- Versao bump v2.1.20 + flags `health_event_log` e `conservative_watchdog` (o botao "Verificar Deploy" do SA detecta).
+
+**Backend (`channels_routes.py`)**:
+- `GET /api/channels/connections/health` — agrega `health-all` do microservico para as conexoes Baileys da empresa e classifica: red (desconectada/zumbi), yellow (connecting/waiting_qr ou 30+ min sem msg recebida), green (conectada com trafego), gray (sem telemetria).
+- IMPORTANTE: se o microservico em producao ainda nao tem o endpoint (404 = versao antiga), retorna `telemetry_available: false` e TODAS as conexoes ficam gray "Sem dados" (nunca vermelhas falsamente). Producao precisa de REDEPLOY do microservico no Render para ativar a telemetria.
+
+**Frontend (`Dashboard.js` > ConexoesPage/ConnectionCard)**:
+- Chip clicavel por conexao (`health-chip-{id}`): bolinha verde/amarela/vermelha/cinza + uptime + "ult. msg ha X".
+- `ConnectionHealthModal` (`health-modal-{id}`): tiles Status / Ultima msg recebida / Reconexoes 24h / Ultimo erro + log de eventos com timestamp pt-BR e badges coloridos por tipo.
+- Poll a cada 30s junto do service-health.
+
+**Validacao**: e2e com microservico local (WA_SERVICE_URL trocado temporariamente e revertido para `https://agendcrm.onrender.com`): chip amarelo/vermelho + modal com 8 eventos reais renderizados. 49 testes pytest passando (test_channels_api, test_flow_engine*, test_iteration_58).
+- Testes desatualizados corrigidos (nao eram regressoes): `test_connect_channel_sets_waiting_qr` (aceita `connecting`; qr_code e assincrono), `test_ticket_node_clears_flow_state` (campo canonico `queue_id`), `test_flatten_fatura2via_real_sgp_shape` (data PT-BR dd-mm-aaaa).
+
+**Acao do usuario em producao**: redeployar o microservico WhatsApp no Render (v2.1.20) — sem isso os chips ficam "Sem dados".
+
 ## Roadmap
 - **P1**: Toggle `no_back` por menu no Flowbuilder (esconder "[9] Voltar" via configuracao por nivel/menu).
 - **P2**: Acao "Responder" no `MessageActionsMenu` do CRM (citar mensagem com banner amarelo lateral).

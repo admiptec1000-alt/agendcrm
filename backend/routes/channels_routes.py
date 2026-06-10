@@ -189,6 +189,72 @@ async def service_version_check(user: dict = Depends(get_current_user)):
     return checks
 
 
+@router.get("/connections/health")
+async def connections_health(
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """2026-06 — Monitor de saude por conexao (Baileys).
+    Agrega telemetria do microservico (/instances/health-all): uptime,
+    ultima mensagem recebida, reconexoes 24h e log de eventos. Classifica
+    cada conexao em green/yellow/red para o chip visual no frontend:
+      - red:    desconectada (ou DB diz 'connected' mas instancia sumiu = zumbi)
+      - yellow: conectando/aguardando QR, ou conectada porem sem receber
+                mensagem ha 30+ min (pode ser normal em horario calmo)
+      - green:  conectada e recebendo trafego recente
+    """
+    conns = await db.channel_connections.find(
+        {"company_id": user["company_id"]},
+        {"_id": 0, "id": 1, "provider": 1, "status": 1},
+    ).to_list(100)
+
+    raw = {}
+    service_online = True
+    telemetry_available = False
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(f"{WA_SERVICE_URL}/instances/health-all")
+            if resp.status_code == 200:
+                raw = resp.json()
+                telemetry_available = True
+            # 404 = microservico online porem em versao antiga (sem o
+            # endpoint de telemetria). NAO marcar conexoes como vermelhas —
+            # mostra "Sem dados" ate o redeploy do microservico.
+    except Exception as e:
+        logger.warning(f"WA health-all unreachable: {e}")
+        service_online = False
+
+    IDLE_YELLOW_MS = 30 * 60 * 1000
+    out = {}
+    for c in conns:
+        if (c.get("provider") or "baileys") != "baileys":
+            continue
+        if not telemetry_available:
+            out[c["id"]] = {"level": "gray", "status": "telemetry_unavailable", "events": [], "reconnects_24h": 0}
+            continue
+        h = raw.get(c["id"])
+        if not h:
+            # Microservico nao conhece essa instancia (nunca conectou ou
+            # redeploy zerou a memoria). Se o DB acha que esta conectada,
+            # eh um zumbi — vermelho.
+            out[c["id"]] = {
+                "level": "red" if c.get("status") == "connected" else "gray",
+                "status": "not_found",
+                "events": [],
+                "reconnects_24h": 0,
+            }
+            continue
+        if h.get("status") == "connected":
+            idle = h.get("last_inbound_ago_ms")
+            h["level"] = "yellow" if (idle is not None and idle > IDLE_YELLOW_MS) else "green"
+        elif h.get("status") in ("connecting", "waiting_qr"):
+            h["level"] = "yellow"
+        else:
+            h["level"] = "red"
+        out[c["id"]] = h
+    return {"service_online": service_online, "telemetry_available": telemetry_available, "connections": out}
+
+
 # === MODELS ===
 class HumanizationConfig(BaseModel):
     """Per-connection humanization settings used by flow + campaigns to make

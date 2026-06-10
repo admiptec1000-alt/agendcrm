@@ -263,6 +263,7 @@ export const whatsappAPI = {
 // Channels API (Connections, Templates, Scheduled Messages, Chat)
 export const channelsAPI = {
   getConnections: () => api.get('/channels/connections'),
+  getConnectionsHealth: () => api.get('/channels/connections/health'),
   createConnection: (data) => api.post('/channels/connections', data),
   updateConnection: (id, data) => api.put(`/channels/connections/${id}`, data),
   connectChannel: (id, opts = {}) => api.post(`/channels/connections/${id}/connect`, opts),

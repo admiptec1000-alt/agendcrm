@@ -12,7 +12,7 @@ import {
   Sparkles, Calendar, CalendarCheck, CalendarDays, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins, Paperclip, PlugZap
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins, Paperclip, PlugZap, Activity
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import SGPGatewayPage from '../CRM/SGPGatewayPage';
@@ -3505,6 +3505,7 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
   const [loading, setLoading] = useState(true);
   const [serviceHealth, setServiceHealth] = useState(null);
   const [versionCheck, setVersionCheck] = useState(null);
+  const [healthMap, setHealthMap] = useState({});
 
   useEffect(() => { loadData(); }, []);
   useEffect(() => {
@@ -3516,6 +3517,12 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
       } catch (e) {
         if (!cancelled) setServiceHealth({ online: false });
       }
+      // 2026-06 — Monitor de saude por conexao (chips verde/amarelo/vermelho
+      // + log de eventos). Atualizado junto com o health do servico.
+      try {
+        const hr = await channelsAPI.getConnectionsHealth();
+        if (!cancelled) setHealthMap(hr.data?.connections || {});
+      } catch (e) {}
     };
     const checkVersion = async () => {
       try {
@@ -3525,7 +3532,7 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
     };
     checkHealth();
     checkVersion();
-    const interval = setInterval(() => { checkHealth(); checkVersion(); }, 60000);
+    const interval = setInterval(() => { checkHealth(); checkVersion(); }, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
   const loadData = useCallback(async () => {
@@ -3684,7 +3691,7 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
           </div>
           <div className="space-y-3">
             {connections.map(conn => (
-              <ConnectionCard key={conn.id} conn={conn} onConnect={handleConnect} onDisconnect={handleDisconnect} onRemove={removeConnection} onRefresh={loadData} />
+              <ConnectionCard key={conn.id} conn={conn} health={healthMap[conn.id]} onConnect={handleConnect} onDisconnect={handleDisconnect} onRemove={removeConnection} onRefresh={loadData} />
             ))}
           </div>
         </div>
@@ -3842,11 +3849,114 @@ const ConnectionFlowModal = React.memo(({ conn, onClose, onSaved }) => {
   );
 }, (prev, next) => prev.conn?.id === next.conn?.id && prev.conn?.default_flow_id === next.conn?.default_flow_id);
 
-const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) => {
+// === Monitor de Saude da Conexao (2026-06) =================================
+// Chips verde/amarelo/vermelho por conexao + modal com log de eventos do
+// microservico Baileys (uptime, ultima msg recebida, reconexoes 24h).
+const fmtDur = (ms) => {
+  if (ms == null) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h${m % 60 ? ` ${m % 60}min` : ''}`;
+  const d = Math.floor(h / 24);
+  return `${d}d${h % 24 ? ` ${h % 24}h` : ''}`;
+};
+
+const HEALTH_META = {
+  green: { label: 'Saudavel', dot: 'bg-emerald-500', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' },
+  yellow: { label: 'Atencao', dot: 'bg-amber-500', chip: 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' },
+  red: { label: 'Problema', dot: 'bg-red-500', chip: 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' },
+  gray: { label: 'Sem dados', dot: 'bg-slate-400', chip: 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100' },
+};
+
+const HEALTH_EVENT_META = {
+  connected: { label: 'Conectado', color: 'bg-emerald-100 text-emerald-700' },
+  disconnected: { label: 'Desconectado', color: 'bg-red-100 text-red-700' },
+  conflict: { label: 'Conflito de sessao', color: 'bg-red-100 text-red-700' },
+  reconnect_scheduled: { label: 'Reconexao agendada', color: 'bg-amber-100 text-amber-700' },
+  logged_out: { label: 'Logout (QR necessario)', color: 'bg-red-100 text-red-700' },
+  qr_generated: { label: 'QR gerado', color: 'bg-blue-100 text-blue-700' },
+  connect_requested: { label: 'Conexao solicitada', color: 'bg-slate-100 text-slate-600' },
+  manual_disconnect: { label: 'Desconectado pelo operador', color: 'bg-slate-100 text-slate-600' },
+  manual_restart: { label: 'Reinicio manual', color: 'bg-slate-100 text-slate-600' },
+  watchdog_zombie_socket: { label: 'Socket zumbi detectado', color: 'bg-red-100 text-red-700' },
+  watchdog_ping_failed: { label: 'Falha no ping de verificacao', color: 'bg-amber-100 text-amber-700' },
+};
+
+const ConnectionHealthModal = ({ conn, health, onClose }) => {
+  const meta = HEALTH_META[health?.level] || HEALTH_META.gray;
+  const events = health?.events || [];
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()} data-testid={`health-modal-${conn.id}`}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-slate-200">
+          <h3 className="text-base font-bold font-heading flex items-center gap-2">
+            <Activity className="w-5 h-5 text-primary" /> Saude da conexao — {conn.name}
+          </h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100" data-testid="close-health-modal"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-4 space-y-4 overflow-y-auto">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Status</p>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className={`w-2 h-2 rounded-full ${meta.dot}`} />
+                <p className="text-sm font-semibold text-slate-800" data-testid="health-status-label">{meta.label}</p>
+              </div>
+              {health?.uptime_ms != null && <p className="text-[11px] text-slate-500 mt-0.5">Ativa ha {fmtDur(health.uptime_ms)}</p>}
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Ultima msg recebida</p>
+              <p className="text-sm font-semibold text-slate-800 mt-1" data-testid="health-last-inbound">
+                {health?.last_inbound_ago_ms != null ? `ha ${fmtDur(health.last_inbound_ago_ms)}` : '—'}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Sem msg ha 30+ min = atencao (pode ser horario calmo)</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Reconexoes (24h)</p>
+              <p className={`text-sm font-semibold mt-1 ${(health?.reconnects_24h || 0) > 5 ? 'text-red-600' : 'text-slate-800'}`} data-testid="health-reconnects-24h">
+                {health?.reconnects_24h ?? 0}
+              </p>
+              {(health?.reconnects_24h || 0) > 5 && <p className="text-[11px] text-red-500 mt-0.5">Muitas reconexoes — conexao instavel</p>}
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Ultimo erro</p>
+              <p className="text-[11px] text-slate-600 mt-1 break-words" data-testid="health-last-error">{health?.last_error || 'Nenhum'}</p>
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Log de eventos</p>
+            <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1" data-testid="health-events-list">
+              {events.length === 0 && (
+                <p className="text-xs text-slate-400 py-4 text-center">Nenhum evento registrado desde o ultimo reinicio do servico.</p>
+              )}
+              {events.map((ev, i) => {
+                const evMeta = HEALTH_EVENT_META[ev.type] || { label: ev.type, color: 'bg-slate-100 text-slate-600' };
+                return (
+                  <div key={i} className="flex items-start gap-2 text-xs border-b border-slate-100 pb-1.5" data-testid={`health-event-${i}`}>
+                    <span className="text-slate-400 font-mono whitespace-nowrap mt-0.5">{new Date(ev.ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    <span className={`px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${evMeta.color}`}>{evMeta.label}</span>
+                    <span className="text-slate-500 break-all">{ev.msg}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-slate-400 mt-2">O log guarda os ultimos 50 eventos e zera quando o microservico WhatsApp reinicia.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRefresh }) => {
   const [qrData, setQrData] = useState(null);
   const [polling, setPolling] = useState(false);
   const [pollingAttempts, setPollingAttempts] = useState(0);
   const [showFlowEdit, setShowFlowEdit] = useState(false);
+  const [showHealth, setShowHealth] = useState(false);
 
   useEffect(() => {
     if (conn.status === 'waiting_qr' || conn.status === 'connecting') {
@@ -3943,6 +4053,20 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
             </div>
             {conn.phone && <p className="text-xs text-slate-400 mt-0.5">{conn.phone}</p>}
             {conn.connected_name && <p className="text-xs text-emerald-600 mt-0.5">{conn.connected_name}</p>}
+            {health && (
+              <button
+                onClick={() => setShowHealth(true)}
+                data-testid={`health-chip-${conn.id}`}
+                className={`mt-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border transition-colors ${(HEALTH_META[health.level] || HEALTH_META.gray).chip}`}
+                title="Ver monitor de saude e log de eventos"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${(HEALTH_META[health.level] || HEALTH_META.gray).dot}`} />
+                {(HEALTH_META[health.level] || HEALTH_META.gray).label}
+                {health.uptime_ms != null && <span className="font-normal">· ativa ha {fmtDur(health.uptime_ms)}</span>}
+                {health.last_inbound_ago_ms != null && <span className="font-normal">· ult. msg ha {fmtDur(health.last_inbound_ago_ms)}</span>}
+                <Activity className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -3989,6 +4113,9 @@ const ConnectionCard = ({ conn, onConnect, onDisconnect, onRemove, onRefresh }) 
           onClose={() => setShowFlowEdit(false)}
           onSaved={() => { setShowFlowEdit(false); onRefresh(); }}
         />
+      )}
+      {showHealth && (
+        <ConnectionHealthModal conn={conn} health={health} onClose={() => setShowHealth(false)} />
       )}
       {(conn.status === 'waiting_qr' || conn.status === 'connecting') && (
         <div className="mt-4 p-4 bg-slate-50 rounded-xl text-center">
