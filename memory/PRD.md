@@ -1,3 +1,59 @@
+## 2026-02-28 (NIGHT 7) — 4 pedidos: ZAP shortcut icon, view_all_tickets, watchdog, 30d history sync
+
+### Pedido 1 — Icone de Respostas Rapidas perto do anexo ✅
+**Frontend** (`AtendimentosPage.js`): adicionado botao com icone `Zap` (raio) ao lado do `Paperclip`. data-testid: `quick-responses-btn`. Ao clicar, preenche o input com `/` e abre o popover de respostas rapidas (mesma logica do atalho de teclado `/`).
+
+### Pedido 2 — Admin/perfil ver todos os tickets ✅
+**Causa raiz**: `get_current_user` (auth.py) retornava o user RAW sem hydration de permissoes do `permission_profiles`. Resultado: `_user_can_view_all_tickets()` em crm_routes.py:42 sempre retornava `False` para usuarios nao-admin com o flag `view_all_tickets` no perfil — pois `user.get("permissions")` era [].
+**Fixes**:
+- `auth.py`: `get_current_user` agora hydrata permissions do `permission_profiles` para company_users. Admin recebe `["*"]` implicito. Best-effort: se falhar, nao quebra auth.
+- `crm_routes.py`: `_user_can_view_all_tickets` agora aceita tambem `"*"` na lista (perfil admin-equivalente).
+- `Dashboard.js` (PerfisAcessoPage form): nova toggle `permission-toggle-view-all-tickets` na secao "Permissoes avancadas". Operador admin pode ativar por perfil de acesso para que aquele perfil veja TODOS os tickets independente de fila/conexao/atribuicao.
+
+### Pedido 3 — Sincronizar 30 dias ao conectar (best-effort) ✅
+**Microservico** (`whatsapp-service/index.js`):
+- `createConnection(instanceId, { syncHistory })` — novo parametro opcional, liga `syncFullHistory` nesta sessao Baileys.
+- `POST /instances/:id/connect` aceita body `{ sync_history: true }`.
+- Novo listener `messaging-history.set` que filtra mensagens dos ultimos 30 dias (HISTORY_DAYS=30), agrupa em buffer de ate 100 e POSTa em batch pra `/api/channels/webhook/history-import`. Fluxo final flushed quando `isLatest=true`.
+**Backend** (`channels_routes.py`):
+- Novo `POST /webhook/history-import` que cria tickets `status=fechado origin=history_import tags=[historico-importado]` (um por contato), faz upsert deduplicado de mensagens (`wa_message_id`), nao dispara flowbuilder. Bypassa o filtro `older_than_connected_at` do webhook normal. Grupos sao ignorados.
+- `POST /connections/{conn_id}/connect` agora le `sync_history` do body e repassa pro microservico.
+**Frontend**:
+- `Dashboard.js > handleConnect`: `window.confirm("Deseja importar os ultimos 30 dias...")` pra opt-in. Operador escolhe a cada clique de "Conectar".
+- `WhatsAppConnectionsPage.js`: checkbox dedicado "Importar ultimos 30 dias" no modal de criacao (so mostra em CRIACAO; edicao nao reimporta).
+
+### Pedido 4 — Watchdog mais agressivo (10 conexoes, algumas caem) ✅
+**Microservico**:
+- Intervalo do watchdog: 90s → 45s
+- Janela de stale: 5min → 3min
+- Probe forcado: a cada 3o sweep (~2.25min) dispara `sendPresenceUpdate('available')` em TODAS as conexoes, mesmo as ativas — pega "zombie sockets" antes que o usuario perceba.
+- Hard check de readyState agora avalia 3 layers (`sock.ws`, `sock.ws.socket`, `sock.ws._socket`); se NENHUM estiver OPEN, forca reconect.
+
+### Bug fixes bonus
+- `flow_engine.py`: `sent += 1` (TypeError silencioso em List[str]) substituido por `sent.append(sent_msg_id)`. Antes a mensagem de transfer ate era enviada mas nao era persistida no historico do ticket.
+
+### Validacao
+- Backend: 8/8 pytest passaram (ticket-menu); `/auth/me` continua entregando `permissions=["*"]` pra admin e a hidratacao do perfil funciona pra non-admin (preview validado via curl).
+- Frontend: Playwright validou que (a) icone ZAP esta presente, (b) confirm dialog do "30 dias" aparece com texto correto, (c) o connect prossegue depois (toast "Conectando..." aparece e geracao de QR comeca).
+
+### Arquivos alterados
+- `/app/backend/auth.py` (hydration de permissoes)
+- `/app/backend/routes/crm_routes.py` (`_user_can_view_all_tickets` aceita "*")
+- `/app/backend/routes/channels_routes.py` (history-import endpoint + connect body)
+- `/app/backend/flow_engine.py` (sent.append fix)
+- `/app/whatsapp-service/index.js` (watchdog tighter + syncHistory + messaging-history listener)
+- `/app/frontend/src/pages/CRM/AtendimentosPage.js` (icone ZAP)
+- `/app/frontend/src/pages/CRM/WhatsAppConnectionsPage.js` (checkbox 30d)
+- `/app/frontend/src/pages/Company/Dashboard.js` (toggle view_all_tickets + handleConnect com confirm)
+- `/app/frontend/src/services/api.js` (connectChannel/connectWhatsApp aceitam opts)
+
+### Acao requerida em PRODUCAO
+- Apos redeploy do microservico WhatsApp em https://agentcrm.8ip.com.br, o watchdog mais agressivo entra em vigor.
+- Para o perfil "ver todos os tickets" tomar efeito em producao: admin precisa abrir "Perfis de Acesso", editar o perfil desejado e marcar a nova toggle "Ver todos os tickets/atendimentos".
+
+---
+
+
 ## 2026-02-28 (NIGHT 6) — Filtrar analistas pela fila + renomear "atendente" → "analista"
 
 ### Pedidos do usuario

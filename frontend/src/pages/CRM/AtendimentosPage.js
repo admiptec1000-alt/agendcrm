@@ -8,7 +8,7 @@ import {
   Clock, MessageSquare, ChevronLeft, MoreVertical,
   Tag, User, Hash, ArrowRightLeft, Ban, CheckCircle2, Check,
   Smartphone, DollarSign, CalendarClock,
-  Pencil, Trash2, AlertCircle, Filter, RefreshCw, Bot, FileText
+  Pencil, Trash2, AlertCircle, Filter, RefreshCw, Bot, FileText, Zap
 } from 'lucide-react';
 import { quotesAPI } from '../../services/api';
 import QuoteAttachModal from './QuoteAttachModal';
@@ -1339,6 +1339,23 @@ const AtendimentosPage = () => {
                 data-testid="attach-file-btn"
               >
                 <Paperclip className="w-5 h-5" />
+              </button>
+              {/* 2026-02-28 — Botao para abrir o painel de Respostas Rapidas.
+                  Alternativa visual ao atalho `/`. Mostra ate 8 itens, mesma
+                  logica de selecao (clica/Enter aplica o conteudo + envia
+                  anexo se houver). */}
+              <button
+                onClick={() => {
+                  setMessageInput((v) => (v.startsWith('/') ? v : '/'));
+                  setQuickMenuOpen(true);
+                  setQuickHighlight(0);
+                  setTimeout(() => messageInputRef.current?.focus(), 0);
+                }}
+                className="p-2 rounded-full hover:bg-amber-50 text-amber-600 hidden sm:block"
+                title="Respostas Rapidas"
+                data-testid="quick-responses-btn"
+              >
+                <Zap className="w-5 h-5" />
               </button>
               <div className="flex-1 relative min-w-0">
                 <input

@@ -628,7 +628,7 @@ setInterval(async () => {
 }, 30000);
 
 // ── Connection watchdog ─────────────────────────────────────────────────────
-// Every 90s, sweep every instance flagged as 'connected' and verify the
+// Every 45s, sweep every instance flagged as 'connected' and verify the
 // underlying WebSocket is actually alive. Sometimes Baileys' internal
 // keepalive misses a TCP-level FIN (e.g. proxy/CDN silently drops the
 // connection) and we end up holding a "zombie" socket — status=connected
@@ -636,21 +636,35 @@ setInterval(async () => {
 // fluxo parou de responder". This watchdog detects that and forces a
 // fresh reconnect.
 //
+// 2026-02-28 — Tightened thresholds (was 90s/5min, now 45s/3min) and added
+// a forced presence probe every ~2.25 minutes regardless of activity, to
+// catch zombie sockets BEFORE the customer notices.
+//
 // Strategy:
 //   1. Check sock.ws.readyState (1 = OPEN). If not OPEN -> reconnect.
-//   2. If no inbound activity for 5+ minutes, send a no-op presence
-//      subscribe to ourselves. If that throws -> reconnect.
-const ACTIVITY_STALE_MS = 5 * 60 * 1000;    // 5 minutes of silence
-const WATCHDOG_INTERVAL_MS = 90 * 1000;     // sweep every 90s
+//   2. If no inbound activity for 3+ minutes OR every 3rd sweep, send a
+//      no-op presence update. If that throws -> reconnect.
+const ACTIVITY_STALE_MS = 3 * 60 * 1000;    // 3 minutes of silence
+const WATCHDOG_INTERVAL_MS = 45 * 1000;     // sweep every 45s
+const FORCED_PROBE_EVERY_N_SWEEPS = 3;       // ~135s = 2.25min
+let _watchdogTick = 0;
 setInterval(async () => {
+  _watchdogTick += 1;
+  const forceProbe = (_watchdogTick % FORCED_PROBE_EVERY_N_SWEEPS) === 0;
   for (const [instanceId, inst] of Object.entries(connections)) {
     if (!inst || inst.status !== 'connected' || !inst.sock) continue;
     const sock = inst.sock;
-    // 1) Hard liveness check — WebSocket layer
+    // 1) Hard liveness check — WebSocket layer (any layer can be the carrier)
     try {
-      const readyState = sock.ws?.readyState ?? sock.ws?.socket?.readyState;
-      if (readyState !== undefined && readyState !== 1) {
-        console.warn(`[${instanceId}] watchdog: ws.readyState=${readyState} (not OPEN) — forcing reconnect`);
+      const rsCandidates = [
+        sock.ws?.readyState,
+        sock.ws?.socket?.readyState,
+        sock.ws?._socket?.readyState,
+      ].filter(v => typeof v === 'number');
+      // If we have a definitive reading and ANY layer is not OPEN, treat
+      // as zombie and reconnect.
+      if (rsCandidates.length > 0 && !rsCandidates.includes(1)) {
+        console.warn(`[${instanceId}] watchdog: ws layers ${JSON.stringify(rsCandidates)} (none OPEN) — forcing reconnect`);
         inst.status = 'disconnected';
         inst.lastError = 'watchdog: zombie socket';
         createConnection(instanceId).catch(e => console.error(`[${instanceId}] watchdog reconnect failed:`, e.message));
@@ -658,14 +672,13 @@ setInterval(async () => {
       }
     } catch (e) { /* ignore */ }
 
-    // 2) Soft liveness check — only if we haven't seen any inbound activity
-    // for a while, ping ourselves with a presence subscribe. Cheap operation
-    // that exercises the encrypted send path.
+    // 2) Soft liveness check — fire when idle OR on the periodic forced
+    // probe tick. Even active connections get probed every ~2.25min to
+    // catch silently broken TLS sessions.
     const idle = Date.now() - (inst.lastActivityAt || 0);
-    if (idle > ACTIVITY_STALE_MS) {
+    if (idle > ACTIVITY_STALE_MS || forceProbe) {
       try {
-        const selfJid = sock.user?.id;
-        if (selfJid && typeof sock.sendPresenceUpdate === 'function') {
+        if (typeof sock.sendPresenceUpdate === 'function') {
           await sock.sendPresenceUpdate('available');
           inst.lastActivityAt = Date.now();
         }
@@ -713,9 +726,16 @@ setInterval(async () => {
 // Ensure auth directory
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
-async function createConnection(instanceId) {
+async function createConnection(instanceId, options = {}) {
   const authDir = path.join(AUTH_DIR, instanceId);
   if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+
+  // 2026-02-28 — Per-connection history sync. Quando o operador ativa
+  // "Importar ultimos 30 dias" na criacao da conexao, ligamos
+  // syncFullHistory para esta sessao. O Baileys envia entao um evento
+  // `messaging-history.set` com os chats/mensagens que o WhatsApp Mobile
+  // tem em buffer. Filtramos ate 30 dias e empurramos pro backend.
+  const syncHistory = options.syncHistory === true;
 
   // ── Cleanup any prior socket for this instance BEFORE creating a new one.
   // Without this, every reconnect leaves the previous socket's event
@@ -760,7 +780,7 @@ async function createConnection(instanceId) {
     // Mark device online on connect so WhatsApp server treats us as active
     // (helps avoid "Aguardando mensagem..." prekey placeholder on recipients)
     markOnlineOnConnect: true,
-    syncFullHistory: false,
+    syncFullHistory: syncHistory,
     // Return the original message body when the WA server requests a retry
     // (otherwise recipients receive an EMPTY message). We look up the
     // outbound payload we cached at send-time. If not in memory (e.g.
@@ -966,6 +986,81 @@ async function createConnection(instanceId) {
       } catch (_) {}
     }
   });
+
+  // 2026-02-28 — Historico ate 30 dias quando syncFullHistory=true.
+  // O WhatsApp envia o snapshot que o aparelho mobile tem em buffer. Pode
+  // demorar varios segundos e chegar em chunks (multiplos eventos). Cada
+  // chunk traz `chats`, `contacts` e `messages`. Filtramos mensagens dos
+  // ultimos 30 dias e empurramos pro backend em batches de 100 mensagens
+  // para evitar payload gigantesco e respeitar timeouts intermediarios.
+  if (syncHistory) {
+    const HISTORY_DAYS = 30;
+    const HISTORY_CUTOFF_S = Math.floor(Date.now() / 1000) - (HISTORY_DAYS * 24 * 3600);
+    let _historyBuffer = [];
+    let _historyBatchTimer = null;
+
+    const flushHistoryBatch = async () => {
+      if (_historyBuffer.length === 0) return;
+      const batch = _historyBuffer.splice(0, _historyBuffer.length);
+      try {
+        await axios.post(`${FASTAPI_URL}/api/channels/webhook/history-import`, {
+          instance_id: instanceId,
+          messages: batch,
+        }, { timeout: 30000 });
+        console.log(`[${instanceId}] history-import: forwarded ${batch.length} historical messages to backend`);
+      } catch (e) {
+        console.warn(`[${instanceId}] history-import: backend POST failed: ${e.message}`);
+      }
+    };
+
+    sock.ev.on('messaging-history.set', ({ chats, messages, isLatest }) => {
+      try {
+        for (const msg of (messages || [])) {
+          const ts = Number(msg.messageTimestamp) || 0;
+          if (ts < HISTORY_CUTOFF_S) continue;
+          const remoteJid = msg.key?.remoteJid || '';
+          if (!remoteJid || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
+          // Extract a textual preview from the message
+          const m = msg.message || {};
+          const text = m.conversation
+            || m.extendedTextMessage?.text
+            || m.imageMessage?.caption
+            || m.videoMessage?.caption
+            || m.documentMessage?.caption
+            || '';
+          _historyBuffer.push({
+            id: msg.key.id,
+            jid: remoteJid,
+            from_me: !!msg.key.fromMe,
+            timestamp: ts,
+            type: m.conversation || m.extendedTextMessage ? 'text'
+                  : m.imageMessage ? 'image'
+                  : m.audioMessage ? 'audio'
+                  : m.videoMessage ? 'video'
+                  : m.documentMessage ? 'document'
+                  : 'other',
+            text: text.slice(0, 4000),
+            push_name: msg.pushName || null,
+          });
+        }
+        if (_historyBuffer.length >= 100) {
+          flushHistoryBatch();
+        } else {
+          if (_historyBatchTimer) clearTimeout(_historyBatchTimer);
+          _historyBatchTimer = setTimeout(flushHistoryBatch, 2500);
+        }
+        if (isLatest) {
+          // Final chunk — flush whatever's left.
+          if (_historyBatchTimer) clearTimeout(_historyBatchTimer);
+          flushHistoryBatch();
+        }
+      } catch (e) {
+        console.warn(`[${instanceId}] messaging-history.set handler error: ${e.message}`);
+      }
+    });
+  }
+
+
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     // Capture both 'notify' (real-time push) and 'append' (background sync)
@@ -1196,8 +1291,12 @@ app.post('/instances/:id/connect', async (req, res) => {
     if (connections[id]?.status === 'connected') {
       return res.json({ status: 'already_connected', user: connections[id].user });
     }
-    const instance = await createConnection(id);
-    res.json({ status: instance.status, message: 'Connecting...' });
+    // 2026-02-28 — Opcao de importar historico no momento da conexao.
+    // Body pode trazer `sync_history: true` (vindo do backend Python
+    // quando o operador marcou o checkbox na criacao da conexao).
+    const syncHistory = !!(req.body && req.body.sync_history);
+    const instance = await createConnection(id, { syncHistory });
+    res.json({ status: instance.status, message: 'Connecting...', sync_history: syncHistory });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

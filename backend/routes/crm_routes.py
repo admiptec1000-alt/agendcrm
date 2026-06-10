@@ -34,12 +34,13 @@ def _user_can_view_all_tickets(user: dict) -> bool:
     The permission is granted by either:
       - role (super_admin / company_admin) — implicit
       - explicit `view_all_tickets` flag in `user.permissions` (per-user toggle)
+      - wildcard `*` permission (admin-equivalent profile)
     """
     role = (user.get("role") or "").lower()
     if role in ("super_admin", "superadmin", "company_admin"):
         return True
     perms = user.get("permissions") or []
-    return "view_all_tickets" in perms
+    return "*" in perms or "view_all_tickets" in perms
 
 
 def _ticket_visibility_filter(user: dict) -> dict:

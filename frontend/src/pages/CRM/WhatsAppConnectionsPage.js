@@ -29,10 +29,20 @@ const WhatsAppConnectionsPage = () => {
     setQueues(q.data || []);
   };
 
-  const handleCreate = async ({ name, default_flow_id, queue_ids }) => {
-    await whatsappAPI.createConnection({ name, default_flow_id: default_flow_id || null, queue_ids: queue_ids || [] });
+  const handleCreate = async ({ name, default_flow_id, queue_ids, sync_history }) => {
+    const res = await whatsappAPI.createConnection({ name, default_flow_id: default_flow_id || null, queue_ids: queue_ids || [] });
     toast.success('Conexao criada!');
     setShowAdd(false);
+    // 2026-02-28 — Se o operador marcou "Importar 30 dias", ja dispara o
+    // connect agora repassando o flag pro microservico Baileys. Sem isso,
+    // ele teria que clicar em "Conectar" manualmente e o flag se perderia.
+    if (sync_history && res?.data?.id) {
+      try {
+        await whatsappAPI.connectWhatsApp(res.data.id, { sync_history: true });
+      } catch (e) {
+        toast.error('Falha ao iniciar conexao com sync de historico');
+      }
+    }
     load();
   };
 
@@ -239,6 +249,10 @@ const ConnectionModal = ({ initial, flows, queues = [], onClose, onSave }) => {
   const [name, setName] = useState(initial?.name || '');
   const [flowId, setFlowId] = useState(initial?.default_flow_id || '');
   const [queueIds, setQueueIds] = useState(initial?.queue_ids || []);
+  // 2026-02-28 — Opcao para importar ate 30 dias de historico ao conectar.
+  // So aparece na CRIACAO (nao na edicao) porque o `syncFullHistory` so
+  // tem efeito no momento do QR scan inicial. Mudar depois nao reimporta.
+  const [syncHistory, setSyncHistory] = useState(false);
   const isEdit = !!initial?.id;
   const toggleQueue = (qid) => {
     setQueueIds(prev => prev.includes(qid) ? prev.filter(x => x !== qid) : [...prev, qid]);
@@ -303,11 +317,31 @@ const ConnectionModal = ({ initial, flows, queues = [], onClose, onSave }) => {
               Tickets recebidos por esta conexao ficam associados as filas escolhidas. Se for so 1 fila, o ticket entra direto nela.
             </p>
           </div>
+          {!isEdit && (
+            <div className="border-2 border-amber-200 rounded-lg p-3 bg-amber-50/50">
+              <label className="flex items-start gap-2 cursor-pointer" data-testid="conn-sync-history-label">
+                <input
+                  type="checkbox"
+                  checked={syncHistory}
+                  onChange={e => setSyncHistory(e.target.checked)}
+                  className="mt-0.5"
+                  data-testid="conn-sync-history-checkbox"
+                />
+                <div>
+                  <p className="text-sm text-slate-800 font-medium">Importar ultimos 30 dias de conversas</p>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    Quando voce escanear o QR, o sistema vai trazer as conversas dos ultimos 30 dias que estao no seu celular. <br />
+                    <span className="text-amber-700 font-medium">Atencao:</span> os tickets sao criados com status fechado (historico). O WhatsApp Mobile entrega o que tem em buffer — pode nao ser 30 dias exatos.
+                  </p>
+                </div>
+              </label>
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
           <button
-            onClick={() => name.trim() && onSave({ name: name.trim(), default_flow_id: flowId || '', queue_ids: queueIds })}
+            onClick={() => name.trim() && onSave({ name: name.trim(), default_flow_id: flowId || '', queue_ids: queueIds, sync_history: syncHistory })}
             disabled={!name.trim()}
             className="btn-primary text-sm disabled:opacity-50"
             data-testid="save-conn-btn"

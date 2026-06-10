@@ -3,7 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database
 from auth import get_current_user
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 import base64
 import uuid
 import httpx
@@ -320,6 +320,7 @@ async def create_connection(
 @router.post("/connections/{conn_id}/connect")
 async def connect_channel(
     conn_id: str,
+    request: Request,
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
@@ -327,10 +328,23 @@ async def connect_channel(
     if not conn:
         raise HTTPException(status_code=404, detail="Conexao nao encontrada")
 
+    # 2026-02-28 — Opcional sync de historico (30 dias). Recebido como
+    # JSON body: {"sync_history": true}. Repassado ao microservico Baileys
+    # pra ligar syncFullHistory na sessao desta conexao.
+    sync_history = False
+    try:
+        body = await request.json()
+        sync_history = bool(body.get("sync_history"))
+    except Exception:
+        pass
+
     if conn["type"] == "whatsapp":
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/connect")
+                resp = await client.post(
+                    f"{WA_SERVICE_URL}/instances/{conn_id}/connect",
+                    json={"sync_history": sync_history} if sync_history else {},
+                )
                 resp.json()  # validate response
             await db.channel_connections.update_one({"id": conn_id}, {"$set": {"status": "connecting"}})
         except Exception as e:
@@ -705,6 +719,131 @@ async def webhook_message_status(request: Request, db: AsyncIOMotorDatabase = De
                   "messages.$.delivery_updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     return {"ok": True}
+
+
+@router.post("/webhook/history-import")
+async def webhook_history_import(request: Request, db: AsyncIOMotorDatabase = Depends(get_database)):
+    """Body: {instance_id, messages: [{id, jid, from_me, timestamp, type, text, push_name}]}
+
+    2026-02-28 — Importa mensagens historicas (ate 30 dias) que o Baileys
+    recebe na primeira sincronizacao com WhatsApp Mobile (quando o
+    operador marca "Importar ultimos 30 dias" na criacao da conexao).
+    Para cada JID:
+      1. Localiza ou cria um ticket "fechado" (status=resolvido) na fase
+         "historical" para nao poluir as filas de atendimento ativas.
+      2. Faz upsert das mensagens deduplicadas por wa_message_id.
+    Diferente do webhook normal, este endpoint NAO dispara flowbuilder,
+    nem notifica usuarios, nem manipula presenca/typing — e somente
+    repopulacao de historico.
+    """
+    data = await request.json()
+    instance_id = data.get("instance_id")
+    msgs = data.get("messages") or []
+    if not instance_id or not isinstance(msgs, list) or not msgs:
+        return {"ok": False, "error": "bad_payload"}
+
+    conn = await db.channel_connections.find_one({"id": instance_id})
+    if not conn:
+        return {"ok": False, "error": "instance_not_found"}
+    company_id = conn["company_id"]
+
+    # Agrupa as mensagens por JID/telefone — uma ticket por contato.
+    from collections import defaultdict
+    by_jid: Dict[str, list] = defaultdict(list)
+    for m in msgs:
+        jid = (m.get("jid") or "").strip()
+        if not jid or jid == "status@broadcast" or jid.endswith("@newsletter"):
+            continue
+        by_jid[jid].append(m)
+
+    tickets_created = 0
+    messages_inserted = 0
+    for jid, jid_msgs in by_jid.items():
+        # Telefone: parte antes do @
+        phone_part = jid.split("@", 1)[0] if "@" in jid else jid
+        phone = phone_part.split(":", 1)[0]  # remove device id ":3" etc.
+        is_group = jid.endswith("@g.us")
+        if is_group:
+            continue  # grupos sao opt-in separadamente — ignoramos no historico
+
+        # Sort cronologico para imports estaveis (oldest first)
+        jid_msgs.sort(key=lambda x: x.get("timestamp") or 0)
+        push_name = next((mm.get("push_name") for mm in jid_msgs if mm.get("push_name")), None)
+        customer_name = push_name or phone
+
+        # Localiza ticket aberto deste contato nesta conexao; se nao houver,
+        # cria um ticket "historical" fechado para servir de balde do
+        # historico (operador pode reabri-lo se quiser continuar a conversa).
+        ticket = await db.tickets.find_one({
+            "company_id": company_id,
+            "connection_id": instance_id,
+            "customer_phone": phone,
+        }, {"_id": 0})
+        if not ticket:
+            tid = str(uuid.uuid4())
+            ticket = {
+                "id": tid,
+                "company_id": company_id,
+                "connection_id": instance_id,
+                "customer_name": customer_name,
+                "customer_phone": phone,
+                "status": "fechado",
+                "channel": "whatsapp",
+                "messages": [],
+                "tags": ["historico-importado"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "origin": "history_import",
+            }
+            await db.tickets.insert_one(ticket)
+            tickets_created += 1
+
+        # Lista de wa_message_id ja existentes neste ticket (para dedup)
+        existing_ids = {
+            mm.get("wa_message_id")
+            for mm in (ticket.get("messages") or [])
+            if mm.get("wa_message_id")
+        }
+        new_msgs = []
+        for m in jid_msgs:
+            mid = m.get("id")
+            if not mid or mid in existing_ids:
+                continue
+            ts = m.get("timestamp")
+            try:
+                iso_ts = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+            except Exception:
+                iso_ts = datetime.now(timezone.utc).isoformat()
+            new_msgs.append({
+                "wa_message_id": mid,
+                "from": "agent" if m.get("from_me") else "customer",
+                "text": m.get("text") or "",
+                "type": m.get("type") or "text",
+                "timestamp": iso_ts,
+                "historical": True,  # marcador para a UI poder estilizar
+            })
+            existing_ids.add(mid)
+
+        if new_msgs:
+            await db.tickets.update_one(
+                {"id": ticket["id"]},
+                {"$push": {"messages": {"$each": new_msgs}},
+                 "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            messages_inserted += len(new_msgs)
+
+    logger.info(
+        f"[history-import] instance={instance_id} contacts={len(by_jid)} "
+        f"tickets_created={tickets_created} messages_inserted={messages_inserted}"
+    )
+    return {
+        "ok": True,
+        "contacts": len(by_jid),
+        "tickets_created": tickets_created,
+        "messages_inserted": messages_inserted,
+    }
+
+
 
 
 @router.get("/contact-presence")

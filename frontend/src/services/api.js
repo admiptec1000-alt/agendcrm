@@ -254,7 +254,7 @@ export const whatsappAPI = {
   getConnectionStats: () => api.get('/whatsapp/connections/stats'),
   createConnection: (data) => api.post('/whatsapp/connections', data),
   updateConnection: (id, data) => api.put(`/whatsapp/connections/${id}`, data),
-  connectWhatsApp: (id) => api.post(`/whatsapp/connections/${id}/connect`),
+  connectWhatsApp: (id, opts = {}) => api.post(`/whatsapp/connections/${id}/connect`, opts),
   disconnectWhatsApp: (id) => api.post(`/whatsapp/connections/${id}/disconnect`),
   simulateConnected: (id) => api.post(`/whatsapp/connections/${id}/simulate-connected`),
   deleteConnection: (id) => api.delete(`/whatsapp/connections/${id}`)
@@ -265,7 +265,7 @@ export const channelsAPI = {
   getConnections: () => api.get('/channels/connections'),
   createConnection: (data) => api.post('/channels/connections', data),
   updateConnection: (id, data) => api.put(`/channels/connections/${id}`, data),
-  connectChannel: (id) => api.post(`/channels/connections/${id}/connect`),
+  connectChannel: (id, opts = {}) => api.post(`/channels/connections/${id}/connect`, opts),
   getConnectionQR: (id) => api.get(`/channels/connections/${id}/qr`),
   disconnectChannel: (id) => api.post(`/channels/connections/${id}/disconnect`),
   syncConnection: (id) => api.post(`/channels/connections/${id}/sync`),

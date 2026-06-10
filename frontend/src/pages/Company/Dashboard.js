@@ -3543,8 +3543,23 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
   }, []);
 
   const handleConnect = async (connId) => {
-    try { await channelsAPI.connectChannel(connId); loadData(); toast.success('Conectando...'); }
-    catch (e) { toast.error('Erro ao conectar'); }
+    // 2026-02-28 — Pergunta opt-in pra importar 30 dias de historico ao
+    // conectar. So aparece na primeira vez (status != 'connected'). Usuario
+    // que cancelar passa pelo connect normal sem sync.
+    let syncHistory = false;
+    try {
+      syncHistory = window.confirm(
+        'Deseja importar os ultimos 30 dias de conversas do seu celular ao conectar?\n\n' +
+        '- Os tickets sao criados com status "Fechado" (historico).\n' +
+        '- O WhatsApp entrega o que esta no buffer do mobile (pode nao ser 30 dias exatos).\n' +
+        '- Marque OK para SIM ou Cancelar para NAO importar.'
+      );
+    } catch (_) { syncHistory = false; }
+    try {
+      await channelsAPI.connectChannel(connId, { sync_history: syncHistory });
+      loadData();
+      toast.success(syncHistory ? 'Conectando + importando historico...' : 'Conectando...');
+    } catch (e) { toast.error('Erro ao conectar'); }
   };
 
   const handleDisconnect = async (connId) => {
@@ -7044,6 +7059,20 @@ const PerfilAcessoForm = ({ profile, features, onSave }) => {
                 className="w-4 h-4 rounded text-primary"
               />
               <span className="text-sm text-slate-700">Ver todos os orcamentos da empresa <span className="text-[10px] text-slate-500">(sem este, ve apenas os que criou)</span></span>
+            </label>
+            {/* 2026-02-28 — view_all_tickets toggle. Backend ja respeita
+                em `_user_can_view_all_tickets` (crm_routes.py:42); aqui
+                expomos o switch no painel de Perfis. Com este flag o
+                usuario enxerga TODOS os tickets da empresa independente
+                de fila/conexao/atribuicao (igual admin). */}
+            <label className="flex items-center gap-2 p-2 rounded-lg hover:bg-amber-50 cursor-pointer" data-testid="permission-toggle-view-all-tickets">
+              <input
+                type="checkbox"
+                checked={form.permissions.includes('view_all_tickets')}
+                onChange={() => toggle('view_all_tickets')}
+                className="w-4 h-4 rounded text-primary"
+              />
+              <span className="text-sm text-slate-700">Ver todos os tickets/atendimentos <span className="text-[10px] text-slate-500">(sem este, ve apenas os atribuidos a si e os da sua fila/conexao)</span></span>
             </label>
           </div>
         </div>

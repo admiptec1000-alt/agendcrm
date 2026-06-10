@@ -73,6 +73,28 @@ async def get_current_user(
             detail="User not found"
         )
 
+    # 2026-02-28 — Hydrate permissions from permission_profiles for company_users.
+    # Sem isso, `user.get("permissions")` retorna [] em rotas como
+    # `_user_can_view_all_tickets` (crm_routes.py:42) e o flag granular do
+    # perfil (ex: "view_all_tickets") nunca toma efeito. Admins continuam
+    # com ["*"] implicito.
+    if user_type != "super_admin":
+        role = (user.get("role") or "").lower()
+        if role in ("company_admin", "super_admin"):
+            user["permissions"] = ["*"]
+        elif user.get("permission_profile_id"):
+            try:
+                pp = await db.permission_profiles.find_one(
+                    {"id": user["permission_profile_id"], "company_id": user.get("company_id")},
+                    {"_id": 0, "permissions": 1, "name": 1},
+                )
+                if pp:
+                    user["permissions"] = pp.get("permissions") or []
+                    user["permission_profile_name"] = pp.get("name")
+            except Exception as _e:
+                # Best-effort: nao quebra auth se a colecao de perfis falhar.
+                pass
+
     # Inject SA system company_id so SA users can use tenant-scoped routes
     # (channels, tickets, atendimentos). Created on server startup; see
     # server.py::_ensure_super_admin_system_company. 2026-02-16 (J).
