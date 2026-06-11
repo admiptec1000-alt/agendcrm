@@ -1,24 +1,38 @@
-const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
-const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
-const QRCode = require('qrcode');
-const path = require('path');
-const fs = require('fs');
-const pino = require('pino');
+// 2026-06-10 (v2.2.0) — Migrado para Baileys 7.x (pacote `baileys`, ESM).
+// Motivo: o WhatsApp passou a rejeitar entregas com erro 463 ("Reach-out
+// Time-lock") para clientes que nao enviam os privacy tokens (tctoken/
+// cstoken) — suportados apenas no Baileys 7.x. Ver WhiskeySockets#2441.
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  downloadMediaMessage,
+} from 'baileys';
+import express from 'express';
+import cors from 'cors';
+import axios from 'axios';
+import QRCode from 'qrcode';
+import path from 'path';
+import fs from 'fs';
+import pino from 'pino';
+import { fileURLToPath } from 'url';
+import { Readable, PassThrough } from 'stream';
+import NodeCache from 'node-cache';
+
+// ESM nao tem __dirname — derivado de import.meta.url.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Audio conversion to OGG/Opus — required for WhatsApp PTT bubbles to play
 // on the destination phone. MediaRecorder in Chrome/Firefox produces
 // webm/opus (or audio/webm), and WhatsApp can't decode that even when we
 // label it as audio/ogg. ffmpeg-static bundles the ffmpeg binary so this
 // works on Render without a system ffmpeg install.
-const ffmpegPath = require('ffmpeg-static');
-const ffmpeg = require('fluent-ffmpeg');
+import ffmpegPath from 'ffmpeg-static';
+import ffmpeg from 'fluent-ffmpeg';
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 
 function convertToOggOpus(inputBuffer) {
   return new Promise((resolve, reject) => {
-    const { Readable, PassThrough } = require('stream');
     const inputStream = Readable.from(inputBuffer);
     const outChunks = [];
     const out = new PassThrough();
@@ -179,7 +193,6 @@ const sentMessageStore = {};
 // mensagem" silently breaks because Baileys can't tell if the recipient is
 // asking for a fresh re-encryption or hitting the wrong message id.
 // 5 min TTL is the Baileys-recommended value for retry counters.
-const NodeCache = require('node-cache');
 const msgRetryCounterCache = new NodeCache({ stdTTL: 60 * 5, useClones: false });
 // Same for group metadata so group retry receipts are handled correctly.
 const groupMetadataCache = new NodeCache({ stdTTL: 60 * 5, useClones: false });
@@ -776,7 +789,6 @@ async function createConnection(instanceId, options = {}) {
   const sock = makeWASocket({
     auth: state,
     version,
-    printQRInTerminal: false,
     logger,
     browser: ['AgentCRM', 'Chrome', '1.0.0'],
     connectTimeoutMs: 60000,
@@ -1140,19 +1152,21 @@ async function createConnection(instanceId, options = {}) {
         // `participant`. We surface group conversations to the backend as a
         // separate ticket type (channel=whatsapp_group).
         groupJid = remoteJid;
-        const partJid = msg.key.participant || msg.key.participantPn || '';
+        // Baileys 7: `participant` pode vir como @lid; `participantAlt`
+        // carrega a representacao alternativa (PN). Preferimos sempre o PN.
+        const partCands = [msg.key.participant, msg.key.participantAlt, msg.key.participantPn].filter(Boolean);
+        const partJid = partCands.find(j => String(j).endsWith('@s.whatsapp.net')) || partCands[0] || '';
         realJid = partJid || remoteJid;
         try {
-          const meta = await instance.groupMetadata(groupJid);
+          const meta = await instance.sock.groupMetadata(groupJid);
           groupSubject = meta?.subject || null;
         } catch (e) { /* best-effort */ }
       } else if (remoteJid.endsWith('@lid')) {
-        // Try Baileys' built-in fields first (these are SYNCHRONOUS / free)
-        realJid = msg.key.senderPn
-               || msg.key.participantPn
-               || msg.key.remoteJidAlt
-               || msg.key.participant
-               || null;
+        // Try Baileys' built-in fields first (these are SYNCHRONOUS / free).
+        // Baileys 7: `remoteJidAlt` carrega o PN quando remoteJid e @lid —
+        // aceitamos apenas valores em formato PN (@s.whatsapp.net).
+        const altCands = [msg.key.senderPn, msg.key.remoteJidAlt, msg.key.participantPn, msg.key.participantAlt, msg.key.participant].filter(Boolean);
+        realJid = altCands.find(j => String(j).endsWith('@s.whatsapp.net')) || null;
         if (realJid) lidResolvedSource = 'baileys_key_field';
         // Fall back to the multi-strategy resolver (cache, signal_repository,
         // onWhatsApp probe, store contacts). Returns null if NOTHING worked.
@@ -1941,7 +1955,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.1.20',
+    version: 'v2.2.0',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -1954,8 +1968,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.1.20',
-    built_at: '2026-06-01',
+    version: 'v2.2.0',
+    built_at: '2026-06-10',
     features: {
       sent_message_store: true,
       multi_message_types: true,
@@ -2011,6 +2025,10 @@ app.get('/version', (req, res) => {
       // (uptime, lastInboundAt, log de eventos via /instances/health-all).
       conservative_watchdog: true,
       health_event_log: true,
+      // v2.2.0 — Baileys 7.x: envia tctoken/cstoken nativamente (fix do
+      // erro 463 "Reach-out Time-lock" que bloqueava entregas), LID nativo
+      // via remoteJidAlt/participantAlt, runtime ESM.
+      baileys_7_privacy_tokens: true,
     },
     fastapi_url: FASTAPI_URL,
   });

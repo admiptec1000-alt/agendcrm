@@ -3312,6 +3312,23 @@ Apenas redeploy do backend. **Nao precisa reconverter templates nem re-uploadar 
 
 **Acao do usuario em producao**: redeployar o microservico WhatsApp no Render (v2.1.20) — sem isso os chips ficam "Sem dados".
 
+## 2026-06-10 — Migracao Baileys 6.7.22 → 7.0.0-rc13 (fix erro 463 / entregas bloqueadas)
+**Incidente em producao**: bot e operadores "enviavam" (painel OK, eco FROM_ME no log) mas NADA chegava no celular do cliente; recebimento normal. Log do Render mostrou `received error in ack — error 463` = **"Reach-out Time-lock"**: restricao temporaria que o WhatsApp aplica na conta quando o cliente nao envia privacy tokens (tctoken/cstoken) — cada mensagem sem token conta como "abordagem a desconhecido" e acumula ate o bloqueio (disparos em massa aceleram). Issue oficial: WhiskeySockets/Baileys#2441. Baileys 6.7.x NAO envia esses tokens; somente o 7.x.
+
+**Mudancas (`whatsapp-service`, v2.2.0)**:
+- Pacote `@whiskeysockets/baileys@6.7.22` → `baileys@7.0.0-rc13` (novo nome oficial).
+- Runtime convertido para **ESM** (`"type": "module"`, imports, `__dirname` via `import.meta.url`), exigencia do Baileys 7. `engines.node >= 20` no package.json (Render precisa de Node 20+!).
+- Removido `printQRInTerminal` (extinto no 7.x).
+- LID nativo do 7.x: resolucao de PN agora prefere `remoteJidAlt`/`participantAlt`/`senderPn` em formato `@s.whatsapp.net` (DMs e grupos). Corrigido bug pre-existente `instance.groupMetadata` → `instance.sock.groupMetadata`.
+- Todos os workarounds 6.7.x mantidos (sent_message_store, session-heal, auto-recovery, watchdog conservador, monitor de saude) — sao defensivos e compativeis.
+
+**Validado no preview**: boot limpo, QR real gerado (handshake WA OK com auth state novo), endpoints `/version`, `/health`, `/instances/health-all`, connect/disconnect funcionando. Envio real depende de conexao pareada — validar em producao apos redeploy.
+
+**Acoes do usuario (producao)**:
+1. Redeploy do microservico no Render (vai instalar baileys 7; conferir Node >= 20 — se houver env `NODE_VERSION` antiga, atualizar para 20+).
+2. Sessoes existentes migram automaticamente; algumas conexoes podem pedir novo QR.
+3. A restricao 463 na conta **expira sozinha** — mesmo apos o upgrade, aguardar a expiracao e testar. Evitar disparos em massa ate o upgrade estar no ar.
+
 ## Roadmap
 - **P1**: Toggle `no_back` por menu no Flowbuilder (esconder "[9] Voltar" via configuracao por nivel/menu).
 - **P2**: Acao "Responder" no `MessageActionsMenu` do CRM (citar mensagem com banner amarelo lateral).
