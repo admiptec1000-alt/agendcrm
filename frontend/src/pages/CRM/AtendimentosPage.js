@@ -894,6 +894,18 @@ const AtendimentosPage = () => {
               </div>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
+              <ConnectionSwitcher
+                ticket={selectedTicket}
+                connections={connections}
+                currentUser={user}
+                onChanged={async () => {
+                  try {
+                    const r = await crmAPI.getTicket(selectedTicket.id);
+                    setSelectedTicket(r.data);
+                  } catch (_) {}
+                  loadData();
+                }}
+              />
               <TicketValueEditor ticket={selectedTicket} onSaved={loadData} />
               <button onClick={() => setShowQuoteEditor(true)} className="p-2 rounded-lg hover:bg-emerald-50 text-emerald-600" title="Novo Orcamento" data-testid="new-quote-from-ticket-btn"><FileText className="w-4 h-4" /></button>
               <button onClick={() => setShowEditContact(true)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title="Editar contato" data-testid="edit-contact-btn"><Pencil className="w-4 h-4" /></button>
@@ -1549,7 +1561,7 @@ const AtendimentosPage = () => {
       )}
 
       {/* Modals */}
-      {showNewTicket && <NewTicketModal onClose={() => setShowNewTicket(false)} onSave={handleCreateTicket} />}
+      {showNewTicket && <NewTicketModal connections={connections} currentUser={user} onClose={() => setShowNewTicket(false)} onSave={handleCreateTicket} />}
       {showSchedule && selectedTicket && (
         <ScheduleMessageModal
           recipient={selectedTicket.customer_phone}
@@ -1655,17 +1667,109 @@ const FilterSelect = ({ label, icon, value, onChange, options, testId }) => (
   </div>
 );
 
-const NewTicketModal = ({ onClose, onSave }) => {
+// === Chat header chip + dropdown that lets the operator switch the
+// WhatsApp connection bound to the current ticket. Only connections the
+// user is allowed to use are visible; only `connected` ones are
+// selectable. If the operator picks a connection they DON'T have access
+// to (impossible from this UI) the backend blocks the PUT.
+const ConnectionSwitcher = ({ ticket, connections = [], currentUser = null, onChanged }) => {
+  const role = (currentUser?.role || '').toLowerCase();
+  const isAdmin = role === 'company_admin' || role === 'super_admin' || (currentUser?.permissions || []).includes('*');
+  const allowedIds = currentUser?.connection_ids || [];
+  const visible = isAdmin
+    ? connections
+    : connections.filter(c => allowedIds.includes(c.id));
+  const current = connections.find(c => c.id === ticket.connection_id);
+  const label = current?.name || current?.phone || 'Sem conexao';
+  const isConnected = (current?.status || '').toLowerCase() === 'connected';
+  const swatch = isConnected ? '#10b981' : '#94a3b8';
+
+  const change = async (newId) => {
+    if (!newId || newId === ticket.connection_id) return;
+    try {
+      await crmAPI.updateTicket(ticket.id, { connection_id: newId });
+      toast.success('Conexao atualizada');
+      onChanged?.();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao trocar conexao');
+    }
+  };
+
+  return (
+    <span
+      className="relative inline-flex items-center"
+      data-testid="ticket-connection-switcher"
+      onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+      title={`Conexao do atendimento: ${label}${current ? '' : ' (nao definida)'}`}
+    >
+      <span
+        className="hidden md:inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full font-semibold truncate max-w-[160px] border"
+        style={{ borderColor: `${swatch}55`, background: `${swatch}14`, color: swatch }}
+      >
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: swatch }} />
+        <Smartphone className="w-3 h-3" />
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="md:hidden inline-flex items-center justify-center w-8 h-8 rounded-lg" style={{ background: `${swatch}14`, color: swatch }}>
+        <Smartphone className="w-4 h-4" />
+      </span>
+      <select
+        value={ticket.connection_id || ''}
+        onChange={e => change(e.target.value)}
+        onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+        className="absolute inset-0 opacity-0 cursor-pointer"
+        aria-label="Trocar conexao do atendimento"
+        data-testid="ticket-connection-select"
+      >
+        {!ticket.connection_id && <option value="">Sem conexao</option>}
+        {visible.length === 0 && <option value="" disabled>Sem conexoes vinculadas a voce</option>}
+        {visible.map(c => {
+          const connected = (c.status || '').toLowerCase() === 'connected';
+          return (
+            <option key={c.id} value={c.id} disabled={!connected}>
+              {connected ? '🟢' : '⚪'} {c.name || c.phone || c.id}{!connected ? ' (desconectada)' : ''}
+            </option>
+          );
+        })}
+      </select>
+    </span>
+  );
+};
+
+const NewTicketModal = ({ onClose, onSave, connections = [], currentUser = null }) => {
   const [mode, setMode] = useState('existing'); // existing | new
   const [form, setForm] = useState({
     customer_name: '', customer_phone: '', customer_email: '',
     description: '', priority: 'medium', channel: 'whatsapp', status: 'aberto',
-    value: 0,
+    value: 0, connection_id: '',
   });
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState(null);
+
+  // Connections the operator is allowed to USE. company_admin sees every
+  // connection in the tenant; everyone else is filtered by their
+  // `connection_ids` whitelist set in the user form. An EMPTY whitelist
+  // for a non-admin is treated as "no access" — they must ask the admin
+  // to grant connections before they can open atendimentos.
+  const role = (currentUser?.role || '').toLowerCase();
+  const isAdmin = role === 'company_admin' || role === 'super_admin' || (currentUser?.permissions || []).includes('*');
+  const allowedIds = currentUser?.connection_ids || [];
+  const visibleConnections = isAdmin
+    ? connections
+    : connections.filter(c => allowedIds.includes(c.id));
+
+  // Auto-pick the first connected one as the default so the operator does
+  // not have to open the dropdown for the common case.
+  useEffect(() => {
+    if (form.connection_id) return;
+    const firstConnected = visibleConnections.find(c => (c.status || '').toLowerCase() === 'connected');
+    if (firstConnected) {
+      setForm(f => ({ ...f, connection_id: firstConnected.id }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleConnections.length]);
 
   // Debounced search
   useEffect(() => {
@@ -1778,13 +1882,33 @@ const NewTicketModal = ({ onClose, onSave }) => {
               />
             </div>
             <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Descricao ou primeira mensagem" className="input-field w-full" rows={2} />
-            <div className="grid grid-cols-2 gap-3">
-              <select value={form.channel} onChange={e => setForm({...form, channel: e.target.value})} className="input-field text-sm w-full">
-                <option value="whatsapp">WhatsApp</option>
-                <option value="instagram">Instagram</option>
-                <option value="web">Web</option>
-                <option value="email">Email</option>
-              </select>
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Conexao WhatsApp</label>
+              {visibleConnections.length === 0 ? (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
+                  Voce nao tem nenhuma conexao vinculada. Peca para o administrador atribuir conexoes ao seu usuario.
+                </p>
+              ) : (
+                <select
+                  value={form.connection_id}
+                  onChange={e => setForm({ ...form, connection_id: e.target.value })}
+                  className="input-field text-sm w-full"
+                  data-testid="new-ticket-connection"
+                >
+                  <option value="">Selecione uma conexao</option>
+                  {visibleConnections.map(c => {
+                    const connected = (c.status || '').toLowerCase() === 'connected';
+                    return (
+                      <option key={c.id} value={c.id} disabled={!connected}>
+                        {connected ? '🟢' : '⚪'} {c.name || c.phone || c.id}{!connected ? ' (desconectada)' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              )}
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Prioridade</label>
               <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})} className="input-field text-sm w-full">
                 <option value="low">Baixa</option>
                 <option value="medium">Media</option>
@@ -1797,13 +1921,29 @@ const NewTicketModal = ({ onClose, onSave }) => {
           <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
           <button
             onClick={() => {
-              if (form.customer_name && form.customer_phone) {
-                onSave({
-                  ...form,
-                  customer_email: form.customer_email?.trim() || null,
-                  value: parseFloat(form.value) || 0,
-                });
-              } else { toast.error('Preencha nome e telefone'); }
+              if (!form.customer_name || !form.customer_phone) {
+                toast.error('Preencha nome e telefone');
+                return;
+              }
+              if (visibleConnections.length === 0) {
+                toast.error('Voce nao possui conexoes vinculadas. Contate o administrador.');
+                return;
+              }
+              if (!form.connection_id) {
+                toast.error('Selecione uma conexao WhatsApp para iniciar o atendimento');
+                return;
+              }
+              const picked = visibleConnections.find(c => c.id === form.connection_id);
+              if (!picked || (picked.status || '').toLowerCase() !== 'connected') {
+                toast.error('A conexao selecionada nao esta conectada');
+                return;
+              }
+              onSave({
+                ...form,
+                channel: 'whatsapp',
+                customer_email: form.customer_email?.trim() || null,
+                value: parseFloat(form.value) || 0,
+              });
             }}
             className="btn-primary text-sm"
             data-testid="save-new-ticket"

@@ -1,3 +1,46 @@
+## 2026-06-15 — Seletor de CONEXAO especifica em Novo Atendimento + chat header ✅
+
+### Pedido
+No modal "Novo Atendimento" trocar o seletor "WhatsApp/Tipo de canal" por um seletor de **conexao especifica** (instancia cadastrada em Conexoes). Mostrar apenas conexoes vinculadas ao usuario (campo `user.connection_ids` definido no cadastro do usuario). Mostrar todas (conectadas + desconectadas), mas so deixar selecionavel as conectadas. No chat de um atendimento ja existente, permitir trocar a conexao para outra que o usuario tenha acesso — se nao tiver, usar "Transferir".
+
+### Implementacao
+**Backend**
+- `models.py`: `TicketCreate` recebe `connection_id: Optional[str]`.
+- `routes/crm_routes.py`:
+  - Novo helper `_ensure_user_can_use_connection(db, user, conn_id, require_connected=True)`. Regras:
+    - Conexao deve pertencer a `company_id` do user.
+    - Nao-admin com `connection_ids` non-empty → conn_id obrigatoriamente na whitelist (senao 403).
+    - Status deve ser `connected` quando `require_connected=True` (400 caso contrario).
+  - `POST /api/crm/tickets` valida e persiste `connection_id`.
+  - `PUT /api/crm/tickets/{id}` re-valida acesso ao trocar `connection_id` para um valor diferente do atual.
+- Comportamento mantido: company_admin / super_admin / perfis com `*` bypassam a whitelist.
+
+**Frontend** (`pages/CRM/AtendimentosPage.js`)
+- `NewTicketModal`:
+  - Recebe `connections` e `currentUser` (passados de `AtendimentosPage`).
+  - Filtra `visibleConnections` pelo `user.connection_ids` (ou todas para admin).
+  - Dropdown "Conexao WhatsApp" (data-testid `new-ticket-connection`). Conexoes desconectadas aparecem mas ficam `disabled`. Auto-seleciona a primeira conectada.
+  - Validacao no submit: sem conexao vinculada → toast e bloqueio. Forca `channel='whatsapp'`.
+- Novo componente `ConnectionSwitcher` no header do chat:
+  - Chip com nome da conexao atual + bolinha verde/cinza (status).
+  - `<select>` sobreposto (transparente) abre menu nativo com conexoes do usuario; desconectadas ficam disabled.
+  - `onChange` -> `PUT /crm/tickets/{id}` { connection_id }; toast de erro 400/403 do backend.
+- data-testid: `ticket-connection-switcher`, `ticket-connection-select`.
+
+### Testes (curl)
+- Sem conexao -> cria OK (`connection_id: null`).
+- conn_id inexistente -> 404 "Conexao nao encontrada".
+- conn_id desconectada -> 400 "A conexao 'X' nao esta conectada".
+- conn_id conectada -> 200, persistida no ticket.
+- PUT trocar para conn desconectada -> 400.
+
+### Pontos abertos / proximos passos
+- O usuario `crm@test.com` na preview nao tem conexoes ativas, entao a validacao final de envio so pode ser feita em producao apos o user redeployar.
+- Aguardando validacao do user para a migracao Baileys 7 (error 463).
+
+---
+
+
 ## 2026-02-28 (NIGHT 7) — 4 pedidos: ZAP shortcut icon, view_all_tickets, watchdog, 30d history sync
 
 ### Pedido 1 — Icone de Respostas Rapidas perto do anexo ✅

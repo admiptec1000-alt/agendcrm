@@ -91,6 +91,47 @@ def _ticket_visibility_filter(user: dict) -> dict:
     }
 
 
+async def _ensure_user_can_use_connection(
+    db: AsyncIOMotorDatabase,
+    user: dict,
+    conn_id: str,
+    require_connected: bool = True,
+) -> dict:
+    """Validates that the user is allowed to use the given WhatsApp
+    connection for opening/transferring a ticket. Rules:
+      - connection must belong to the user's company
+      - non-admin users: connection must be in `user.connection_ids`
+        (when the list is non-empty). An empty list = legacy unrestricted
+        access for backwards compatibility.
+      - when `require_connected=True`, the instance must have
+        `status == "connected"` (UI also filters but server is source of truth).
+    Returns the connection document.
+    """
+    conn = await db.channel_connections.find_one(
+        {"id": conn_id, "company_id": user["company_id"]},
+        {"_id": 0, "id": 1, "status": 1, "name": 1, "provider": 1},
+    )
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    role = (user.get("role") or "").lower()
+    is_admin = role in ("super_admin", "superadmin", "company_admin") or "*" in (user.get("permissions") or [])
+    if not is_admin:
+        allowed = user.get("connection_ids") or []
+        if allowed and conn_id not in allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Voce nao tem acesso a essa conexao. Use Transferir para repassar para outro usuario.",
+            )
+    if require_connected and (conn.get("status") or "").lower() != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail=f'A conexao "{conn.get("name") or conn_id}" nao esta conectada no momento.',
+        )
+    return conn
+
+
+
+
 # Tickets
 @router.get("/tickets")
 async def list_tickets(
@@ -423,6 +464,16 @@ async def create_ticket(
                 },
             )
 
+    # Validate the connection the operator picked: it must belong to the
+    # company, be `connected`, AND be one of the user's allowed_connections
+    # (when the user has any restriction). Company admins bypass the
+    # whitelist but still need a connected instance.
+    conn_doc = None
+    if data.connection_id:
+        conn_doc = await _ensure_user_can_use_connection(
+            db, user, data.connection_id, require_connected=True
+        )
+
     ticket_id = str(uuid.uuid4())
     ticket_number = await next_ticket_number(db, user["company_id"])
     client_id = await find_or_create_client_by_phone(
@@ -440,6 +491,7 @@ async def create_ticket(
         "status": data.status,
         "priority": data.priority,
         "channel": data.channel,
+        "connection_id": (conn_doc or {}).get("id"),
         "description": data.description,
         "assigned_to": None,
         "messages": [],
@@ -470,6 +522,17 @@ async def update_ticket(
         if v is not None or k in CLEARABLE_FIELDS
     }
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    # If the operator is switching the ticket to a different WhatsApp
+    # instance from the chat header, enforce the same access rules used
+    # at creation time. Clearing the connection (explicit null) is
+    # allowed without validation — that just detaches the ticket.
+    if "connection_id" in update_data and update_data["connection_id"]:
+        new_conn_id = update_data["connection_id"]
+        if new_conn_id != ticket.get("connection_id"):
+            await _ensure_user_can_use_connection(
+                db, user, new_conn_id, require_connected=True
+            )
 
     # When the ticket is being closed/cancelled, also clear the bot_paused
     # flag so that if the customer comes back later and a fresh ticket is

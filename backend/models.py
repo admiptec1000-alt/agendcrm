@@ -249,6 +249,10 @@ class TicketCreate(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     value: Optional[float] = 0.0
+    # Operator picks which WhatsApp instance will own the outbound traffic
+    # for this ticket. Must be a connection the user has access to and that
+    # is currently `connected` (enforced by POST /crm/tickets).
+    connection_id: Optional[str] = None
     # When False (default), POST /tickets refuses to create a second open
     # ticket for the same phone and returns 409 with the existing ticket.
     # The operator can override by setting True in the modal.
