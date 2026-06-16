@@ -284,16 +284,19 @@ setInterval(async () => {
   const now = Date.now();
   for (const [msgId, info] of pendingDeliveries.entries()) {
     const age = now - info.sentAt;
-    // 2026-05-27 (v2.1.19) — Three exit/retry paths:
-    //   A) Real failure signal raised (status=0 ERROR) → re-send.
-    //   B) Stuck >STUCK_TIMEOUT_MS AND recipient is likely online (we got
-    //      inbound from them recently) → "Aguardando mensagem" case →
-    //      wipe Signal session + re-send.
-    //   C) Stuck >STUCK_TIMEOUT_MS, no failure signal AND recipient seems
-    //      offline → decay silently (no duplicate).
-    const recipientOnline = isRecipientLikelyOnline(info.instanceId, info.jid);
+    // 2026-06-16 — TIGHTENED to single trigger after the prod incident where
+    // a disk cleanup (find -mtime +30 -delete) wiped many active Signal
+    // sessions. The OLD heuristic `(stale && recipientOnline)` started
+    // firing en-masse because DELIVERY_ACK never arrived for in-flight
+    // messages — the bot ended up sending the same "Selecione..." menu
+    // 3-5 times to each contact. Now we ONLY auto-resend when Baileys
+    // emits the EXPLICIT failure signal (`messages.update status=0
+    // ERROR`). Lost coverage: the silent "Aguardando mensagem" case where
+    // Baileys never reports the error. Acceptable trade-off vs flooding
+    // the customer with duplicates. To re-enable the heuristic, OR
+    // `(stale && recipientOnline)` back into `shouldResend` below.
     const stale = age >= STUCK_TIMEOUT_MS;
-    const shouldResend = info.needsResend || (stale && recipientOnline);
+    const shouldResend = info.needsResend === true;
     if (stale && !shouldResend) {
       pendingDeliveries.delete(msgId);
       continue;
@@ -312,7 +315,7 @@ setInterval(async () => {
     info.retries += 1;
     info.sentAt = Date.now();
     info.needsResend = false;
-    const trigger = info.needsResend ? 'ERROR_SIGNAL' : (recipientOnline ? 'ONLINE_NOACK' : 'TIMEOUT');
+    const trigger = 'ERROR_SIGNAL';
     console.warn(
       `[${info.instanceId}] [AUTO-RECOVERY] msgId=${msgId} jid=${info.jid} ` +
       `trigger=${trigger}; wiping session + re-sending ` +

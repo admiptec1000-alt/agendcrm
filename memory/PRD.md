@@ -1,3 +1,37 @@
+## 2026-06-16 (URGENT HOTFIX) — Bot reenviando "Selecione..." varias vezes em prod ✅
+
+### Cenario
+Apos rodar `find /var/data/auth_sessions -name 'session-*' -mtime +30 -delete` no shell do Render (limpar disco cheio), o bot comecou a reenviar a MESMA mensagem de menu ("Selecione: [1] - Ja sou cliente...") 3-5 vezes para o mesmo cliente em conversas 1-a-1, especialmente quando o cliente demora pra responder. Cliente recebia o menu repetido sem ter interagido.
+
+### Causa raiz (NAO eh loop de fluxo)
+O auto-recovery do microserviço (`whatsapp-service/index.js` linhas 283-322, v2.1.19) tinha 2 gatilhos:
+- **A)** `info.needsResend` = true (Baileys emitiu status=0 ERROR explicito) — legitimo
+- **B)** `stale && recipientOnline` (>90s sem DELIVERY_ACK + cliente online via presence) — heuristico que ASSUMIA "cliente esta vendo Aguardando mensagem"
+
+Quando o usuario apagou as sessions Signal antigas do disco:
+1. Mensagens em voo ficaram sem DELIVERY_ACK (sessao recem destruida)
+2. Cliente online no app → `recipientOnline=true`
+3. Auto-recovery dispara wipe + resend → cria msgId novo → entra na watchlist
+4. Cada novo `sendMessage` do flow_engine entra na watchlist e sofre cascade
+5. Resultado: cliente recebe 3-5 copias do "Selecione..."
+
+### Fix
+`whatsapp-service/index.js`: removido o gatilho `(stale && recipientOnline)`. Agora SO reenvia quando Baileys emite o sinal explicito `messages.update status=0 (ERROR)`. Mensagens stale sem failure signal **decaem silenciosamente** apos 90s — sem duplicata para o cliente.
+
+Trade-off documentado no codigo: perdemos a cobertura automatica do "Aguardando mensagem" silencioso (raro). Para reabilitar, basta re-adicionar `|| (stale && recipientOnline)` na condicao `shouldResend`.
+
+### Acao do usuario
+**REDEPLOY URGENTE** em producao para aplicar o fix.
+
+### Validacao
+- `node --check` pass
+- Microserviço sobe sem erros
+- Cleanup automatico de disco continua rodando (independente do auto-recovery)
+- Dedup de grupos preservado
+
+---
+
+
 ## 2026-06-16 — Grupos com multiplas conexoes (dedup) + cleanup de Signal sessions ✅
 
 ### Pedido / Bug
