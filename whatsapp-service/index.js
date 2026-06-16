@@ -1902,13 +1902,27 @@ app.post('/instances/:id/disconnect', async (req, res) => {
 // Runs automatically every 6h + on-demand via `POST /admin/cleanup-sessions`.
 // All actions are logged with byte counts so operators can confirm
 // disk pressure relief.
-const SESSION_FILE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_FILE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (normal)
 const ORPHAN_DIR_GRACE_MS = 24 * 60 * 60 * 1000;          // 24h
-function cleanupStaleSessions({ dryRun = false } = {}) {
+const DISK_CHECK_INTERVAL_MS = 15 * 60 * 1000;            // 15 min
+const DISK_WARN_PCT = 90;                                 // aggressive cleanup
+const DISK_CRITICAL_PCT = 95;                             // emergency cleanup
+const SESSION_AGE_AGGRESSIVE_MS = 7 * 24 * 60 * 60 * 1000;  // 7d when disk > 90%
+const SESSION_AGE_EMERGENCY_MS = 1 * 24 * 60 * 60 * 1000;   // 1d when disk > 95%
+// In-memory snapshot of the last cleanup run + last disk check so the
+// admin endpoint can report "what was the disk pressure last time we
+// looked" without re-scanning every time it's hit.
+let lastDiskStats = null;
+let lastCleanupStats = null;
+
+function cleanupStaleSessions({ dryRun = false, maxAgeMs = SESSION_FILE_MAX_AGE_MS, reason = 'scheduled' } = {}) {
   const startedAt = Date.now();
   const stats = {
     started_at: new Date(startedAt).toISOString(),
     dry_run: dryRun,
+    reason,
+    max_age_ms: maxAgeMs,
+    max_age_days: Math.round(maxAgeMs / (24 * 60 * 60 * 1000)),
     scanned_dirs: 0,
     removed_files: 0,
     removed_bytes: 0,
@@ -1971,7 +1985,7 @@ function cleanupStaleSessions({ dryRun = false } = {}) {
       const fp = path.join(dirPath, f);
       try {
         const st = fs.statSync(fp);
-        if (Date.now() - st.mtimeMs <= SESSION_FILE_MAX_AGE_MS) continue;
+        if (Date.now() - st.mtimeMs <= maxAgeMs) continue;
         if (!dryRun) {
           fs.unlinkSync(fp);
         }
@@ -1983,31 +1997,114 @@ function cleanupStaleSessions({ dryRun = false } = {}) {
     }
   }
   stats.elapsed_ms = Date.now() - startedAt;
-  console.log(`[session-cleanup] ${dryRun ? '(dry-run) ' : ''}done in ${stats.elapsed_ms}ms ` +
+  console.log(`[session-cleanup] ${dryRun ? '(dry-run) ' : ''}reason=${reason} ` +
+    `max_age=${stats.max_age_days}d done in ${stats.elapsed_ms}ms ` +
     `scanned_dirs=${stats.scanned_dirs} removed_files=${stats.removed_files} ` +
     `removed_orphan_dirs=${stats.removed_orphan_dirs} ` +
     `freed=${(stats.removed_bytes / 1024 / 1024).toFixed(1)}MB ` +
     `errors=${stats.errors.length}`);
+  if (!dryRun) lastCleanupStats = stats;
   return stats;
 }
 
-// Schedule: every 6 hours. First run delayed by 60s so the service can
-// finish booting all connections before we sweep orphan folders.
+// ── Disk-pressure auto-trigger ──────────────────────────────────────────
+// Checks the persistent volume usage every 15min. When it crosses the
+// 90% / 95% thresholds, runs cleanupStaleSessions with TIGHTER age
+// limits (7d / 1d) so the disk doesn't hit ENOSPC during prod traffic.
+// `fs.statfs` is available on Node 18.15+ — falls back silently if not.
+async function checkDiskAndCleanup() {
+  try {
+    const statfs = fs.statfs || fs.promises?.statfs;
+    if (!statfs) {
+      console.warn('[session-cleanup] fs.statfs not available; skipping disk monitor');
+      return null;
+    }
+    const info = await new Promise((resolve, reject) => {
+      fs.statfs(AUTH_DIR, (err, s) => err ? reject(err) : resolve(s));
+    });
+    const blockSize = info.bsize || 4096;
+    const totalBytes = info.blocks * blockSize;
+    const freeBytes = info.bavail * blockSize;
+    const usedBytes = totalBytes - freeBytes;
+    const usedPct = totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0;
+    lastDiskStats = {
+      checked_at: new Date().toISOString(),
+      total_bytes: totalBytes,
+      free_bytes: freeBytes,
+      used_bytes: usedBytes,
+      used_pct: Number(usedPct.toFixed(1)),
+      total_human: `${(totalBytes / 1024 / 1024 / 1024).toFixed(2)} GB`,
+      free_human: `${(freeBytes / 1024 / 1024 / 1024).toFixed(2)} GB`,
+    };
+    // Emergency (>95%): nuke anything older than 1 day.
+    if (usedPct >= DISK_CRITICAL_PCT) {
+      console.warn(`[session-cleanup] DISK CRITICAL ${usedPct.toFixed(1)}% — emergency cleanup (>1d)`);
+      cleanupStaleSessions({ maxAgeMs: SESSION_AGE_EMERGENCY_MS, reason: 'disk_critical' });
+    } else if (usedPct >= DISK_WARN_PCT) {
+      // Aggressive (>90%): 7-day threshold.
+      console.warn(`[session-cleanup] DISK WARN ${usedPct.toFixed(1)}% — aggressive cleanup (>7d)`);
+      cleanupStaleSessions({ maxAgeMs: SESSION_AGE_AGGRESSIVE_MS, reason: 'disk_warn' });
+    } else {
+      console.log(`[session-cleanup] disk OK ${usedPct.toFixed(1)}% used (${lastDiskStats.free_human} free)`);
+    }
+    return lastDiskStats;
+  } catch (e) {
+    console.warn('[session-cleanup] disk check failed:', e.message);
+    return null;
+  }
+}
+
+// Schedule: every 6h normal sweep + every 15min disk-pressure check.
+// First runs delayed by 60s so all connections are booted before we
+// classify their AUTH_DIR folders as orphan.
 setTimeout(() => {
   try { cleanupStaleSessions(); } catch (e) { console.warn('[session-cleanup] initial sweep failed:', e.message); }
+  try { checkDiskAndCleanup(); } catch (e) { console.warn('[session-cleanup] initial disk check failed:', e.message); }
   setInterval(() => {
     try { cleanupStaleSessions(); } catch (e) { console.warn('[session-cleanup] periodic sweep failed:', e.message); }
   }, 6 * 60 * 60 * 1000);
+  setInterval(() => {
+    checkDiskAndCleanup().catch(e => console.warn('[session-cleanup] disk check failed:', e.message));
+  }, DISK_CHECK_INTERVAL_MS);
 }, 60 * 1000);
 
 // Manual trigger so operators can free disk space NOW if Render shows the
 // volume nearing capacity. Supports ?dry_run=1 to preview what would be
-// removed without touching the disk.
+// removed without touching the disk. GET returns the LAST snapshot so the
+// frontend can render a "Saude do Disco" card without forcing a sweep.
 app.post('/admin/cleanup-sessions', async (req, res) => {
   try {
     const dryRun = req.query.dry_run === '1' || req.body?.dry_run === true;
-    const stats = cleanupStaleSessions({ dryRun });
+    const aggressive = req.query.aggressive === '1' || req.body?.aggressive === true;
+    const stats = cleanupStaleSessions({
+      dryRun,
+      maxAgeMs: aggressive ? SESSION_AGE_AGGRESSIVE_MS : SESSION_FILE_MAX_AGE_MS,
+      reason: aggressive ? 'manual_aggressive' : 'manual',
+    });
     res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/admin/disk-status', async (req, res) => {
+  try {
+    // Force-refresh disk stats if `?refresh=1` is passed; otherwise return
+    // the cached snapshot from the last 15min sweep.
+    if (req.query.refresh === '1' || !lastDiskStats) {
+      await checkDiskAndCleanup();
+    }
+    res.json({
+      disk: lastDiskStats,
+      last_cleanup: lastCleanupStats,
+      thresholds: {
+        warn_pct: DISK_WARN_PCT,
+        critical_pct: DISK_CRITICAL_PCT,
+        normal_max_age_days: Math.round(SESSION_FILE_MAX_AGE_MS / 86400000),
+        aggressive_max_age_days: Math.round(SESSION_AGE_AGGRESSIVE_MS / 86400000),
+        emergency_max_age_days: Math.round(SESSION_AGE_EMERGENCY_MS / 86400000),
+      },
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
