@@ -1180,6 +1180,25 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "group_jid": group_jid,
             "status": {"$nin": ["fechado"]},
         })
+        # ── Group owner-connection lock ─────────────────────────────────────
+        # When the same company has 2+ connections that are participants of
+        # the SAME WhatsApp group, every connection receives an INDEPENDENT
+        # webhook for the same message. Without this guard we'd:
+        #   (a) append the same message N times to the ticket
+        #   (b) trigger the default_flow N times → the user's phone would
+        #       receive duplicated bot replies, exactly as reported.
+        # The ticket is locked to the FIRST connection that ever saw the
+        # group; webhooks from any other connection are silently dropped.
+        # Note: `wa_message_id` dedup further below would also catch this,
+        # but it runs AFTER we already loaded ticket state — bailing here
+        # is cheaper and prevents N flow advance attempts.
+        if ticket and ticket.get("connection_id") and ticket["connection_id"] != instance_id:
+            logger.info(
+                f"[webhook/message][group] dropping webhook from non-owner "
+                f"connection={instance_id[:8]} for group_jid={group_jid} "
+                f"(owner={ticket['connection_id'][:8]}, msg_id={msg_id})"
+            )
+            return {"ok": True, "ignored": "group_owned_by_other_connection"}
     else:
         ticket = fallback_ticket or await db.tickets.find_one({
             "company_id": company_id,
@@ -1279,6 +1298,35 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.tickets.insert_one(ticket)
+        # ── Race-safe group ownership election ─────────────────────────
+        # Two webhooks (one per connection that is a member of the same
+        # group) may have BOTH passed the "ticket not found" check above
+        # before either of them inserted. To avoid creating duplicate
+        # group tickets AND triggering the flow multiple times, the
+        # newcomer always re-queries by `group_jid` and keeps only the
+        # OLDEST ticket. The loser deletes its own row and bails before
+        # the default_flow trigger fires.
+        if is_group and group_jid:
+            try:
+                oldest = await db.tickets.find_one(
+                    {
+                        "company_id": company_id,
+                        "group_jid": group_jid,
+                        "channel": "whatsapp_group",
+                        "status": {"$nin": ["fechado"]},
+                    },
+                    sort=[("created_at", 1), ("id", 1)],
+                )
+                if oldest and oldest.get("id") != ticket["id"]:
+                    logger.info(
+                        f"[webhook/message][group] connection={instance_id[:8]} lost owner "
+                        f"race for group_jid={group_jid}; discarding duplicate ticket "
+                        f"{ticket['id']} (owner ticket={oldest['id']})"
+                    )
+                    await db.tickets.delete_one({"id": ticket["id"]})
+                    return {"ok": True, "ignored": "group_duplicate_lost_race"}
+            except Exception as e:
+                logger.warning(f"[webhook/message][group] race-resolve check failed: {e}")
         # Auto-trigger Flowbuilder flow if connection has one configured.
         # Fire-and-forget — flow execution should never block the webhook.
         try:

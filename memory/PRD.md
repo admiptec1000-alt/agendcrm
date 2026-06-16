@@ -1,3 +1,46 @@
+## 2026-06-16 — Grupos com multiplas conexoes (dedup) + cleanup de Signal sessions ✅
+
+### Pedido / Bug
+1. **Grupos duplicando bot**: quando 2+ conexoes do CRM eram participantes do MESMO grupo do WhatsApp, cada conexao recebia um webhook independente. Resultado: o numero da vitima recebia N respostas duplicadas do `default_flow`.
+2. **Mensagens nao chegando + envio falhando**: produção mostrava o erro `ENOSPC: no space left on device, open '/var/data/auth_sessions/...session-XXX.0pn'`. O disco persistente do Render lotou com Signal sessions acumuladas por contato × conexao.
+
+### Implementacao
+
+**P0 — Grupo travado na primeira conexao** (`routes/channels_routes.py /webhook/message`)
+- Antes: cada webhook de grupo da mesma `(company_id, group_jid)` rodava o fluxo. Mesmo com dedup por `wa_message_id`, a CRIACAO do ticket sofria race e disparava o flow N vezes.
+- Agora: 2 guardas em sequencia:
+  1. **Pre-create guard**: se ticket de grupo ja existe e `ticket.connection_id != instance_id` → retorna `ignored: "group_owned_by_other_connection"` IMEDIATAMENTE (sem mensagem, sem flow).
+  2. **Race-resolver pos-insert**: apos `insert_one`, refaz query `find_one({group_jid, channel: "whatsapp_group", status != fechado}, sort=created_at)`. Se o ticket mais antigo NAO eh o que acabamos de criar, a conexao perdeu o race → deletamos nosso ticket e retornamos `ignored: "group_duplicate_lost_race"` antes do trigger.
+- Resultado validado por curl (3 webhooks em paralelo de 3 conexoes diferentes): **1 ticket unico, 1 mensagem, owner travado**.
+
+**P1 — Cleanup de Signal sessions** (`whatsapp-service/index.js`)
+- Nova funcao `cleanupStaleSessions({ dryRun })`:
+  - Para cada `<AUTH_DIR>/<conn_id>/`:
+    - Se a conexao NAO esta em `connections[]` em memoria E `dir.mtime > 24h` → remove a pasta inteira (orfa de conexao deletada).
+    - Caso contrario: deleta `session-*` e `pre-key-*` com `mtime > 30 dias`. NAO toca em `creds.json`, `app-state-*`, `sender-key-*`.
+- Scheduler: 1a passada 60s apos boot, depois a cada 6h.
+- Endpoint manual `POST /admin/cleanup-sessions` (suporta `?dry_run=1`).
+- Retorna stats: `scanned_dirs`, `removed_files`, `removed_orphan_dirs`, `removed_bytes`, `errors`, `elapsed_ms`.
+
+### Testes
+- `curl POST /admin/cleanup-sessions?dry_run=1` → retorna stats sem alterar disco.
+- 3 webhooks em paralelo p/ mesmo `group_jid` de 3 conexoes diferentes → 1 ticket apenas, mensagens dropadas com `ignored: ...`.
+
+### ⚠️ Atencao em PRODUCAO
+- O fix de cleanup NAO recupera o disco ja cheio em prod. O usuario precisa, no painel do Render:
+  - **OPCAO A** (recomendada): aumentar tamanho do Persistent Disk em `Settings → Disks`.
+  - **OPCAO B**: shell do servico Render e rodar:
+    ```bash
+    curl -X POST http://localhost:3002/admin/cleanup-sessions
+    # ou diretamente:
+    find /var/data/auth_sessions -name 'session-*' -mtime +30 -delete
+    find /var/data/auth_sessions -name 'pre-key-*' -mtime +30 -delete
+    ```
+- Apos liberar disco: redeploy para ativar o scheduler automatico.
+
+---
+
+
 ## 2026-06-15 — Seletor de CONEXAO especifica em Novo Atendimento + chat header ✅
 
 ### Pedido

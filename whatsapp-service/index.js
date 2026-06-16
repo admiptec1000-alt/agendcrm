@@ -1879,6 +1879,142 @@ app.post('/instances/:id/disconnect', async (req, res) => {
   }
 });
 
+
+// ─────────────────────────────────────────────────────────────────────────
+// Signal session cleanup (2026-06-15)
+// Baileys persists 1 Signal session JSON file PER contact under
+// `AUTH_DIR/<connection_id>/session-XXX.json`. For tenants with thousands
+// of contacts × multiple connections the directory grows unbounded and
+// eventually fills the Render persistent disk. Symptom: outbound sends
+// fail with `ENOSPC: no space left on device` and inbound messages that
+// need a fresh Signal session are silently dropped — exactly what the
+// operator reports as "cliente respondeu mas nao chegou".
+//
+// Strategy:
+//   • Per active connection: remove `session-*` and `pre-key-*` files
+//     not touched in 30+ days. Baileys renegotiates them on demand.
+//   • Whole AUTH_DIR/<id> dirs whose <id> is NOT an active connection
+//     AND whose mtime is older than 24h get removed entirely (these
+//     are leftover folders from deleted connections).
+//   • NEVER touches `creds.json`, `app-state-*` or `sender-key-*`
+//     (small files, rotating them re-syncs whole address book).
+//
+// Runs automatically every 6h + on-demand via `POST /admin/cleanup-sessions`.
+// All actions are logged with byte counts so operators can confirm
+// disk pressure relief.
+const SESSION_FILE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const ORPHAN_DIR_GRACE_MS = 24 * 60 * 60 * 1000;          // 24h
+function cleanupStaleSessions({ dryRun = false } = {}) {
+  const startedAt = Date.now();
+  const stats = {
+    started_at: new Date(startedAt).toISOString(),
+    dry_run: dryRun,
+    scanned_dirs: 0,
+    removed_files: 0,
+    removed_bytes: 0,
+    removed_orphan_dirs: 0,
+    errors: [],
+  };
+  let entries;
+  try {
+    entries = fs.readdirSync(AUTH_DIR, { withFileTypes: true });
+  } catch (e) {
+    stats.errors.push(`readdir AUTH_DIR failed: ${e.message}`);
+    return stats;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    stats.scanned_dirs += 1;
+    const dirPath = path.join(AUTH_DIR, entry.name);
+    const isActiveConnection = !!connections[entry.name];
+
+    // Orphan-dir sweep: this folder belongs to a connection that the
+    // microservice does NOT currently know about. If old enough, nuke
+    // the entire folder.
+    if (!isActiveConnection) {
+      try {
+        const dirStat = fs.statSync(dirPath);
+        if (Date.now() - dirStat.mtimeMs > ORPHAN_DIR_GRACE_MS) {
+          // Sum sizes for accounting before deletion.
+          let dirBytes = 0;
+          try {
+            for (const f of fs.readdirSync(dirPath)) {
+              try { dirBytes += fs.statSync(path.join(dirPath, f)).size; } catch (_) {}
+            }
+          } catch (_) {}
+          if (!dryRun) {
+            try { fs.rmSync(dirPath, { recursive: true, force: true }); } catch (e) {
+              stats.errors.push(`rmSync orphan ${entry.name}: ${e.message}`);
+              continue;
+            }
+          }
+          stats.removed_orphan_dirs += 1;
+          stats.removed_bytes += dirBytes;
+        }
+      } catch (e) {
+        stats.errors.push(`stat orphan ${entry.name}: ${e.message}`);
+      }
+      continue;
+    }
+
+    // Per-active-connection sweep: rotate stale session-* and pre-key-*
+    // files. `creds.json`, `app-state-*` and `sender-key-*` are preserved.
+    let files;
+    try {
+      files = fs.readdirSync(dirPath);
+    } catch (e) {
+      stats.errors.push(`readdir ${entry.name}: ${e.message}`);
+      continue;
+    }
+    for (const f of files) {
+      if (!f.startsWith('session-') && !f.startsWith('pre-key-')) continue;
+      const fp = path.join(dirPath, f);
+      try {
+        const st = fs.statSync(fp);
+        if (Date.now() - st.mtimeMs <= SESSION_FILE_MAX_AGE_MS) continue;
+        if (!dryRun) {
+          fs.unlinkSync(fp);
+        }
+        stats.removed_files += 1;
+        stats.removed_bytes += st.size;
+      } catch (e) {
+        stats.errors.push(`${entry.name}/${f}: ${e.message}`);
+      }
+    }
+  }
+  stats.elapsed_ms = Date.now() - startedAt;
+  console.log(`[session-cleanup] ${dryRun ? '(dry-run) ' : ''}done in ${stats.elapsed_ms}ms ` +
+    `scanned_dirs=${stats.scanned_dirs} removed_files=${stats.removed_files} ` +
+    `removed_orphan_dirs=${stats.removed_orphan_dirs} ` +
+    `freed=${(stats.removed_bytes / 1024 / 1024).toFixed(1)}MB ` +
+    `errors=${stats.errors.length}`);
+  return stats;
+}
+
+// Schedule: every 6 hours. First run delayed by 60s so the service can
+// finish booting all connections before we sweep orphan folders.
+setTimeout(() => {
+  try { cleanupStaleSessions(); } catch (e) { console.warn('[session-cleanup] initial sweep failed:', e.message); }
+  setInterval(() => {
+    try { cleanupStaleSessions(); } catch (e) { console.warn('[session-cleanup] periodic sweep failed:', e.message); }
+  }, 6 * 60 * 60 * 1000);
+}, 60 * 1000);
+
+// Manual trigger so operators can free disk space NOW if Render shows the
+// volume nearing capacity. Supports ?dry_run=1 to preview what would be
+// removed without touching the disk.
+app.post('/admin/cleanup-sessions', async (req, res) => {
+  try {
+    const dryRun = req.query.dry_run === '1' || req.body?.dry_run === true;
+    const stats = cleanupStaleSessions({ dryRun });
+    res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+
 // 2026-02-16 (Q) — Soft restart: close the WebSocket and recreate the socket
 // from the SAME on-disk auth (multi-file auth state). Unlike /disconnect,
 // this DOES NOT delete the auth folder, so the user does NOT need to
