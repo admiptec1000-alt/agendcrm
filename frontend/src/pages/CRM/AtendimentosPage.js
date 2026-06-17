@@ -1240,6 +1240,29 @@ const AtendimentosPage = () => {
                       </div>
                     </a>
                   )}
+                  {/* Fallback tile for documents whose bytes never made it
+                     into our object storage (download failed at receive
+                     time — usually a Meta CDN timeout). We still render
+                     a tile so the operator sees the filename and knows
+                     to ask the client to resend. 2026-06-17 fix. */}
+                  {!msg.media_url && (msg.media_kind === 'document' || /^\[Documento\]/i.test(String(msg.content || ''))) && (() => {
+                    const fname = msg.media_filename
+                      || String(msg.content || '').replace(/^\[Documento\]\s*/i, '').trim()
+                      || 'Documento';
+                    return (
+                      <div
+                        className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded p-2 mb-1"
+                        data-testid={`chat-document-missing-${msg.id}`}
+                        title="O arquivo nao foi baixado automaticamente. Peca ao cliente para reenviar."
+                      >
+                        <FileText className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-slate-700 truncate">{fname}</p>
+                          <p className="text-[10px] text-amber-700">Arquivo indisponivel — peca para reenviar</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {/* Hide the placeholder content (`[Audio]`/`[Imagem]`/
                      `[Video]`) when the media has already been rendered
                      above — duplicate label is ugly and the operator
@@ -1247,6 +1270,13 @@ const AtendimentosPage = () => {
                   {(() => {
                     const isMediaPlaceholder = msg.media_url && /^\[(Audio|Imagem|Image|Video|Documento|Document)\]$/i.test(String(msg.content || '').trim());
                     if (isMediaPlaceholder) return null;
+                    // If we already rendered a document tile (either real
+                    // or fallback), hide the redundant "[Documento] x.pdf"
+                    // text — the operator already sees the filename inside
+                    // the tile.
+                    const docPrefixed = /^\[Documento\]/i.test(String(msg.content || ''));
+                    if (docPrefixed && (msg.media_kind === 'document' || msg.media_url)) return null;
+                    if (msg.media_kind === 'document' && !msg.media_url && docPrefixed) return null;
                     return <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>;
                   })()}
                   <div className="text-[10px] text-slate-400 text-right mt-1 flex items-center justify-end gap-1">

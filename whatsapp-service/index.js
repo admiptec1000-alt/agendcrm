@@ -1273,20 +1273,30 @@ async function createConnection(instanceId, options = {}) {
 
       // Download media bytes when present so the agent can actually play /
       // view it in the chat (WhatsApp encrypts media; Baileys handles the
-      // decryption transparently via downloadMediaMessage). Size-capped at
-      // 15 MB to protect the webhook round-trip; larger files keep the text
-      // placeholder but skip the base64 payload.
+      // decryption transparently via downloadMediaMessage). Size cap raised
+      // 2026-06-17 from 15MB → 50MB (PDFs from clients often go beyond 15MB
+      // and were silently dropped before). Adds explicit retry x3 with
+      // backoff because the first attempt frequently times out on slow
+      // Meta CDN edges.
       let mediaB64 = null;
+      const MEDIA_SIZE_CAP = 50 * 1024 * 1024;
       if (mediaKind && mediaKind !== 'sticker') {
-        try {
-          const buf = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
-          if (buf && buf.length && buf.length <= 15 * 1024 * 1024) {
-            mediaB64 = buf.toString('base64');
-          } else if (buf) {
-            console.log(`[${instanceId}] media too large (${buf.length} bytes), skipping download`);
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const buf = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+            if (buf && buf.length && buf.length <= MEDIA_SIZE_CAP) {
+              mediaB64 = buf.toString('base64');
+              break;
+            } else if (buf) {
+              console.log(`[${instanceId}] media too large (${buf.length} bytes), skipping download`);
+              break;
+            }
+          } catch (e) {
+            console.error(`[${instanceId}] media download attempt ${attempt}/3 failed for ${mediaKind}/${mediaFilename || '?'}: ${e.message}`);
+            if (attempt < 3) {
+              await new Promise(r => setTimeout(r, 1500 * attempt));
+            }
           }
-        } catch (e) {
-          console.error(`[${instanceId}] media download failed for ${mediaKind}: ${e.message}`);
         }
       }
 
