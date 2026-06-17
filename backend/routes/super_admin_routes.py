@@ -60,6 +60,114 @@ ALL_FEATURES = [
 ]
 
 # === FEATURES ENDPOINT ===
+
+# === Super Admins CRUD ===
+# Lets a logged-in SA manage other SA accounts via the UI so future password
+# resets never require shell access again. The `adm@crm.com` bootstrap row
+# (auto-healed in server.seed_super_admin) is marked with `is_bootstrap=True`
+# and cannot be deleted, only have its password reset.
+class SuperAdminCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class SuperAdminUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None  # only set when admin wants to reset it
+
+def _strip_super_admin(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if k not in ("_id", "password")}
+
+@router.get("/super-admins")
+async def list_super_admins(
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    docs = await db.super_admins.find({}, {"_id": 0, "password": 0}).sort("created_at", 1).to_list(500)
+    return docs
+
+@router.post("/super-admins", status_code=201)
+async def create_super_admin(
+    data: SuperAdminCreate,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    email = (data.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="E-mail invalido")
+    if not data.password or len(data.password) < 4:
+        raise HTTPException(status_code=400, detail="A senha precisa ter pelo menos 4 caracteres")
+    existing = await db.super_admins.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=409, detail="Ja existe um super admin com esse e-mail")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": (data.name or "").strip() or email.split("@")[0],
+        "email": email,
+        "password": get_password_hash(data.password),
+        "role": "super_admin",
+        "is_bootstrap": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.super_admins.insert_one(doc)
+    return _strip_super_admin(doc)
+
+@router.put("/super-admins/{admin_id}")
+async def update_super_admin(
+    admin_id: str,
+    data: SuperAdminUpdate,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    target = await db.super_admins.find_one({"id": admin_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Super admin nao encontrado")
+    payload = {}
+    if data.name is not None:
+        payload["name"] = data.name.strip()
+    if data.email is not None:
+        new_email = data.email.strip().lower()
+        if not new_email or "@" not in new_email:
+            raise HTTPException(status_code=400, detail="E-mail invalido")
+        if new_email != target["email"]:
+            dup = await db.super_admins.find_one({"email": new_email})
+            if dup:
+                raise HTTPException(status_code=409, detail="Esse e-mail ja esta em uso")
+            payload["email"] = new_email
+    if data.password:
+        if len(data.password) < 4:
+            raise HTTPException(status_code=400, detail="A senha precisa ter pelo menos 4 caracteres")
+        payload["password"] = get_password_hash(data.password)
+    if not payload:
+        return _strip_super_admin(target)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.super_admins.update_one({"id": admin_id}, {"$set": payload})
+    updated = await db.super_admins.find_one({"id": admin_id})
+    return _strip_super_admin(updated)
+
+@router.delete("/super-admins/{admin_id}", status_code=204)
+async def delete_super_admin(
+    admin_id: str,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    target = await db.super_admins.find_one({"id": admin_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Super admin nao encontrado")
+    if target.get("is_bootstrap"):
+        raise HTTPException(status_code=400, detail="O super admin bootstrap nao pode ser excluido")
+    if target.get("id") == user.get("id"):
+        raise HTTPException(status_code=400, detail="Voce nao pode excluir a si mesmo")
+    total = await db.super_admins.count_documents({})
+    if total <= 1:
+        raise HTTPException(status_code=400, detail="Nao eh possivel excluir o ultimo super admin")
+    await db.super_admins.delete_one({"id": admin_id})
+    return None
+
+
 @router.get("/features")
 async def get_all_features(user: dict = Depends(require_super_admin)):
     return ALL_FEATURES

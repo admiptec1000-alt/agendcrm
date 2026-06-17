@@ -90,7 +90,12 @@ export const superAdminAPI = {
   getGlobalIndoor: () => api.get('/super-admin/indoor-global'),
   updateGlobalIndoor: (data) => api.put('/super-admin/indoor-global', data),
   getCompanyIndoor: (companyId) => api.get(`/super-admin/companies/${companyId}/indoor`),
-  updateCompanyIndoor: (companyId, data) => api.put(`/super-admin/companies/${companyId}/indoor`, data)
+  updateCompanyIndoor: (companyId, data) => api.put(`/super-admin/companies/${companyId}/indoor`, data),
+  // Super Admin users CRUD
+  listSuperAdmins: () => api.get('/super-admin/super-admins'),
+  createSuperAdmin: (data) => api.post('/super-admin/super-admins', data),
+  updateSuperAdmin: (id, data) => api.put(`/super-admin/super-admins/${id}`, data),
+  deleteSuperAdmin: (id) => api.delete(`/super-admin/super-admins/${id}`)
 };
 
 // CRM API

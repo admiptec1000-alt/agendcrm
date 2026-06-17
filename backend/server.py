@@ -107,19 +107,59 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def seed_super_admin(db):
-    """Create default super admin if not exists."""
-    existing = await db.super_admins.find_one({"email": "admin@agentcrm.com"})
+    """Ensure the bootstrap super admin account exists and has the canonical
+    password. This runs on every startup so the operator always has a
+    guaranteed way in even if a previous password edit went sideways
+    (e.g. the MongoDB Viewer ate characters from a bcrypt hash).
+
+    Behavior:
+      - If `adm@crm.com` does not exist: insert it with the canonical pwd.
+      - If it exists AND the current password does NOT validate against the
+        canonical plaintext: **reset it**. This rescues operators who
+        clobbered the hash by editing the DB directly.
+      - If it already validates: leave it alone (operator may have changed
+        it later via the new Super Admins CRUD UI — we honor that).
+
+    Other super_admin records created via the CRUD UI are NEVER touched.
+    """
+    BOOTSTRAP_EMAIL = "adm@crm.com"
+    BOOTSTRAP_PWD = "a@1234567"
+    from auth import verify_password
+    existing = await db.super_admins.find_one({"email": BOOTSTRAP_EMAIL})
     if not existing:
-        logger.info("Creating default super admin...")
+        logger.info(f"Creating bootstrap super admin {BOOTSTRAP_EMAIL}...")
+        now = datetime.now(timezone.utc).isoformat()
         await db.super_admins.insert_one({
             "id": str(uuid.uuid4()),
             "name": "Super Admin",
-            "email": "admin@agentcrm.com",
-            "password": get_password_hash("admin123"),
+            "email": BOOTSTRAP_EMAIL,
+            "password": get_password_hash(BOOTSTRAP_PWD),
             "role": "super_admin",
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "is_bootstrap": True,  # marker so the UI shows a lock badge
+            "created_at": now,
+            "updated_at": now,
         })
-        logger.info("Super admin created: admin@agentcrm.com / admin123")
+        logger.info(f"Bootstrap super admin created: {BOOTSTRAP_EMAIL} / {BOOTSTRAP_PWD}")
+        return
+    # Heal corrupted hashes (the symptom that brought us here): if the
+    # stored hash does NOT match the canonical password, force-reset.
+    try:
+        ok = verify_password(BOOTSTRAP_PWD, existing.get("password") or "")
+    except Exception:
+        ok = False
+    if not ok:
+        await db.super_admins.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {
+                "password": get_password_hash(BOOTSTRAP_PWD),
+                "is_bootstrap": True,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        logger.warning(
+            f"Bootstrap super admin password healed: {BOOTSTRAP_EMAIL} -> default '{BOOTSTRAP_PWD}'."
+            " Change it via the Super Admins panel after login."
+        )
 
 
 async def seed_business_types(db):

@@ -26,6 +26,7 @@ import { EditableComboBox } from '../../components/EditableComboBox';
 import { ConexoesPage } from '../Company/Dashboard';
 import AtendimentosPage from '../CRM/AtendimentosPage';
 import BillingReminderPanel from '../../components/BillingReminderPanel';
+import SuperAdminsPanel from './SuperAdminsPanel';
 
 const iconMap = {
   Building, Scissors, Stethoscope, Headphones, LayoutGrid,
@@ -140,6 +141,7 @@ const SuperAdminDashboard = () => {
     { key: 'indoor', label: 'Indoor', icon: Tv },
     { key: 'my-panel', label: 'Meu Painel', icon: ShieldCheck },
     { key: 'sgp-repair', label: 'Reparo SGP', icon: Wrench },
+    { key: 'super-admins', label: 'Super Admins', icon: ShieldCheck },
     { key: 'settings', label: 'Configuracoes', icon: Settings },
   ];
 
@@ -159,7 +161,7 @@ const SuperAdminDashboard = () => {
   const featureMap = Object.fromEntries(
     saFeatures.map(f => [f.feature_key, !!f.enabled])
   );
-  const ALWAYS_VISIBLE = new Set(['business-types', 'settings']);
+  const ALWAYS_VISIBLE = new Set(['business-types', 'super-admins', 'settings']);
   // Group children visibility follows the SAME feature-flag rules as parents.
   const filterChildren = (children) =>
     (children || []).filter(c =>
@@ -407,6 +409,7 @@ const SuperAdminDashboard = () => {
             </div>
           )}
           {activeTab === 'sgp-repair' && <SgpRepairTab companies={companies} />}
+          {activeTab === 'super-admins' && <SuperAdminsPanel />}
           {activeTab === 'sa-report-companies' && <CompanyReportPanel />}
           {activeTab === 'sa-meta-api' && <MetaAPIControlPanel companies={companies} />}
           {activeTab === 'settings' && <SettingsTab companies={companies} />}
