@@ -41,19 +41,39 @@ async def super_admin_login(
     credentials: LoginRequest,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    admin = await db.super_admins.find_one({"email": credentials.email}, {"_id": 0})
-    
-    if not admin or not verify_password(credentials.password, admin["password"]):
+    # Aggressive normalization to immunize against typing/copy-paste edge cases:
+    # the form sometimes ships emails with a trailing space or wrong case from
+    # browser autocomplete. Backend now treats `' Adm@CRM.com '` the same way
+    # as the canonical `adm@crm.com`. Senha NUNCA eh normalizada — quem digita
+    # eh quem decide.
+    raw_email = (credentials.email or "")
+    email_norm = raw_email.strip().lower()
+    admin = await db.super_admins.find_one({"email": email_norm}, {"_id": 0})
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    if not admin:
+        _log.warning(
+            f"[super-admin/login] FALHA email_nao_encontrado raw={raw_email!r} norm={email_norm!r}"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email ou senha incorretos"
         )
-    
+    if not verify_password(credentials.password, admin["password"]):
+        _log.warning(
+            f"[super-admin/login] FALHA senha_invalida email={email_norm} "
+            f"pwd_len={len(credentials.password or '')} "
+            f"hash_prefix={(admin.get('password') or '')[:7]!r} "
+            f"hash_len={len(admin.get('password') or '')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Email ou senha incorretos"
+        )
+    _log.info(f"[super-admin/login] OK email={email_norm}")
     token_data = {"sub": admin["id"], "type": "super_admin", "role": "super_admin"}
     access_token = create_access_token(token_data)
-    
     user_data = {k: v for k, v in admin.items() if k != "password"}
-    
     return TokenResponse(
         access_token=access_token,
         user=user_data
