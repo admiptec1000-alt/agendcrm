@@ -53,6 +53,20 @@ api_router = APIRouter(prefix="/api")
 async def root():
     return {"message": "AgentCRM & Booking System API", "status": "running"}
 
+# Build/version probe — lets the operator confirm which build of the
+# backend is running in production without needing shell access. The
+# `super_admin_login_self_heal` flag is True on builds that include the
+# bootstrap auto-heal at login time (2026-06-17 fix). If this returns
+# `false` on prod after a deploy, the deploy did NOT include the latest
+# code and the operator should retrigger it.
+@api_router.get("/_buildinfo")
+async def buildinfo():
+    return {
+        "build": "2026-06-17-bootstrap-self-heal",
+        "super_admin_login_self_heal": True,
+        "bootstrap_email": "adm@crm.com",
+    }
+
 # Include all routers
 api_router.include_router(auth_router)
 api_router.include_router(super_admin_router)

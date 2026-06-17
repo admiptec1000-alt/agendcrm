@@ -51,6 +51,61 @@ async def super_admin_login(
     admin = await db.super_admins.find_one({"email": email_norm}, {"_id": 0})
     import logging as _logging
     _log = _logging.getLogger(__name__)
+
+    # ── Bootstrap self-heal at login time ────────────────────────────────────
+    # If the operator is submitting the canonical bootstrap credentials and
+    # the stored hash refuses to validate (because someone edited it raw in
+    # MongoDB Viewer and corrupted it, OR the startup seed never ran), the
+    # backend repairs the hash IN-PLACE and grants this login. This is the
+    # last line of defense against "I cannot get into the panel". The reset
+    # ONLY fires when the SUBMITTED password is exactly the canonical one —
+    # any other guess still fails normally.
+    BOOTSTRAP_EMAIL = "adm@crm.com"
+    BOOTSTRAP_PWD = "a@1234567"
+    if email_norm == BOOTSTRAP_EMAIL and (credentials.password or "") == BOOTSTRAP_PWD:
+        from auth import get_password_hash as _hash
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if not admin:
+            _log.warning(
+                "[super-admin/login] BOOTSTRAP self-heal: bootstrap admin missing, recreating"
+            )
+            new_id = str(uuid.uuid4())
+            doc = {
+                "id": new_id,
+                "name": "Super Admin",
+                "email": BOOTSTRAP_EMAIL,
+                "password": _hash(BOOTSTRAP_PWD),
+                "role": "super_admin",
+                "is_bootstrap": True,
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            }
+            await db.super_admins.insert_one(doc)
+            admin = {k: v for k, v in doc.items() if k != "_id"}
+        else:
+            try:
+                ok = verify_password(BOOTSTRAP_PWD, admin.get("password") or "")
+            except Exception:
+                ok = False
+            if not ok:
+                _log.warning(
+                    f"[super-admin/login] BOOTSTRAP self-heal: hash for {BOOTSTRAP_EMAIL} "
+                    f"was invalid (len={len(admin.get('password') or '')}), resetting now"
+                )
+                new_hash = _hash(BOOTSTRAP_PWD)
+                await db.super_admins.update_one(
+                    {"email": BOOTSTRAP_EMAIL},
+                    {"$set": {
+                        "password": new_hash,
+                        "is_bootstrap": True,
+                        "updated_at": now_iso,
+                    }},
+                )
+                admin["password"] = new_hash
+                admin["is_bootstrap"] = True
+        # Fall through into the regular verify path below — by now `admin`
+        # has a fresh hash matching the canonical password, so it WILL pass.
+
     if not admin:
         _log.warning(
             f"[super-admin/login] FALHA email_nao_encontrado raw={raw_email!r} norm={email_norm!r}"
