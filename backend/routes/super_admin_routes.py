@@ -595,7 +595,7 @@ async def resend_transaction_reminder(
     """Manually re-fire the reminder for a given Lancamento. Uses the
     current global template + the parcela's stored fields. Logged as
     `kind='manual_resend'` in `billing_reminder_history`. 2026-02-16 (L)."""
-    from scheduler import _get_sa_system_connection, _send_billing_reminder, _render_reminder
+    from scheduler import _get_sa_system_connection, _send_billing_reminder, _render_reminder, _record_billing_reminder_in_ticket
     txn = await db.super_admin_transactions.find_one(
         {"id": transaction_id}, {"_id": 0}
     )
@@ -668,6 +668,20 @@ async def resend_transaction_reminder(
     if sa_conn_id and phone and text:
         try:
             sent, error = await _send_billing_reminder(sa_conn_id, phone, text)
+            if sent:
+                # Mirror the message in the SA Atendimentos so the operator
+                # has full context (2026-06-17 fix).
+                _company = await db.companies.find_one(
+                    {"id": txn.get("company_id")}, {"_id": 0, "name": 1, "responsible_name": 1}
+                ) or {}
+                await _record_billing_reminder_in_ticket(
+                    db,
+                    phone=phone,
+                    text=text,
+                    customer_name=_company.get("name") or _company.get("responsible_name"),
+                    connection_id=sa_conn_id,
+                    transaction_id=transaction_id,
+                )
         except Exception as e:
             sent = False
             error = f"exception: {str(e)[:200]}"
@@ -713,6 +727,18 @@ async def resend_transaction_reminder(
     else:
         try:
             pix_ok, pix_err = await _send_billing_reminder(sa_conn_id, phone, pix_key)
+            if pix_ok:
+                _company = await db.companies.find_one(
+                    {"id": txn.get("company_id")}, {"_id": 0, "name": 1, "responsible_name": 1}
+                ) or {}
+                await _record_billing_reminder_in_ticket(
+                    db,
+                    phone=phone,
+                    text=pix_key,
+                    customer_name=_company.get("name") or _company.get("responsible_name"),
+                    connection_id=sa_conn_id,
+                    transaction_id=transaction_id,
+                )
             _logger.info(
                 f"[pix-followup] sent txn={transaction_id} ok={pix_ok} err={pix_err}"
             )

@@ -162,6 +162,20 @@ async def create_appointment(
         professional = await db.professionals.find_one({"id": data.professional_id, "company_id": user["company_id"]})
         if not professional:
             raise HTTPException(status_code=404, detail="Profissional nao encontrado")
+        # Same conflict check as for normal appointments — barbers were
+        # creating multiple blocks at the same time by clicking twice.
+        block_conflict = await db.appointments.find_one({
+            "company_id": user["company_id"],
+            "professional_id": data.professional_id,
+            "date": data.date,
+            "time": data.time,
+            "status": {"$nin": ["cancelado", "cancelled"]},
+        }, {"_id": 0, "id": 1})
+        if block_conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Ja existe um agendamento ou bloqueio neste horario para esse profissional."
+            )
         appointment_id = str(uuid.uuid4())
         appointment = {
             "id": appointment_id,
@@ -197,6 +211,25 @@ async def create_appointment(
     professional = await db.professionals.find_one({"id": data.professional_id, "company_id": user["company_id"]})
     if not professional:
         raise HTTPException(status_code=404, detail="Profissional nao encontrado")
+
+    # 2026-06-17 — Slot conflict pre-check. The bug report shows the
+    # "save" button hanging while WhatsApp notification is in flight; the
+    # operator clicks again, and a NEW row is inserted on every click.
+    # Block exact-time conflicts here BEFORE doing any of the expensive
+    # work. The frontend disables the button, but the server is the only
+    # source of truth.
+    conflict = await db.appointments.find_one({
+        "company_id": user["company_id"],
+        "professional_id": data.professional_id,
+        "date": data.date,
+        "time": data.time,
+        "status": {"$nin": ["cancelado", "cancelled"]},
+    }, {"_id": 0, "id": 1, "customer_name": 1})
+    if conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ja existe um agendamento neste horario para esse profissional ({conflict.get('customer_name') or 'cliente'})."
+        )
 
     # Check client subscription (active + not expired + has credits for this service)
     # Only debits credits when the caller explicitly opted-in via use_subscription=True
@@ -303,23 +336,31 @@ async def create_appointment(
     }
     await db.appointments.insert_one(appointment)
 
-    # Send WhatsApp welcome notification (fire-and-forget).
-    # IMPORTANT: status stays PENDENTE until the client clicks the confirm link
-    # included in the reminder message.
-    try:
-        from notifications import notify_appointment_created
-        import os as _os
-        base_url = _os.environ.get("FRONTEND_PUBLIC_URL", "")
-        page = await db.booking_pages.find_one({"company_id": user["company_id"]}, {"_id": 0, "slug": 1})
-        slug = (page or {}).get("slug", "")
-        sent = await notify_appointment_created(db, user["company_id"], appointment, base_url, slug)
-        if sent:
-            await db.appointments.update_one(
-                {"id": appointment_id},
-                {"$set": {"whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
-            )
-    except Exception as e:
-        logger.warning(f"Failed to notify appointment {appointment_id}: {e}")
+    # 2026-06-17 — WhatsApp notification moved off the critical path.
+    # The previous "fire-and-forget" was actually awaiting the send and
+    # could hang the request for 10+s when Baileys was slow, which made
+    # the frontend's "Salvar" button appear stuck; operators clicked
+    # again and N duplicate rows were inserted. The slot conflict guard
+    # above catches the duplicates, but moving the await out of the
+    # request keeps the UI responsive too. The notification still
+    # records `whatsapp_notified_at` when it succeeds.
+    async def _background_notify(appt_id: str, appt: dict):
+        try:
+            from notifications import notify_appointment_created
+            import os as _os
+            base_url = _os.environ.get("FRONTEND_PUBLIC_URL", "")
+            page = await db.booking_pages.find_one({"company_id": appt["company_id"]}, {"_id": 0, "slug": 1})
+            slug = (page or {}).get("slug", "")
+            sent = await notify_appointment_created(db, appt["company_id"], appt, base_url, slug)
+            if sent:
+                await db.appointments.update_one(
+                    {"id": appt_id},
+                    {"$set": {"whatsapp_notified_at": datetime.now(timezone.utc).isoformat()}}
+                )
+        except Exception as e:
+            logger.warning(f"Failed to notify appointment {appt_id}: {e}")
+    import asyncio as _asyncio
+    _asyncio.create_task(_background_notify(appointment_id, appointment))
 
     # Update/create client record
     existing_client = await db.clients.find_one({"company_id": user["company_id"], "phone": data.customer_phone})

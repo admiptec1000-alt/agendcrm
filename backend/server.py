@@ -571,6 +571,38 @@ async def startup_event():
             name="company_connection_status",
             background=True,
         )
+        # 2026-06-17 — additional indexes for new code paths + frequent
+        # queries that were doing collscans on large tenants (>5k rows).
+        await db.tickets.create_index(
+            [("company_id", 1), ("group_jid", 1), ("status", 1)],
+            name="company_group_status",
+            background=True,
+            sparse=True,  # only group tickets have group_jid set
+        )
+        await db.tickets.create_index(
+            [("company_id", 1), ("channel", 1), ("status", 1)],
+            name="company_channel_status",
+            background=True,
+        )
+        # Appointments — used by Agenda views (daily/weekly) and overlap
+        # checks. Without these, opening a barber's day was scanning every
+        # appointment in the tenant (>3s on big shops).
+        await db.appointments.create_index(
+            [("company_id", 1), ("professional_id", 1), ("date", 1), ("time", 1)],
+            name="company_prof_date_time",
+            background=True,
+        )
+        await db.appointments.create_index(
+            [("company_id", 1), ("date", 1)],
+            name="company_date",
+            background=True,
+        )
+        # find_or_create_client_by_phone (called on every inbound WA msg)
+        await db.clients.create_index(
+            [("company_id", 1), ("phone", 1)],
+            name="company_phone",
+            background=True,
+        )
         # Histograma de mensagens raramente eh necessario na listagem; o
         # projection `messages: 0` ja basta. Index extra nao ajuda.
         logger.info("[startup] tickets indexes ensured")

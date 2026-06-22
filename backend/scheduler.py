@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import httpx
 
@@ -288,6 +289,105 @@ async def _get_sa_system_connection(db):
         },
         {"_id": 0, "id": 1, "company_id": 1},
     )
+
+
+async def _record_billing_reminder_in_ticket(
+    db,
+    *,
+    phone: str,
+    text: str,
+    customer_name: Optional[str] = None,
+    connection_id: Optional[str] = None,
+    transaction_id: Optional[str] = None,
+):
+    """2026-06-17 — When a billing reminder is sent from the Financeiro Admin
+    panel, also persist it as an outbound message in a ticket living under
+    the SA system_company. This way the operator (super admin) can see
+    every conversation with each company-responsible phone in the
+    Atendimentos screen, and continue the chat naturally if the
+    responsible replies. Without this hook, the reminder was sent over
+    WhatsApp but never appeared anywhere in the CRM (the `from_me` echo
+    on the webhook is skipped for unknown phones to avoid orphaning).
+    """
+    if not phone:
+        return
+    try:
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        now_iso = _dt.now(_tz.utc).isoformat()
+        existing = await db.tickets.find_one(
+            {
+                "company_id": SA_SYSTEM_COMPANY_ID,
+                "customer_phone": phone,
+                "status": {"$nin": ["fechado"]},
+            },
+            {"_id": 0, "id": 1},
+        )
+        msg = {
+            "id": str(_uuid.uuid4()),
+            "sender_type": "agent",
+            "sender_name": "Financeiro Admin",
+            "content": text,
+            "channel": "whatsapp",
+            "created_at": now_iso,
+            "delivery_status": "sent",
+            "source": "billing_reminder",
+            "transaction_id": transaction_id,
+        }
+        if existing:
+            await db.tickets.update_one(
+                {"id": existing["id"]},
+                {
+                    "$push": {"messages": msg},
+                    "$set": {
+                        "updated_at": now_iso,
+                        "last_message_at": now_iso,
+                        "last_message_preview": (text or "")[:140],
+                    },
+                },
+            )
+            return
+        # No open ticket — create one bound to the SA system company so it
+        # shows in the SA's own Atendimentos screen.
+        # ticket_number: use a monotonic counter scoped to SA system_company.
+        # Avoid importing crm_routes here to keep scheduler standalone — use
+        # a simple find+increment via system_settings doc.
+        counter_doc = await db.system_settings.find_one_and_update(
+            {"key": f"ticket_seq:{SA_SYSTEM_COMPANY_ID}"},
+            {"$inc": {"value": 1}},
+            upsert=True,
+            return_document=True,
+        )
+        ticket_number = int((counter_doc or {}).get("value") or 1)
+        ticket = {
+            "id": str(_uuid.uuid4()),
+            "ticket_number": ticket_number,
+            "company_id": SA_SYSTEM_COMPANY_ID,
+            "client_id": None,
+            "customer_name": customer_name or phone,
+            "customer_phone": phone,
+            "customer_email": None,
+            "status": "aberto",
+            "priority": "medium",
+            "channel": "whatsapp",
+            "connection_id": connection_id,
+            "description": "Cobranca/lembrete financeiro",
+            "assigned_to": None,
+            "messages": [msg],
+            "tags": ["financeiro"],
+            "value": 0.0,
+            "last_message_at": now_iso,
+            "last_message_preview": (text or "")[:140],
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        await db.tickets.insert_one(ticket)
+        logger.info(
+            f"[billing-reminder] created SA ticket #{ticket_number} phone={phone}"
+        )
+    except Exception as e:
+        # Never block the send pipeline for a logging side-effect.
+        logger.warning(f"[billing-reminder] failed to record in ticket: {e}")
 
 
 async def _send_billing_reminder(conn_id: str, phone: str, text: str):
@@ -601,6 +701,15 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                 if wants_whatsapp and sa_conn_id and phone and text:
                     try:
                         sent_ok, error = await _send_billing_reminder(sa_conn_id, phone, text)
+                        if sent_ok:
+                            await _record_billing_reminder_in_ticket(
+                                db,
+                                phone=phone,
+                                text=text,
+                                customer_name=c.get("name") or c.get("responsible_name"),
+                                connection_id=sa_conn_id,
+                                transaction_id=txn["id"],
+                            )
                     except Exception as e:
                         sent_ok = False
                         error = f"exception: {str(e)[:200]}"
@@ -640,6 +749,15 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                             pix_ok, pix_err = await _send_billing_reminder(
                                 sa_conn_id, phone, pix_key
                             )
+                            if pix_ok:
+                                await _record_billing_reminder_in_ticket(
+                                    db,
+                                    phone=phone,
+                                    text=pix_key,
+                                    customer_name=c.get("name") or c.get("responsible_name"),
+                                    connection_id=sa_conn_id,
+                                    transaction_id=txn["id"],
+                                )
                             logger.info(f"[scheduler] pix-followup sent txn={txn['id']} ok={pix_ok} err={pix_err}")
                             await db.billing_reminder_history.insert_one({
                                 "id": str(__import__('uuid').uuid4()),

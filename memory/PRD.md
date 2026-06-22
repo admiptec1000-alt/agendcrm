@@ -1,3 +1,48 @@
+## 2026-06-22 — Fix triplo: lembrete financeiro, agendamento duplicado, indices ✅
+
+### Problemas reportados
+1. **Lembrete financeiro nao gera atendimento** no SA: SA envia lembrete via Financeiro Admin, mensagem chega no WhatsApp do responsavel, mas nao aparece em lugar nenhum no CRM do SA.
+2. **Agendamento duplicado**: barbeiro clica "Salvar", UI trava, ele clica de novo, sistema salva varios agendamentos no mesmo horario.
+3. **Performance**: lentidao geral em listagens com volume.
+
+### Implementacao
+
+**Fix 1 — Lembrete vira atendimento** (`scheduler.py` + `routes/super_admin_routes.py`):
+- Novo helper `_record_billing_reminder_in_ticket(db, phone, text, customer_name, connection_id, transaction_id)`:
+  - Find-or-create de ticket por `(company_id=SA_SYSTEM_COMPANY_ID, customer_phone)` com `status != fechado`
+  - Append `messages[]` com `source: 'billing_reminder'`, `sender_type: 'agent'`
+  - Atualiza `last_message_at`, `last_message_preview`, `updated_at`
+  - `ticket_number` gerado via `system_settings` counter para nao colidir com numeração das empresas
+- Chamado em: scheduler auto-send (mensagem principal + Pix follow-up) E manual resend (super_admin_finance_routes)
+- Resultado: 1 ticket por empresa-responsavel; multiplas mensagens viram historico no MESMO atendimento (validado com curl)
+
+**Fix 2 — Conflito de slot em agendamento** (`routes/scheduling_routes.py`):
+- Pre-check em `POST /scheduling/appointments`: `find_one({company_id, professional_id, date, time, status != cancelado})` → 409 "Ja existe um agendamento neste horario para esse profissional ({nome})"
+- Mesmo guard no path de "bloqueio de agenda" (`is_block=true`)
+- **Critico**: notificacao WhatsApp movida de `await` sincrono para `asyncio.create_task` (era 10s+ esperando Baileys, "travando" a UI). Resposta agora retorna em <500ms
+- Frontend ja tinha `disabled={saving}`, mas com resposta rapida o problema visivel deixa de existir
+- Validado curl: 1a chamada → 200 OK; 2a chamada mesmo slot → 409
+
+**Fix 3 — Indices criticos** (`server.py`):
+- `tickets`: + `(company_id, group_jid, status)` sparse (group dedup), `(company_id, channel, status)`
+- `appointments`: `(company_id, professional_id, date, time)`, `(company_id, date)`
+- `clients`: `(company_id, phone)` (usado em todo inbound WA)
+- Todos `background=True`, sem downtime
+
+### Validacao
+- Curl 1a/2a chamada de agendamento → OK + 409 correto
+- Script Python invoca `_record_billing_reminder_in_ticket` 2x → 1 ticket com 2 mensagens
+- `list_indexes()` mostra os 12 indices criados
+
+### Acao do user
+Save to GitHub + Deploy no Render para producao.
+
+### Importante
+Lembretes ja enviados ANTES desse fix nao tem ticket (nao da pra retroagir). Apos o deploy, todo novo lembrete enviado vai aparecer em Atendimentos do SA system_company.
+
+---
+
+
 ## 2026-06-16 (URGENT HOTFIX) — Bot reenviando "Selecione..." varias vezes em prod ✅
 
 ### Cenario
