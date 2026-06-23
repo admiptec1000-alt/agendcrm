@@ -7207,6 +7207,21 @@ const PerfilAcessoForm = ({ profile, features, onSave }) => {
               />
               <span className="text-sm text-slate-700">Ver todos os tickets/atendimentos <span className="text-[10px] text-slate-500">(sem este, ve apenas os atribuidos a si e os da sua fila/conexao)</span></span>
             </label>
+            {/* 2026-06-23 — view_connection_tickets: middle-ground between
+                the per-agent scope and full view_all_tickets. With this
+                permission, the operator sees EVERY conversation that
+                flows through any WhatsApp connection in their
+                `connection_ids`, even if another agent already claimed
+                the ticket. Useful for shift leaders / quality auditors. */}
+            <label className="flex items-center gap-2 p-2 rounded-lg hover:bg-amber-50 cursor-pointer" data-testid="permission-toggle-view-connection-tickets">
+              <input
+                type="checkbox"
+                checked={form.permissions.includes('view_connection_tickets')}
+                onChange={() => toggle('view_connection_tickets')}
+                className="w-4 h-4 rounded text-primary"
+              />
+              <span className="text-sm text-slate-700">Ver TODAS as conversas das conexoes que participa <span className="text-[10px] text-slate-500">(inclui tickets ja atribuidos a outros operadores, desde que a conexao do ticket esteja vinculada ao usuario)</span></span>
+            </label>
           </div>
         </div>
       </div>

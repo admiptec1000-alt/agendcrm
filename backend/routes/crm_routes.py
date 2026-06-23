@@ -31,6 +31,11 @@ def _user_can_view_all_tickets(user: dict) -> bool:
           the user). These act as the public pool — when another user
           claims one (POST /tickets/{id}/claim) it disappears from
           everyone else's listing.
+      (c) when `view_connection_tickets` permission is set, ALSO every
+          ticket whose `connection_id` is in `user.connection_ids` —
+          regardless of who claimed it. This is what an "ops shift
+          leader" wants: see every conversation that flows through
+          their assigned WhatsApp instances.
     The permission is granted by either:
       - role (super_admin / company_admin) — implicit
       - explicit `view_all_tickets` flag in `user.permissions` (per-user toggle)
@@ -41,6 +46,18 @@ def _user_can_view_all_tickets(user: dict) -> bool:
         return True
     perms = user.get("permissions") or []
     return "*" in perms or "view_all_tickets" in perms
+
+
+def _user_can_view_connection_tickets(user: dict) -> bool:
+    """True if the user has the `view_connection_tickets` permission. Used
+    by `_ticket_visibility_filter` to expand the visibility scope to ALL
+    tickets bound to the user's allowed connections (including those
+    already assigned to another agent). Implicit for admins / wildcard.
+    """
+    if _user_can_view_all_tickets(user):
+        return True
+    perms = user.get("permissions") or []
+    return "view_connection_tickets" in perms
 
 
 def _ticket_visibility_filter(user: dict) -> dict:
@@ -58,6 +75,14 @@ def _ticket_visibility_filter(user: dict) -> dict:
     uid = user["id"]
     allowed_queues = user.get("allowed_queue_ids") or []
     allowed_conns = user.get("connection_ids") or []
+
+    # `view_connection_tickets` — operator sees every ticket bound to one
+    # of their connections, even when another agent owns it. This is the
+    # "ops/shift lead" scope: still NOT global view, but wide within the
+    # set of WhatsApp instances they participate in.
+    extra_visibility = []
+    if _user_can_view_connection_tickets(user) and allowed_conns:
+        extra_visibility.append({"connection_id": {"$in": allowed_conns}})
 
     unassigned_match = [
         {"assigned_to": None},
@@ -87,6 +112,7 @@ def _ticket_visibility_filter(user: dict) -> dict:
         "$or": [
             {"assigned_to": uid},
             pool_clause,
+            *extra_visibility,
         ]
     }
 
