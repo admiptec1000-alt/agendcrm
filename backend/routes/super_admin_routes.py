@@ -173,6 +173,67 @@ async def get_all_features(user: dict = Depends(require_super_admin)):
     return ALL_FEATURES
 
 # === DASHBOARD ===
+
+
+@router.post("/restore-auto-closed-tickets")
+async def restore_auto_closed_tickets(
+    body: dict,
+    user: dict = Depends(require_super_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-06-23 — Recovery endpoint para reverter tickets fechados pelo
+    auto-close (`closed_reason='auto_timeout'`). Usado quando o admin
+    ativou um valor agressivo de `ticket_auto_close_hours` e perdeu
+    muitos atendimentos. Aceita:
+      - company_id (string) OR company_name (regex case-insensitive)
+      - since_iso (opcional, ISO 8601). Default: meia-noite UTC do dia atual.
+    Retorna `restored_count`.
+    """
+    company_id = (body or {}).get("company_id")
+    company_name = (body or {}).get("company_name")
+    since_iso = (body or {}).get("since_iso")
+    if not company_id and not company_name:
+        raise HTTPException(400, "Informe company_id ou company_name")
+    company = None
+    if company_id:
+        company = await db.companies.find_one({"id": company_id}, {"_id": 0, "id": 1, "name": 1})
+    else:
+        company = await db.companies.find_one(
+            {"name": {"$regex": company_name, "$options": "i"}},
+            {"_id": 0, "id": 1, "name": 1},
+        )
+    if not company:
+        raise HTTPException(404, "Empresa nao encontrada")
+    if not since_iso:
+        midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        since_iso = midnight.isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.tickets.update_many(
+        {
+            "company_id": company["id"],
+            "status": "fechado",
+            "closed_reason": "auto_timeout",
+            "closed_at": {"$gte": since_iso},
+        },
+        {
+            "$set": {
+                "status": "aberto",
+                "updated_at": now_iso,
+                "reopened_at": now_iso,
+                "reopened_by": user["id"],
+                "reopened_via": "bulk_restore",
+            },
+            "$unset": {"closed_at": "", "closed_reason": ""},
+        },
+    )
+    return {
+        "company_id": company["id"],
+        "company_name": company["name"],
+        "since_iso": since_iso,
+        "restored_count": res.modified_count,
+    }
+
+
 @router.get("/dashboard")
 async def get_dashboard(
     user: dict = Depends(require_super_admin),

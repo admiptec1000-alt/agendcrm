@@ -215,6 +215,14 @@ async def list_tickets(
         # so every ticket in the company appeared under it.
         query["status"] = {"$nin": ["fechado", "cancelado"]}
         query["channel"] = "whatsapp_group"
+    elif tab == "encerrados":
+        # 2026-06-23 — Operators asked for a tab where they can audit
+        # tickets the auto-close swept, OR ones they fechado manualmente,
+        # and reopen the ones that were closed by mistake. The list still
+        # respects the visibility filter applied below, so an operator
+        # only sees closed tickets that they would have been able to see
+        # while still open.
+        query["status"] = "fechado"
 
     # Visibility: non-admin users only see their own tickets + the
     # unassigned-aberto pool. Admins / view_all_tickets see everything.
@@ -275,6 +283,7 @@ async def get_ticket_counts(
         "$or": [{"assigned_to": None}, {"assigned_to": {"$exists": False}}, {"assigned_to": ""}],
     })
     grupos = await db.tickets.count_documents({**base, "status": {"$nin": ["fechado", "cancelado"]}, "channel": "whatsapp_group"})
+    encerrados = await db.tickets.count_documents({**base, "status": "fechado"})
     total = await db.tickets.count_documents(base)
     # 2026-02-28 — Adicionado contador "fechados_hoje" pro card da
     # tela Inicio. Usa `closed_at` quando disponivel, senao `updated_at`.
@@ -288,7 +297,7 @@ async def get_ticket_counts(
             {"closed_at": {"$exists": False}, "updated_at": {"$regex": f"^{today_prefix}"}},
         ],
     })
-    return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "total": total, "fechados_hoje": fechados_hoje}
+    return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "encerrados": encerrados, "total": total, "fechados_hoje": fechados_hoje}
 
 
 @router.post("/tickets/open-for-client")
@@ -766,6 +775,48 @@ async def release_ticket(
         {"$set": {"assigned_to": None, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     return await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
+
+
+@router.post("/tickets/{ticket_id}/reopen")
+async def reopen_ticket(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Reopens a closed (`fechado`) ticket. Clears the close metadata
+    (`closed_at`, `closed_reason`) and flips status back to `aberto` so it
+    surfaces again in the regular Atendimentos listings. The operator
+    needs the same visibility rights they would for any other ticket of
+    that connection — i.e., either it was assigned to them, or they have
+    `view_all_tickets` / `view_connection_tickets`, or it lives in a
+    connection/queue they participate in.
+    """
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": user["company_id"]})
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    if (ticket.get("status") or "") != "fechado":
+        raise HTTPException(400, "O ticket nao esta fechado")
+    # Apply the same visibility guard so operators dont reopen tickets
+    # they shouldn't even see.
+    vis = _ticket_visibility_filter(user)
+    if vis:
+        in_scope = await db.tickets.find_one(
+            {"id": ticket_id, "company_id": user["company_id"], **vis},
+            {"_id": 0, "id": 1},
+        )
+        if not in_scope:
+            raise HTTPException(403, "Voce nao tem permissao para reabrir esse atendimento")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.tickets.update_one(
+        {"id": ticket_id},
+        {
+            "$set": {"status": "aberto", "updated_at": now_iso, "reopened_at": now_iso, "reopened_by": user["id"]},
+            "$unset": {"closed_at": "", "closed_reason": ""},
+        },
+    )
+    return await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
+
+
 
 
 @router.post("/tickets/{ticket_id}/resolve-lid")

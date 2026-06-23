@@ -1,3 +1,51 @@
+## 2026-06-23 — Recuperar tickets auto-fechados + Aba "Encerrados" ✅
+
+### Contexto / Bug
+User comercial2@incinera.com.br ativou `ticket_auto_close_hours=72` na producao e perdeu varios atendimentos. O parametro de fato fecha tickets sem interacao a >=72h (`updated_at < cutoff`), mas a janela curta encerrou muito atendimento legitimo.
+
+### Implementacao
+
+**A. Endpoint de restauracao** (`super_admin_routes.py`):
+- `POST /api/super-admin/restore-auto-closed-tickets` body `{company_id|company_name, since_iso?}` (default = meia-noite UTC de hoje)
+- Reverte tickets onde `closed_reason='auto_timeout'` E `closed_at >= since_iso`
+- Volta `status='aberto'`, marca `reopened_at`, `reopened_by`, `reopened_via='bulk_restore'`, limpa `closed_at`/`closed_reason`
+- Retorna `restored_count`
+- **NAO toca** em tickets fechados manualmente (sem `closed_reason`) nem fora da janela
+
+**B. Reopen individual** (`crm_routes.py`):
+- `POST /api/crm/tickets/{id}/reopen`
+- Valida que esta fechado e que user tem visibilidade (mesmo filtro que list)
+- Volta `status='aberto'`, marca `reopened_at`, `reopened_by`
+- 400 se ja aberto, 403 se sem permissao
+
+**C. Tab "Encerrados"** (`AtendimentosPage.js` + `crm_routes.py`):
+- Novo `tab=encerrados` em GET /tickets: filtra `status='fechado'` respeitando `_ticket_visibility_filter`
+- Contador `encerrados` em GET /tickets/counts
+- Frontend: novo `TabButton` "Encerrados" ao lado de Grupos
+- No header do chat, quando ticket esta `fechado`, o botao "Fechar" eh trocado por **"Reabrir"** (pill verde com refresh icon)
+- Empty state customizado para a aba
+
+### Validacao via curl/Python
+- **Restore**: 4 tickets seed (2 auto_timeout hoje, 1 manual hoje, 1 auto_timeout ontem) → endpoint reabriu APENAS os 2 corretos
+- **Counts**: `encerrados: 107 → 106` apos reopen individual
+- **Reopen**: status 200 + ticket vira `aberto`; 2a chamada retorna 400 "O ticket nao esta fechado"
+
+### Acao do user
+1. Save to GitHub + Deploy
+2. Apos o deploy, restaurar os tickets de incinera com:
+   ```bash
+   curl -X POST https://agentcrm.8ip.com.br/api/super-admin/restore-auto-closed-tickets \
+     -H "Authorization: Bearer <SA_TOKEN>" \
+     -H "Content-Type: application/json" \
+     -d '{"company_name":"incinera"}'
+   ```
+   (Logue como SA em `/admin-login` e pegue o token do localStorage `Application -> Local Storage -> access_token`)
+- A resposta vai mostrar `restored_count`. Confirme com o operador.
+- Para o futuro, os operadores podem usar a aba **"Encerrados"** + botao **"Reabrir"** para resgatar tickets caso a caso, sem precisar de SA.
+
+---
+
+
 ## 2026-06-23 — Falha de envio + modal de saude da conexao em "loop" ✅
 
 ### Problemas reportados

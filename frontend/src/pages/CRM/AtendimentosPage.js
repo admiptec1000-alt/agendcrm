@@ -138,7 +138,7 @@ const TicketValueEditor = ({ ticket, onSaved }) => {
 const AtendimentosPage = () => {
   const { user } = useAuth();
   const [tickets, setTickets] = useState([]);
-  const [counts, setCounts] = useState({ atendendo: 0, aguardando: 0, grupos: 0, total: 0 });
+  const [counts, setCounts] = useState({ atendendo: 0, aguardando: 0, grupos: 0, encerrados: 0, total: 0 });
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showContactInfo, setShowContactInfo] = useState(false);
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -686,6 +686,7 @@ const AtendimentosPage = () => {
           <TabButton active={activeTab === 'atendendo'} onClick={() => setActiveTab('atendendo')} label="Atendendo" count={counts.atendendo} testId="tab-atendendo" />
           <TabButton active={activeTab === 'aguardando'} onClick={() => setActiveTab('aguardando')} label="Aguardando" count={counts.aguardando} testId="tab-aguardando" />
           <TabButton active={activeTab === 'grupos'} onClick={() => setActiveTab('grupos')} label="Grupos" count={counts.grupos} testId="tab-grupos" />
+          <TabButton active={activeTab === 'encerrados'} onClick={() => setActiveTab('encerrados')} label="Encerrados" count={counts.encerrados} testId="tab-encerrados" />
         </div>
 
         {/* List */}
@@ -696,10 +697,12 @@ const AtendimentosPage = () => {
                 <MessageSquare className="w-7 h-7 text-primary" />
               </div>
               <p className="text-sm font-semibold text-slate-700">Tudo em dia!</p>
-              <p className="text-xs text-slate-400 mt-1">{activeTab === 'atendendo' ? 'Nenhum atendimento em andamento' : activeTab === 'aguardando' ? 'Nenhum cliente aguardando' : 'Nenhuma conversa de grupo'}</p>
-              <button onClick={() => setShowNewTicket(true)} className="mt-4 text-xs font-semibold text-primary hover:underline">
-                + Iniciar novo atendimento
-              </button>
+              <p className="text-xs text-slate-400 mt-1">{activeTab === 'atendendo' ? 'Nenhum atendimento em andamento' : activeTab === 'aguardando' ? 'Nenhum cliente aguardando' : activeTab === 'encerrados' ? 'Nenhum atendimento encerrado' : 'Nenhuma conversa de grupo'}</p>
+              {activeTab !== 'encerrados' && (
+                <button onClick={() => setShowNewTicket(true)} className="mt-4 text-xs font-semibold text-primary hover:underline">
+                  + Iniciar novo atendimento
+                </button>
+              )}
             </div>
           )}
           {tickets.map((ticket) => {
@@ -918,6 +921,30 @@ const AtendimentosPage = () => {
               >
                 <ArrowRightLeft className="w-4 h-4" />
               </button>
+              {/* When the ticket is closed, show a "Reabrir" pill instead
+                  of the regular close/transfer actions. Operators land on
+                  closed tickets from the "Encerrados" tab and need to be
+                  able to revive them in one click. 2026-06-23. */}
+              {selectedTicket.status === 'fechado' ? (
+                <button
+                  onClick={async () => {
+                    try {
+                      await crmAPI.reopenTicket(selectedTicket.id);
+                      toast.success('Atendimento reaberto');
+                      const r = await crmAPI.getTicket(selectedTicket.id);
+                      setSelectedTicket(r.data);
+                      loadData();
+                    } catch (e) {
+                      toast.error(e?.response?.data?.detail || 'Falha ao reabrir');
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                  data-testid="reopen-ticket-btn"
+                  title="Reabrir atendimento"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Reabrir
+                </button>
+              ) : (
               <button
                 onClick={async () => {
                   if (!window.confirm('Fechar este atendimento?')) return;
@@ -934,6 +961,7 @@ const AtendimentosPage = () => {
               >
                 <Ban className="w-4 h-4" />
               </button>
+              )}
               <div className="relative">
                 <button
                   onClick={() => setShowMoreMenu(v => !v)}

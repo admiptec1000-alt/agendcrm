@@ -127,6 +127,7 @@ export const crmAPI = {
   reorderKanbanColumns: (columnIds) => api.post('/crm/kanban-columns/reorder', { column_ids: columnIds }),
   claimTicket: (ticketId) => api.post(`/crm/tickets/${ticketId}/claim`),
   releaseTicket: (ticketId) => api.post(`/crm/tickets/${ticketId}/release`),
+  reopenTicket: (ticketId) => api.post(`/crm/tickets/${ticketId}/reopen`),
   // AI chat (legacy)
   aiChat: (data) => api.post('/crm/ai/chat', data),
   // Quick Responses + Campaigns
