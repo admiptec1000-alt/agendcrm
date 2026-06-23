@@ -168,6 +168,12 @@ async def list_tickets(
     channel: str = None,
     search: str = None,
     tab: str = None,
+    # 2026-06-25 — Sidebar filters now go SERVER-side so counts and list
+    # always agree even when the company has >1000 tickets (the client
+    # used to filter the truncated page locally → "Tab=46 / list=0").
+    connection_id: str = None,
+    queue_id: str = None,
+    tag: str = None,
     limit: int = 1000,
     offset: int = 0,
 ):
@@ -178,6 +184,16 @@ async def list_tickets(
         query["assigned_to"] = assigned_to
     if channel:
         query["channel"] = channel
+    if connection_id:
+        query["connection_id"] = connection_id
+    if queue_id:
+        query["queue_id"] = queue_id
+    if tag:
+        # Match either by tag name or by tag id (tickets store either
+        # depending on how they were created).
+        td = await db.tags.find_one({"company_id": user["company_id"], "name": tag}, {"_id": 0, "id": 1})
+        tag_values = [tag] + ([td["id"]] if (td and td.get("id")) else [])
+        query["tags"] = {"$in": tag_values}
     if search:
         query["$or"] = [
             {"customer_name": {"$regex": search, "$options": "i"}},
@@ -269,19 +285,64 @@ async def list_tickets(
 @router.get("/tickets/counts")
 async def get_ticket_counts(
     user: dict = Depends(get_current_user),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    channel: str = None,
+    search: str = None,
+    queue_id: str = None,
+    connection_id: str = None,
+    assigned_to: str = None,
+    tag: str = None,
 ):
+    """2026-06-24 — Contadores agora respeitam os MESMOS filtros que a
+    listagem em /tickets (channel, search, queue_id, connection_id,
+    assigned_to, tag). Antes os badges mostravam totais brutos
+    (ex.: Aguardando=48) enquanto a lista filtrada exibia 0 resultados
+    → operador confundido. Agora os numeros refletem fielmente a
+    quantidade real visivel naquele perfil com aqueles filtros."""
     company_id = user["company_id"]
     base = {"company_id": company_id}
     vis = _ticket_visibility_filter(user)
     if vis:
         base = {**base, **vis}
-    atendendo = await db.tickets.count_documents({**base, "status": {"$nin": ["fechado", "cancelado"]}, "assigned_to": {"$nin": [None, ""]}, "channel": {"$ne": "whatsapp_group"}})
-    aguardando = await db.tickets.count_documents({
+    # Apply listing-level filters so the counts always match the rows
+    # the operator can actually see.
+    if channel:
+        base["channel"] = channel
+    if queue_id:
+        base["queue_id"] = queue_id
+    if connection_id:
+        base["connection_id"] = connection_id
+    if assigned_to:
+        base["assigned_to"] = assigned_to
+    if tag:
+        td = await db.tags.find_one({"company_id": company_id, "name": tag}, {"_id": 0, "id": 1})
+        tag_values = [tag] + ([td["id"]] if (td and td.get("id")) else [])
+        base["tags"] = {"$in": tag_values}
+    if search:
+        rx = {"$regex": search, "$options": "i"}
+        base["$or"] = [
+            {"customer_name": rx},
+            {"customer_phone": rx},
+            {"description": rx},
+            {"messages.content": rx},
+        ]
+    atendendo = await db.tickets.count_documents({**base, "status": {"$nin": ["fechado", "cancelado"]}, "assigned_to": {"$nin": [None, ""]}, "channel": {"$ne": "whatsapp_group"}} if not channel else {**base, "status": {"$nin": ["fechado", "cancelado"]}, "assigned_to": {"$nin": [None, ""]}})
+    aguardando_q = {
         **base, "status": {"$nin": ["fechado", "cancelado"]},
-        "channel": {"$ne": "whatsapp_group"},
         "$or": [{"assigned_to": None}, {"assigned_to": {"$exists": False}}, {"assigned_to": ""}],
-    })
+    }
+    if not channel:
+        aguardando_q["channel"] = {"$ne": "whatsapp_group"}
+    # When `search` is set, base already has $or for text — adding another
+    # $or would break Mongo. Wrap previous $or under $and for combination.
+    if "$or" in base and base.get("$or") != aguardando_q.get("$or"):
+        # Two distinct $or clauses → combine via $and
+        aguardando_q = {k: v for k, v in aguardando_q.items() if k != "$or"}
+        aguardando_q["$and"] = [
+            {"$or": base["$or"]},
+            {"$or": [{"assigned_to": None}, {"assigned_to": {"$exists": False}}, {"assigned_to": ""}]},
+        ]
+    aguardando = await db.tickets.count_documents(aguardando_q)
     grupos = await db.tickets.count_documents({**base, "status": {"$nin": ["fechado", "cancelado"]}, "channel": "whatsapp_group"})
     encerrados = await db.tickets.count_documents({**base, "status": "fechado"})
     total = await db.tickets.count_documents(base)

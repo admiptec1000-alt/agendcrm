@@ -103,7 +103,7 @@ export const crmAPI = {
   // Tickets
   getTickets: (params) => api.get('/crm/tickets', { params }),
   getTicket: (id) => api.get(`/crm/tickets/${id}`),
-  getTicketCounts: () => api.get('/crm/tickets/counts'),
+  getTicketCounts: (params) => api.get('/crm/tickets/counts', { params }),
   createTicket: (data) => api.post('/crm/tickets', data),
   updateTicket: (id, data) => api.put(`/crm/tickets/${id}`, data),
   getTicketClient: (id) => api.get(`/crm/tickets/${id}/client`),

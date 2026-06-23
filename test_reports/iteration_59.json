@@ -1,0 +1,66 @@
+{
+  "iteration": 59,
+  "summary": "Validated 3 changes for iteration 59 — (1) GET /api/crm/tickets/counts now respects the same filters as GET /api/crm/tickets and counts match list per tab; (2) Filters with no matches return 0 across all tabs and empty list; (3) POST /api/super-admin/restore-auto-closed-tickets still returns expected shape and is still super-admin-only. Frontend Atendimentos page renders the 4 new segmented tabs (count large on top, label uppercase below, indigo/amber/teal/slate tints) with counts matching the list (Encerrados=106 matches 106 cards; other tabs=0 show 'Selecione uma conversa' empty state). Super Admin > Empresas shows a yellow Wrench-icon button (tools-company-<id>) per row; clicking opens company-tools-modal with action select + datetime-local + tools-run-btn that calls the endpoint and shows '0 ticket(s) restaurados desde …' confirmation. Backend pytest 10/10 PASSED.",
+  "test_credentials_present": true,
+  "backend_results": {
+    "pytest_files": ["/app/backend/tests/test_iteration_59.py (10/10 passed)"],
+    "junit_xml": "/app/test_reports/pytest/iteration_59.xml",
+    "passed": 10,
+    "failed": 0,
+    "total": 10,
+    "coverage_areas": [
+      "GET /api/crm/tickets/counts parity with /tickets per tab (no filters)",
+      "GET /api/crm/tickets/counts parity with channel=whatsapp filter",
+      "GET /api/crm/tickets/counts parity with search filter",
+      "Counts return 0 across all tabs for non-existent connection_id, queue_id, assigned_to and tag (and /tickets list returns 0 items in lockstep)",
+      "POST /api/super-admin/restore-auto-closed-tickets returns {restored_count:int, company_id, company_name, since_iso}",
+      "Restore endpoint requires body (company_id/company_name) -> 400 when empty",
+      "Restore endpoint enforces super-admin auth (CRM token -> 401/403)"
+    ]
+  },
+  "whatsapp_node_check": {
+    "service_url": "http://localhost:3002",
+    "GET /": "404 (no root handler — expected)",
+    "POST /instances/foo/connect (empty body)": "200",
+    "POST /instances/foo/connect (sync_history=30)": "200",
+    "note": "Endpoint accepts optional sync_history body and responds 200/JSON as required. Full QR flow not tested (needs real device)."
+  },
+  "frontend_results": {
+    "method": "playwright e2e on REACT_APP_BACKEND_URL",
+    "crm_atendimentos": {
+      "tabs_visible": ["tab-atendendo", "tab-aguardando", "tab-grupos", "tab-encerrados"],
+      "layout": "Count large on top + uppercase label below — confirmed visually",
+      "counts_from_ui": {"atendendo": 0, "aguardando": 0, "grupos": 0, "encerrados": 106},
+      "counts_vs_list": "All 4 tabs match — Encerrados badge=106, conversation cards=106; other 3 tabs show 0 + empty state",
+      "tints_observed": "indigo (atendendo), amber (aguardando), teal (grupos), slate (encerrados) — active tab applies bg-<color>-50 + border-<color>-500"
+    },
+    "super_admin_tools": {
+      "yellow_wrench_button": "5 buttons found with data-testid=tools-company-<id>, class includes text-amber-600/hover:bg-amber-50",
+      "modal_open": "company-tools-modal renders with action selector + datetime-local input + tools-run-btn",
+      "endpoint_call": "POST /api/super-admin/restore-auto-closed-tickets returned 200 with body {company_id, company_name, since_iso, restored_count:0}",
+      "ui_feedback": "Toast '0 tickets restaurados' + in-modal '0 ticket(s) restaurados desde 2099-01-01T00:00:00.000Z' shown"
+    }
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "critical_code_review_comments": [
+    "crm_routes.list_tickets and get_ticket_counts now share the same filter set (channel/search/queue_id/connection_id/assigned_to/tag) and visibility — parity verified empirically (10 tests).",
+    "get_ticket_counts handles the $or collision between search filter and Aguardando $or via $and wrap — correct.",
+    "super_admin_routes.restore_auto_closed_tickets returns all expected keys; since_iso default = midnight UTC today; uses {$set, $unset} atomically — safe for re-runs.",
+    "Dashboard.js CompanyToolsModal correctly sends ISO string (toISOString) for since_iso and surfaces the restored_count in toast + inline message.",
+    "Minor: Tools modal currently only supports one action; the action select has no other options yet. Add more entries as the recovery toolkit grows.",
+    "Minor: The empty-state UI (Tudo em dia!) was not displayed on Atendendo/Aguardando/Grupos in current tenant — instead the right pane simply shows 'Selecione uma conversa' because the list pane was empty without any 'all good' element. Consider showing 'Tudo em dia!' explicitly when filtered list is empty but other tabs have content."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_59.py",
+    "/app/test_reports/pytest/iteration_59.xml"
+  ],
+  "action_items": [],
+  "updated_files": ["/app/backend/tests/test_iteration_59.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (both CRM tabs and Super Admin Tools modal verified end-to-end)"},
+  "test_credentials": "CRM Admin crm@test.com / crm123 at /crmtest/login ; Super Admin admin@agentcrm.com / admin123 at /admin-login",
+  "seed_data_creation": "None — used existing tenant data + a far-future since_iso (2099-01-01) for the restore endpoint to guarantee restored_count=0 with no side effects.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 3 iter59 changes are working as specified. Backend regression test lives at /app/backend/tests/test_iteration_59.py (10 tests). Frontend data-testids verified: tab-atendendo, tab-aguardando, tab-grupos, tab-encerrados, tools-company-<companyId>, company-tools-modal, tools-run-btn. Note the empty-state copy on the tabs is not 'Tudo em dia!' on the current tenant — it just shows 'Selecione uma conversa' on the right pane while the list pane is blank; not a regression but a UX improvement opportunity."
+}

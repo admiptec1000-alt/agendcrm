@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import {
   Search, Plus, X, Phone, Mail, Send, Paperclip, Smile, Mic,
   Clock, MessageSquare, ChevronLeft, MoreVertical,
-  Tag, User, Hash, ArrowRightLeft, Ban, CheckCircle2, Check,
+  Tag, User, Users, Hash, ArrowRightLeft, Ban, CheckCircle2, Check,
   Smartphone, DollarSign, CalendarClock,
   Pencil, Trash2, AlertCircle, Filter, RefreshCw, Bot, FileText, Zap
 } from 'lucide-react';
@@ -196,24 +196,29 @@ const AtendimentosPage = () => {
 
   const loadData = useCallback(async () => {
     try {
+      // 2026-06-25 — Sidebar filters now go SERVER-side (same payload
+      // for /tickets and /tickets/counts) so badges and the rendered
+      // list always agree, even on tenants with >1000 tickets where
+      // client-side filtering used to drop rows after server truncation.
       const params = { tab: activeTab };
       if (channelFilter) params.channel = channelFilter;
       if (searchTerm) params.search = searchTerm;
+      if (filterConnId) params.connection_id = filterConnId;
+      if (filterQueueId) params.queue_id = filterQueueId;
+      if (filterUserId) params.assigned_to = filterUserId;
+      if (filterTagName) params.tag = filterTagName;
+      const countParams = {};
+      if (channelFilter) countParams.channel = channelFilter;
+      if (searchTerm) countParams.search = searchTerm;
+      if (filterConnId) countParams.connection_id = filterConnId;
+      if (filterQueueId) countParams.queue_id = filterQueueId;
+      if (filterUserId) countParams.assigned_to = filterUserId;
+      if (filterTagName) countParams.tag = filterTagName;
       const [ticketsRes, countsRes] = await Promise.all([
         crmAPI.getTickets(params),
-        crmAPI.getTicketCounts()
+        crmAPI.getTicketCounts(countParams)
       ]);
-      let list = ticketsRes.data;
-      // Client-side filtering for connection/user/tag/queue
-      if (filterConnId) list = list.filter(t => t.connection_id === filterConnId);
-      if (filterUserId) list = list.filter(t => t.assigned_to === filterUserId);
-      if (filterTagName) {
-        // Filter by tag name OR by id (tickets store either depending on how they were created)
-        const td = allTags.find(t => t.name === filterTagName);
-        list = list.filter(t => (t.tags || []).some(x => x === filterTagName || (td && x === td.id)));
-      }
-      if (filterQueueId) list = list.filter(t => t.queue_id === filterQueueId);
-      setTickets(list);
+      setTickets(ticketsRes.data);
       setCounts(countsRes.data);
     } catch (e) { /* silent */ }
   }, [activeTab, channelFilter, searchTerm, filterConnId, filterUserId, filterTagName, filterQueueId]);
@@ -681,12 +686,13 @@ const AtendimentosPage = () => {
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex border-b border-slate-200">
-          <TabButton active={activeTab === 'atendendo'} onClick={() => setActiveTab('atendendo')} label="Atendendo" count={counts.atendendo} testId="tab-atendendo" />
-          <TabButton active={activeTab === 'aguardando'} onClick={() => setActiveTab('aguardando')} label="Aguardando" count={counts.aguardando} testId="tab-aguardando" />
-          <TabButton active={activeTab === 'grupos'} onClick={() => setActiveTab('grupos')} label="Grupos" count={counts.grupos} testId="tab-grupos" />
-          <TabButton active={activeTab === 'encerrados'} onClick={() => setActiveTab('encerrados')} label="Encerrados" count={counts.encerrados} testId="tab-encerrados" />
+        {/* Tabs (segmented). 2026-06-24 — modernizado para 4 tabs com
+            icon + label + count em 2 linhas, melhor para counts altos. */}
+        <div className="flex gap-1 px-2 pt-2 pb-1 bg-slate-50 border-b border-slate-200">
+          <TabButton active={activeTab === 'atendendo'} onClick={() => setActiveTab('atendendo')} label="Atendendo" count={counts.atendendo} testId="tab-atendendo" tint="indigo" />
+          <TabButton active={activeTab === 'aguardando'} onClick={() => setActiveTab('aguardando')} label="Aguardando" count={counts.aguardando} testId="tab-aguardando" tint="amber" />
+          <TabButton active={activeTab === 'grupos'} onClick={() => setActiveTab('grupos')} label="Grupos" count={counts.grupos} testId="tab-grupos" tint="teal" />
+          <TabButton active={activeTab === 'encerrados'} onClick={() => setActiveTab('encerrados')} label="Encerrados" count={counts.encerrados} testId="tab-encerrados" tint="slate" />
         </div>
 
         {/* List */}
@@ -1679,25 +1685,39 @@ const AtendimentosPage = () => {
 };
 
 /* === COMPONENTS === */
-const TabButton = ({ active, onClick, label, count, testId }) => (
-  <button
-    onClick={onClick}
-    data-testid={testId}
-    className={`flex-1 py-2.5 text-xs font-semibold relative transition-colors ${
-      active ? 'text-primary' : 'text-slate-500 hover:text-slate-700'
-    }`}
-  >
-    <span className="flex items-center justify-center gap-1.5">
-      {count > 0 && (
-        <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center font-bold ${
-          active ? 'bg-primary text-white' : 'bg-slate-200 text-slate-600'
-        }`}>{count}</span>
-      )}
-      {label}
-    </span>
-    {active && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />}
-  </button>
-);
+// 2026-06-24 — Modern segmented tabs (v2). Designed for narrow sidebars
+// (~300px) where horizontal icon+text+count was being truncated. Now:
+//   • Count is the visual hero (large, tabular-nums for alignment)
+//   • Label sits below in compact uppercase
+//   • Active state: tinted background + accent border on top + bold text
+//   • Compact mode k-format for counts >999 (3666 → 3.7k)
+//   • Icons removed in favor of color-coding (each tab has its own hue)
+const TabButton = ({ active, onClick, label, count, testId, tint = 'indigo' }) => {
+  const tints = {
+    indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', accent: 'border-indigo-500', activeCount: 'text-indigo-700' },
+    amber:  { bg: 'bg-amber-50',  text: 'text-amber-700',  accent: 'border-amber-500',  activeCount: 'text-amber-700' },
+    teal:   { bg: 'bg-teal-50',   text: 'text-teal-700',   accent: 'border-teal-500',   activeCount: 'text-teal-700' },
+    slate:  { bg: 'bg-slate-100', text: 'text-slate-700',  accent: 'border-slate-500',  activeCount: 'text-slate-700' },
+  };
+  const t = tints[tint] || tints.indigo;
+  const fmt = (n) => n >= 1000 ? `${(n/1000).toFixed(n >= 10000 ? 0 : 1)}k` : n;
+  return (
+    <button
+      onClick={onClick}
+      data-testid={testId}
+      className={`flex-1 min-w-0 px-1 py-2 flex flex-col items-center justify-center rounded-md transition-all border-t-2 ${
+        active
+          ? `${t.bg} ${t.accent} shadow-[inset_0_-1px_0_rgba(0,0,0,0.04)]`
+          : 'border-transparent hover:bg-slate-50'
+      }`}
+    >
+      <span className={`text-lg font-bold tabular-nums leading-none ${active ? t.activeCount : 'text-slate-600'}`}>{fmt(count)}</span>
+      <span className={`text-[9px] font-bold uppercase tracking-wider mt-1 leading-tight truncate w-full text-center ${active ? t.text : 'text-slate-400'}`}>
+        {label}
+      </span>
+    </button>
+  );
+};
 
 const InfoRow = ({ icon, label, value }) => (
   <div>

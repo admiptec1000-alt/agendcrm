@@ -89,6 +89,8 @@ const SuperAdminDashboard = () => {
   const [showTypeModal, setShowTypeModal] = useState(false);
   const [editingCompany, setEditingCompany] = useState(null);
   const [editingType, setEditingType] = useState(null);
+  // 2026-06-25 — Modal "Ferramentas" por empresa (Super Admin)
+  const [toolsCompany, setToolsCompany] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -330,6 +332,7 @@ const SuperAdminDashboard = () => {
               setSearchTerm={setSearchTerm}
               onAdd={() => { setEditingCompany(null); setShowCompanyModal(true); }}
               onEdit={(c) => { setEditingCompany(c); setShowCompanyModal(true); }}
+              onTools={(c) => setToolsCompany(c)}
               onDelete={async (id) => {
                 if (window.confirm('Tem certeza que deseja deletar esta empresa?')) {
                   await superAdminAPI.deleteCompany(id);
@@ -434,6 +437,12 @@ const SuperAdminDashboard = () => {
           onSave={loadAll}
         />
       )}
+      {toolsCompany && (
+        <CompanyToolsModal
+          company={toolsCompany}
+          onClose={() => setToolsCompany(null)}
+        />
+      )}
     </div>
   );
 };
@@ -486,7 +495,7 @@ const DashboardTab = ({ stats, companies, businessTypes }) => (
 );
 
 /* ========== COMPANIES TAB ========== */
-const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onAdd, onEdit, onDelete, onImpersonate }) => {
+const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onAdd, onEdit, onTools, onDelete, onImpersonate }) => {
   // 2026-02-15 (F) — filtros adicionais (BD e Ativas) + totais.
   const [bdFilter, setBdFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -632,8 +641,12 @@ const CompaniesTab = ({ companies, businessTypes, searchTerm, setSearchTerm, onA
                         <Headphones className="w-4 h-4" />
                       </button>
                       <button onClick={() => onEdit(company)} data-testid={`edit-company-${company.id}`}
-                        className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+                        className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors" title="Editar">
                         <Pencil className="w-4 h-4" />
+                      </button>
+                      <button onClick={() => onTools(company)} data-testid={`tools-company-${company.id}`}
+                        className="p-2 rounded-lg hover:bg-amber-50 text-amber-600 transition-colors" title="Ferramentas">
+                        <Wrench className="w-4 h-4" />
                       </button>
                       <button onClick={() => onDelete(company.id)} data-testid={`delete-company-${company.id}`}
                         className="p-2 rounded-lg hover:bg-red-50 text-red-500 transition-colors">
@@ -2344,6 +2357,125 @@ const CompanyIndoorRow = ({ company, expanded, onToggle }) => {
           )}
         </div>
       )}
+    </div>
+  );
+};
+
+/* ========== COMPANY TOOLS MODAL ========== */
+// 2026-06-25 — Super Admin panel para executar comandos administrativos
+// sobre uma empresa especifica. Hoje suporta:
+//   • Restaurar tickets fechados pelo auto-close (a partir de uma data/hora)
+// Pode receber novos comandos no futuro (limpar filas, reset BD, etc).
+const CompanyToolsModal = ({ company, onClose }) => {
+  const [action, setAction] = useState('restore_auto_closed');
+  const [sinceDate, setSinceDate] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString().slice(0, 16); // yyyy-MM-ddTHH:mm
+  });
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const run = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      if (action === 'restore_auto_closed') {
+        const sinceIso = new Date(sinceDate).toISOString();
+        const { data } = await api.post('/super-admin/restore-auto-closed-tickets', {
+          company_id: company.id,
+          since_iso: sinceIso,
+        });
+        setResult({ ok: true, message: `${data.restored_count} ticket(s) restaurados desde ${sinceIso}` });
+        toast.success(`${data.restored_count} tickets restaurados`);
+      }
+    } catch (e) {
+      const msg = e.response?.data?.detail || e.message;
+      setResult({ ok: false, message: msg });
+      toast.error(`Falha: ${msg}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4" data-testid="company-tools-modal">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center">
+              <Wrench className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Ferramentas</h3>
+              <p className="text-xs text-slate-500">{company.name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} data-testid="tools-modal-close" className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Acao</label>
+            <select
+              value={action}
+              onChange={e => setAction(e.target.value)}
+              data-testid="tools-action-select"
+              className="input-field w-full"
+            >
+              <option value="restore_auto_closed">Restaurar tickets fechados pelo auto-close</option>
+            </select>
+          </div>
+
+          {action === 'restore_auto_closed' && (
+            <>
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">
+                  Desde (data/hora)
+                </label>
+                <input
+                  type="datetime-local"
+                  value={sinceDate}
+                  onChange={e => setSinceDate(e.target.value)}
+                  data-testid="tools-since-date"
+                  className="input-field w-full"
+                />
+                <p className="text-[11px] text-slate-500 mt-1.5">
+                  Restaura todos os tickets fechados automaticamente (closed_reason=auto_timeout) a partir desta data/hora.
+                </p>
+              </div>
+            </>
+          )}
+
+          {result && (
+            <div
+              data-testid="tools-result"
+              className={`p-3 rounded-lg text-sm border ${
+                result.ok
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-red-50 border-red-200 text-red-800'
+              }`}
+            >
+              {result.message}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300 hover:bg-white text-slate-700">
+            Fechar
+          </button>
+          <button
+            onClick={run}
+            disabled={running}
+            data-testid="tools-run-btn"
+            className="px-4 py-2 text-sm rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-semibold flex items-center gap-2"
+          >
+            {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+            {running ? 'Executando...' : 'Executar'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

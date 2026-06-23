@@ -764,7 +764,14 @@ async function createConnection(instanceId, options = {}) {
   // syncFullHistory para esta sessao. O Baileys envia entao um evento
   // `messaging-history.set` com os chats/mensagens que o WhatsApp Mobile
   // tem em buffer. Filtramos ate 30 dias e empurramos pro backend.
-  const syncHistory = options.syncHistory === true;
+  // 2026-06-25 — Agora SEMPRE sincronizamos historico: padrao 7 dias
+  // (operador acabou de escanear QR e quer ver as conversas recentes),
+  // ou 30 dias quando o operador marcou explicitamente "Importar 30d".
+  // Isso tambem garante que mensagens recebidas enquanto a conexao
+  // estava offline sejam recuperadas automaticamente na reconexao
+  // (Baileys re-emite `messaging-history.set` com o buffer do servidor).
+  const syncHistory = true;
+  const historyDays = options.syncHistory === true ? 30 : 7;
 
   // ── Cleanup any prior socket for this instance BEFORE creating a new one.
   // Without this, every reconnect leaves the previous socket's event
@@ -1028,10 +1035,13 @@ async function createConnection(instanceId, options = {}) {
   // O WhatsApp envia o snapshot que o aparelho mobile tem em buffer. Pode
   // demorar varios segundos e chegar em chunks (multiplos eventos). Cada
   // chunk traz `chats`, `contacts` e `messages`. Filtramos mensagens dos
-  // ultimos 30 dias e empurramos pro backend em batches de 100 mensagens
+  // ultimos N dias e empurramos pro backend em batches de 100 mensagens
   // para evitar payload gigantesco e respeitar timeouts intermediarios.
+  // 2026-06-25 — `historyDays` agora vem do nivel acima: 7 dias por padrao
+  // (catch-up apos QR scan + offline reconnect), 30 dias quando o operador
+  // marcou explicitamente "Importar 30d".
   if (syncHistory) {
-    const HISTORY_DAYS = 30;
+    const HISTORY_DAYS = historyDays;
     const HISTORY_CUTOFF_S = Math.floor(Date.now() / 1000) - (HISTORY_DAYS * 24 * 3600);
     let _historyBuffer = [];
     let _historyBatchTimer = null;
@@ -1346,9 +1356,11 @@ app.post('/instances/:id/connect', async (req, res) => {
     }
     // 2026-02-28 — Opcao de importar historico no momento da conexao.
     // Body pode trazer `sync_history: true` (vindo do backend Python
-    // quando o operador marcou o checkbox na criacao da conexao).
+    // quando o operador marcou o checkbox "Importar 30d" na criacao
+    // da conexao). 2026-06-25 — Mesmo sem esse flag, a conexao SEMPRE
+    // sincroniza os ultimos 7 dias (catch-up apos QR + offline reconnect).
     const syncHistory = !!(req.body && req.body.sync_history);
-    recordEvent(id, 'connect_requested', syncHistory ? 'com sync de historico 30d' : 'pelo operador/backend');
+    recordEvent(id, 'connect_requested', syncHistory ? 'com sync de historico 30d' : 'sync padrao 7d');
     const instance = await createConnection(id, { syncHistory });
     res.json({ status: instance.status, message: 'Connecting...', sync_history: syncHistory });
   } catch (e) {
