@@ -1,3 +1,36 @@
+## 2026-06-23 — Falha de envio + modal de saude da conexao em "loop" ✅
+
+### Problemas reportados
+1. **Mensagens com "Falha ao reenviar" mesmo com conexao "Saudavel"**: chip do header mostra a conexao verde (`Centroeste - Faturamento`) mas os reenvios continuam falhando.
+2. **Modal "Saude da conexao" sobrepoe os cards atras** ("corta as configuracoes e fica em loop"): backdrop nao cobre a tela inteira; usuario nao consegue fechar e/ou interage com cards visiveis embaixo.
+
+### Causa raiz
+1. **Tickets antigos guardavam `connection_id` de uma conexao que foi DELETADA ou rotacionada**. O retry chamava `/instances/<conn_id_obsoleto>/send` no microservico → 404/error silencioso. O chip do header mostrava a conexao ATUAL verde, mas o backend insistia na velha.
+2. **Modal `ConnectionHealthModal` renderizado dentro do `ConnectionCard`** que tem ancestral com `transform`/`filter` — quebra `position: fixed` (vira anchored ao ancestral, nao ao viewport).
+
+### Fix
+
+**1. Backend** (`routes/crm_routes.py`):
+- `retry_ticket_message`: valida o `ticket.connection_id` contra `channel_connections.status == 'connected'`. Se nao estiver, faz fallback para a primeira conexao saudavel do tenant.
+- `send_message` (POST /tickets/{id}/messages): mesma logica de fallback. Antes era so "se nao tem connection_id, usa qualquer uma" — agora "se nao tem OU se a do ticket esta offline, usa qualquer uma saudavel".
+- Erro mais claro: "Nenhuma conexao WhatsApp conectada no momento".
+
+**2. Frontend** (`pages/Company/Dashboard.js`):
+- `ConnectionHealthModal` agora usa `createPortal(<modal/>, document.body)` para escapar de qualquer ancestral com transform/filter. z-index elevado para 60.
+
+### Acao do user
+Save to GitHub + Deploy no Render.
+
+### Importante
+- Para os tickets antigos que tinham `connection_id` obsoleto: o **proximo envio/reenvio vai usar a conexao saudavel ATUAL** automaticamente. Voce nao precisa atualizar nada manualmente nos tickets.
+- Se quiser fixar o ticket a uma conexao especifica de novo, use o **ConnectionSwitcher** no header do chat.
+
+### Sugestao
+Posso adicionar um job de manutencao que, ao detectar `connection_id` de um ticket apontando para uma conexao deletada, automaticamente migra para a conexao padrao (ou null) e loga. Quer?
+
+---
+
+
 ## 2026-06-22 — Fix triplo: lembrete financeiro, agendamento duplicado, indices ✅
 
 ### Problemas reportados

@@ -975,8 +975,18 @@ async def add_message_to_ticket(
             import logging as _lg
             _log = _lg.getLogger(__name__)
             wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
-            # Prefer ticket's bound connection, fall back to first connected
+            # Prefer ticket's bound connection but VALIDATE it is currently
+            # connected — old tickets sometimes point to a rotated/deleted
+            # connection_id and silently fail. Fall back to any healthy
+            # WhatsApp connection in the company.
             conn_id = ticket.get("connection_id")
+            if conn_id:
+                _conn_doc = await db.channel_connections.find_one(
+                    {"id": conn_id, "company_id": user["company_id"]},
+                    {"_id": 0, "id": 1, "status": 1},
+                )
+                if not _conn_doc or (_conn_doc.get("status") or "").lower() != "connected":
+                    conn_id = None  # force fallback below
             if not conn_id:
                 conn = await db.channel_connections.find_one(
                     {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"},
@@ -2198,15 +2208,28 @@ async def retry_ticket_message(
     import httpx as _httpx
     import os as _os
     wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
-    # Prefer ticket's connection_id
+    # Prefer ticket's connection_id, but fall back to any currently
+    # CONNECTED connection in the tenant when the original is stale,
+    # disconnected, or deleted. The retry button in production was
+    # silently failing because old tickets pointed to long-rotated
+    # connection_ids — now we always pick a usable one if the operator
+    # didn't explicitly switch via the ConnectionSwitcher.
     conn_id = ticket.get("connection_id")
+    if conn_id:
+        conn_doc = await db.channel_connections.find_one(
+            {"id": conn_id, "company_id": user["company_id"]},
+            {"_id": 0, "id": 1, "status": 1, "name": 1},
+        )
+        if not conn_doc or (conn_doc.get("status") or "").lower() != "connected":
+            conn_id = None  # force fallback
     if not conn_id:
         c2 = await db.channel_connections.find_one(
-            {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"}, {"_id":0,"id":1}
+            {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"},
+            {"_id": 0, "id": 1},
         )
         conn_id = c2["id"] if c2 else None
     if not conn_id:
-        raise HTTPException(status_code=400, detail="Nenhuma conexao WhatsApp ativa")
+        raise HTTPException(status_code=400, detail="Nenhuma conexao WhatsApp conectada no momento")
     try:
         async with _httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(f"{wa_url}/instances/{conn_id}/send",

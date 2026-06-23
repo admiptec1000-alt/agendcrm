@@ -3888,8 +3888,13 @@ const HEALTH_EVENT_META = {
 const ConnectionHealthModal = ({ conn, health, onClose }) => {
   const meta = HEALTH_META[health?.level] || HEALTH_META.gray;
   const events = health?.events || [];
-  return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()} data-testid={`health-modal-${conn.id}`}>
+  // 2026-06-23 — Render via portal to document.body to escape any ancestor
+  // with `transform`/`filter`/`will-change` that turns `position: fixed`
+  // into a containing-block constraint. Without this the modal would
+  // anchor next to the connection card and overlap nearby cards instead
+  // of covering the viewport with a backdrop.
+  return createPortal(
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()} data-testid={`health-modal-${conn.id}`}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-slate-200">
           <h3 className="text-base font-bold font-heading flex items-center gap-2">
@@ -3947,7 +3952,8 @@ const ConnectionHealthModal = ({ conn, health, onClose }) => {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
