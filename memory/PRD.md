@@ -1,3 +1,22 @@
+## 2026-06-25 — Contadores 1:1 com lista + Sync 7d WhatsApp + Painel "Ferramentas" SA ✅
+
+### A. Contadores das abas refletem fielmente a lista
+`GET /api/crm/tickets/counts` agora aceita os MESMOS filtros que `GET /api/crm/tickets`: `channel, search, connection_id, queue_id, assigned_to, tag`. O frontend (`AtendimentosPage.js` `loadData`) envia todos os filtros server-side e removeu o filtro client-side (que rodava DEPOIS do truncate de 1000 itens e gerava o bug "aba=46 / lista=0").
+
+### B. Sincronizacao automatica WhatsApp (7d padrao, 30d opcional)
+`whatsapp-service/index.js` agora SEMPRE define `syncFullHistory: true` ao criar a sessao. O cutoff padrao e 7 dias (catch-up apos QR scan + recuperacao de mensagens offline na reconexao). O operador ainda pode marcar "Importar 30 dias" no checkbox da criacao da conexao → backend manda `sync_history: true` → cutoff vai a 30 dias. O handler `messaging-history.set` continua empurrando em batches de 100 mensagens via `POST /api/channels/webhook/history-import`.
+
+### C. Painel "Ferramentas" por empresa no Super Admin
+- Novo botao Wrench (amarelo) entre **Editar** e **Deletar** em cada linha de `CompaniesTab` (`Dashboard.js`). `data-testid="tools-company-<companyId>"`.
+- Modal `CompanyToolsModal` (`data-testid="company-tools-modal"`) com selector de acao + input `datetime-local` + botao `tools-run-btn`.
+- Hoje suporta **"Restaurar tickets fechados pelo auto-close"** (chama `POST /api/super-admin/restore-auto-closed-tickets` com `company_id + since_iso`). Estrutura preparada para mais acoes futuras (limpar filas, reset BD, etc).
+
+### Testes
+Backend: 10/10 pytest passados em `/app/backend/tests/test_iteration_59.py`. Frontend e2e via Playwright validou tabs novas, contadores casando 1:1 com a lista, botao Ferramentas e fluxo do modal. Service WhatsApp Node confirmado em `:3002`.
+
+---
+
+
 ## 2026-06-23 — Recuperar tickets auto-fechados + Aba "Encerrados" ✅
 
 ### Contexto / Bug
