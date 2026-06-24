@@ -757,7 +757,34 @@ if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
 async function createConnection(instanceId, options = {}) {
   const authDir = path.join(AUTH_DIR, instanceId);
-  if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+  // 2026-06-27 — Auto-recovery for ENOSPC (Render disk inode exhaustion).
+  // On Render's small persistent volumes, thousands of tiny Signal
+  // session files can exhaust inodes long before disk bytes are full
+  // (e.g. 28% disk used but mkdir fails with ENOSPC). When that happens
+  // the operator sees the WhatsApp connection stuck on "Gerando QR
+  // Code..." forever because Baileys cannot even create its auth dir.
+  // Auto-trigger an aggressive cleanup and ONE retry before giving up,
+  // so the operator never has to SSH into Render to free space.
+  if (!fs.existsSync(authDir)) {
+    try {
+      fs.mkdirSync(authDir, { recursive: true });
+    } catch (e) {
+      if (e.code === 'ENOSPC') {
+        console.warn(`[${instanceId}] ENOSPC creating authDir — running aggressive cleanup and retrying once`);
+        recordEvent(instanceId, 'enospc_recovery', 'aggressive cleanup triggered before retry');
+        try {
+          cleanupStaleSessions({ maxAgeMs: SESSION_AGE_EMERGENCY_MS, reason: 'enospc_auto' });
+        } catch (cleanupErr) {
+          console.error(`[${instanceId}] ENOSPC cleanup failed: ${cleanupErr.message}`);
+        }
+        // Second attempt — if it still fails, surface the error so the
+        // backend (and frontend) can show the operator the real reason.
+        fs.mkdirSync(authDir, { recursive: true });
+      } else {
+        throw e;
+      }
+    }
+  }
 
   // 2026-02-28 — Per-connection history sync. Quando o operador ativa
   // "Importar ultimos 30 dias" na criacao da conexao, ligamos
@@ -2093,6 +2120,15 @@ async function checkDiskAndCleanup() {
     const freeBytes = info.bavail * blockSize;
     const usedBytes = totalBytes - freeBytes;
     const usedPct = totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0;
+    // 2026-06-27 — Inode usage. On Render's small persistent volumes,
+    // thousands of tiny Signal session files can exhaust inodes long
+    // before byte usage looks bad (real prod incident: 28% bytes used,
+    // mkdir failing with ENOSPC). Track inodes too and trigger the
+    // same aggressive cleanup tiers.
+    const totalInodes = info.files || 0;
+    const freeInodes = info.ffree || 0;
+    const usedInodes = totalInodes > 0 ? (totalInodes - freeInodes) : 0;
+    const inodesUsedPct = totalInodes > 0 ? (usedInodes / totalInodes) * 100 : 0;
     lastDiskStats = {
       checked_at: new Date().toISOString(),
       total_bytes: totalBytes,
@@ -2101,17 +2137,23 @@ async function checkDiskAndCleanup() {
       used_pct: Number(usedPct.toFixed(1)),
       total_human: `${(totalBytes / 1024 / 1024 / 1024).toFixed(2)} GB`,
       free_human: `${(freeBytes / 1024 / 1024 / 1024).toFixed(2)} GB`,
+      total_inodes: totalInodes,
+      free_inodes: freeInodes,
+      used_inodes: usedInodes,
+      inodes_used_pct: Number(inodesUsedPct.toFixed(1)),
     };
+    // Choose the most pressing dimension (bytes OR inodes) to decide the cleanup tier.
+    const pressure = Math.max(usedPct, inodesUsedPct);
     // Emergency (>95%): nuke anything older than 1 day.
-    if (usedPct >= DISK_CRITICAL_PCT) {
-      console.warn(`[session-cleanup] DISK CRITICAL ${usedPct.toFixed(1)}% — emergency cleanup (>1d)`);
+    if (pressure >= DISK_CRITICAL_PCT) {
+      console.warn(`[session-cleanup] DISK CRITICAL bytes=${usedPct.toFixed(1)}% inodes=${inodesUsedPct.toFixed(1)}% — emergency cleanup (>1d)`);
       cleanupStaleSessions({ maxAgeMs: SESSION_AGE_EMERGENCY_MS, reason: 'disk_critical' });
-    } else if (usedPct >= DISK_WARN_PCT) {
+    } else if (pressure >= DISK_WARN_PCT) {
       // Aggressive (>90%): 7-day threshold.
-      console.warn(`[session-cleanup] DISK WARN ${usedPct.toFixed(1)}% — aggressive cleanup (>7d)`);
+      console.warn(`[session-cleanup] DISK WARN bytes=${usedPct.toFixed(1)}% inodes=${inodesUsedPct.toFixed(1)}% — aggressive cleanup (>7d)`);
       cleanupStaleSessions({ maxAgeMs: SESSION_AGE_AGGRESSIVE_MS, reason: 'disk_warn' });
     } else {
-      console.log(`[session-cleanup] disk OK ${usedPct.toFixed(1)}% used (${lastDiskStats.free_human} free)`);
+      console.log(`[session-cleanup] disk OK bytes=${usedPct.toFixed(1)}% inodes=${inodesUsedPct.toFixed(1)}% (${lastDiskStats.free_human} free)`);
     }
     return lastDiskStats;
   } catch (e) {
@@ -2348,7 +2390,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.3.0',
+    version: 'v2.3.1',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -2361,7 +2403,7 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.3.0',
+    version: 'v2.3.1',
     built_at: '2026-06-27',
     features: {
       sent_message_store: true,
@@ -2431,6 +2473,15 @@ app.get('/version', (req, res) => {
       // AUTH_DIR for one connection and re-inits Baileys from scratch.
       // Exposed via the backend as POST /api/channels/connections/{id}/full-reset.
       full_reset_endpoint: true,
+      // v2.3.1 — Auto-recovery for ENOSPC (inode/byte exhaustion on the
+      // Render persistent disk). createConnection now catches ENOSPC,
+      // triggers cleanupStaleSessions (1-day threshold), and retries
+      // once. Operator never has to SSH into Render to clear space.
+      enospc_auto_recovery: true,
+      // v2.3.1 — disk-pressure check now tracks INODE usage too (not
+      // just byte usage), because on small volumes inodes exhaust long
+      // before bytes do. Triggers the same 7d/1d cleanup tiers.
+      inode_aware_disk_monitor: true,
       // v2.2.0 — Baileys 7.x: envia tctoken/cstoken nativamente (fix do
       // erro 463 "Reach-out Time-lock" que bloqueava entregas), LID nativo
       // via remoteJidAlt/participantAlt, runtime ESM.

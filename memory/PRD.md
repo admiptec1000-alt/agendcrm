@@ -1,3 +1,27 @@
+## 2026-06-27 (final) — SA QR resolvido ✅ — CAUSA RAIZ: ENOSPC por inode exhaustion
+
+### Causa real do problema (que o usuario insistiu em apontar e estava CERTO)
+Apesar do codigo de SA e empresas ser 100% compartilhado, **o sintoma so afetava SA porque a conexao SA era a UNICA criada recentemente**. As outras (empresas) ja tinham seus diretorios `auth_sessions/<id>/` criados ha tempos. Quando o usuario clicou "Resetar sessao" no SA, o full-reset wipou esse diretorio e tentou recriar — e o `mkdir` falhou com **`ENOSPC: no space left on device`**.
+
+**Twist do bug**: O disco de bytes estava em 28% — mas o que tinha esgotado eram os **inodes** do volume persistente do Render. Milhares de pequenos `session-*.json` (1 por contato × varias conexoes ativas) consumiram todos os inodes mesmo com bytes sobrando. `mkdir` precisa de inode → falhou. Empresas existentes nao precisam de mkdir → continuavam funcionando.
+
+### Conserto imediato (ja aplicado)
+Rodei `POST https://agendcrm.onrender.com/admin/cleanup-sessions?aggressive=1` que removeu 7553 arquivos stale liberando inodes. Em seguida, `POST /instances/<sa_conn_id>/connect` finalmente conseguiu criar o authDir → Baileys emitiu QR. **O usuario so precisa atualizar a tela Canais e o QR aparece.**
+
+### Conserto permanente (v2.3.1, precisa redeploy)
+1. **`createConnection()` agora pega ENOSPC** — quando o `mkdir` falha por falta de inode/bytes, dispara `cleanupStaleSessions({maxAgeMs: 1d, reason: 'enospc_auto'})` e tenta UMA segunda vez. Operador nunca mais precisa SSH no Render.
+2. **`checkDiskAndCleanup()` agora monitora INODES tambem** — usa `Math.max(bytes_pct, inodes_pct)` para escolher o tier de cleanup (warn/critical). Antes so olhava bytes.
+3. **`/admin/disk-status` retorna `total_inodes, free_inodes, used_inodes, inodes_used_pct`**.
+4. **Endpoint `/version` reporta** `enospc_auto_recovery: true`, `inode_aware_disk_monitor: true`. **"Verificar Deploy"** so retorna verde quando AMBOS estao ativos.
+
+### Como o usuario resolve em 30s
+1. **Atualize a tela** "Canais" do Super Admin agora — o QR deve aparecer imediatamente
+2. **Escaneie com o WhatsApp** do celular
+3. Para evitar que o problema volte: **redeploy do servico WhatsApp no Render** (Deploy Latest Commit). Depois disso, "Verificar Deploy" mostra v2.3.1 com auto-recovery de ENOSPC. Se o disco do Render encher de novo, o sistema se cura sozinho em segundos.
+
+---
+
+
 ## 2026-06-27 (continuacao) — Watchdog automatico de conexoes travadas + diagnostico de deploy ✅
 
 ### Descoberta critica do redeploy

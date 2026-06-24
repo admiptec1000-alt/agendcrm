@@ -193,6 +193,14 @@ async def service_version_check(user: dict = Depends(get_current_user)):
                     checks["details"].append("✓ Endpoint Resetar Sessao ATIVO")
                 else:
                     checks["details"].append("✗ Endpoint Resetar Sessao AUSENTE — redeploy do Render PENDENTE")
+                if feats.get("enospc_auto_recovery"):
+                    checks["details"].append("✓ Auto-recovery ENOSPC ATIVO (disco cheio se auto-cura)")
+                else:
+                    checks["details"].append("✗ Auto-recovery ENOSPC AUSENTE — redeploy do Render PENDENTE (v2.3.1+)")
+                if feats.get("inode_aware_disk_monitor"):
+                    checks["details"].append("✓ Monitor de inodes ATIVO")
+                else:
+                    checks["details"].append("✗ Monitor de inodes AUSENTE — redeploy do Render PENDENTE (v2.3.1+)")
             else:
                 checks["details"].append("✗ Endpoint /version ausente — REDEPLOY PENDENTE (versao antiga)")
     except Exception as e:
@@ -205,6 +213,8 @@ async def service_version_check(user: dict = Depends(get_current_user)):
         and checks.get("version")
         and feats.get("stuck_connection_watchdog")
         and feats.get("full_reset_endpoint")
+        and feats.get("enospc_auto_recovery")
+        and feats.get("inode_aware_disk_monitor")
     )
     return checks
 
