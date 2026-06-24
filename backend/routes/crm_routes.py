@@ -1961,6 +1961,12 @@ async def run_campaign_now(
     2026-02-28 — Se a campanha tem `bulk_config.enabled=true`, encaminha
     para o bulk dispatcher (fila persistente, multi-conexao, spintax,
     janela, opt-out, daily cap). Caso contrario, usa o pipeline classico.
+
+    2026-06-25 — Modo classico agora SEMPRE roda async + grava cada
+    destinatario em `campaign_deliveries` (status pending/sending/sent/
+    failed). Isso permite (a) pause/resume, (b) visualizacao em tempo
+    real do progresso pelo modal do "olhinho", (c) o scheduler agendar
+    campanhas com `scheduled_at`.
     """
     camp = await db.campaigns.find_one({"id": campaign_id, "company_id": user["company_id"]}, {"_id": 0})
     if not camp:
@@ -2002,152 +2008,172 @@ async def run_campaign_now(
             "message": "Disparo em Massa iniciado. Acompanhe na aba 'Disparos em Massa'.",
         }
 
-    # ─── Classic mode: pipeline sincrono original ───────────────────
-    audience = await _resolve_campaign_audience(db, user["company_id"], camp)
+    # ─── Classic mode: seed deliveries + run async ──────────────────
+    result = await _fire_campaign_classic(db, camp)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+async def _fire_campaign_classic(db: AsyncIOMotorDatabase, camp: dict) -> dict:
+    """Seed deliveries + start async runner. Used by both /run and the
+    scheduler. Returns {queued, total} or {error}.
+    """
+    company_id = camp["company_id"]
+    campaign_id = camp["id"]
+    audience = await _resolve_campaign_audience(db, company_id, camp)
     if not audience:
-        raise HTTPException(status_code=400, detail="Audiencia vazia")
+        return {"error": "Audiencia vazia"}
     msgs = [m for m in (camp.get("messages") or []) if m and m.strip()]
     if not msgs:
-        raise HTTPException(status_code=400, detail="Sem mensagens definidas")
+        return {"error": "Sem mensagens definidas"}
 
+    conn_id = camp.get("connection_id")
+    if not conn_id:
+        c2 = await db.channel_connections.find_one(
+            {"company_id": company_id, "type": "whatsapp", "status": "connected"}, {"_id": 0, "id": 1}
+        )
+        if not c2:
+            return {"error": "Nenhuma conexao WhatsApp ativa"}
+        conn_id = c2["id"]
+
+    # Anti-block (campaign-level override OR company settings)
+    ab = camp.get("anti_block") or {}
+    if not ab:
+        settings = await db.campaign_settings.find_one({"company_id": company_id}, {"_id": 0})
+        ab = (settings or {}).get("anti_block") or {}
+    daily_limit = max(1, int(ab.get("daily_limit", 250) or 250))
+    if len(audience) > daily_limit:
+        audience = audience[:daily_limit]
+
+    # Wipe any prior deliveries for re-runs (e.g. operator hit Send again
+    # after a failed campaign). The progress modal always shows the most
+    # recent execution.
+    await db.campaign_deliveries.delete_many({"campaign_id": campaign_id})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    deliveries = [
+        {
+            "id": str(uuid.uuid4()),
+            "campaign_id": campaign_id,
+            "company_id": company_id,
+            "name": p.get("name") or "",
+            "phone": p["phone"],
+            "status": "pending",
+            "created_at": now_iso,
+        }
+        for p in audience
+    ]
+    if deliveries:
+        await db.campaign_deliveries.insert_many(deliveries)
+
+    await db.campaigns.update_one(
+        {"id": campaign_id},
+        {"$set": {
+            "status": "em_execucao",
+            "started_at": now_iso,
+            "sent_count": 0,
+            "failed_count": 0,
+            "total_count": len(audience),
+            "connection_id": conn_id,
+        }, "$unset": {"completed_at": "", "error": ""}}
+    )
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_classic_runner(campaign_id, conn_id, msgs, ab))
+    return {"queued": True, "total": len(audience), "mode": "classic"}
+
+
+async def _classic_runner(campaign_id: str, conn_id: str, msgs: list, ab: dict):
+    """Background dispatch loop with pause/cancel awareness."""
     import asyncio as _asyncio
     import random as _random
     import httpx as _httpx
     import os as _os
-    wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
-    conn_id = camp.get("connection_id")
-    if not conn_id:
-        c2 = await db.channel_connections.find_one(
-            {"company_id": user["company_id"], "type": "whatsapp", "status": "connected"}, {"_id":0,"id":1}
-        )
-        if not c2:
-            raise HTTPException(status_code=400, detail="Nenhuma conexao WhatsApp ativa")
-        conn_id = c2["id"]
-
-    # Anti-block policy: campaign-level override OR company-level settings
-    ab = camp.get("anti_block") or {}
-    if not ab:
-        settings = await db.campaign_settings.find_one({"company_id": user["company_id"]}, {"_id": 0})
-        ab = (settings or {}).get("anti_block") or {}
-    ab_enabled = ab.get("enabled", True)
-
-    # Helper to render templates with variables (incl. dynamic saudacao)
+    from motor.motor_asyncio import AsyncIOMotorClient as _Cli
     from notifications import render_template as _render
+    from wa_humanize import humanize_kwargs as _hum
+
+    wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+    cli = _Cli(_os.environ["MONGO_URL"])
+    bdb = cli[_os.environ["DB_NAME"]]
+
+    ab_enabled = ab.get("enabled", True)
     interval_min = max(0, int(ab.get("interval_min_seconds", 30) or 0))
     interval_max = max(interval_min, int(ab.get("interval_max_seconds", 90) or 0))
     burst_size = max(1, int(ab.get("burst_size", 50) or 1))
     burst_pause = max(0, int(ab.get("burst_pause_seconds", 300) or 0))
-    daily_limit = max(1, int(ab.get("daily_limit", 250) or 250))
     escalate_after = max(0, int(ab.get("escalate_after", 100) or 0))
     escalate_factor = float(ab.get("escalate_factor", 1.5) or 1.0)
 
-    # Hard cap by daily limit
-    if len(audience) > daily_limit:
-        audience = audience[:daily_limit]
+    sent_x, failed_x, count = 0, 0, 0
 
-    # Long campaigns (>5min total) become "em_execucao" + hand off to async task
-    estimated_seconds = len(audience) * ((interval_min + interval_max) / 2 if ab_enabled else 0)
-    if ab_enabled and estimated_seconds > 300:
-        # Mark and process in background; return immediately
-        await db.campaigns.update_one(
-            {"id": campaign_id},
-            {"$set": {"status": "em_execucao", "started_at": datetime.now(timezone.utc).isoformat()}}
-        )
-        async def _runner():
-            try:
-                from motor.motor_asyncio import AsyncIOMotorClient as _Cli
-                cli = _Cli(_os.environ["MONGO_URL"])
-                bdb = cli[_os.environ["DB_NAME"]]
-                # 2026-02-28 — Humanization re-computed per send.
-                from wa_humanize import humanize_kwargs as _hum
-                sent_x, failed_x, count = 0, 0, 0
-                async with _httpx.AsyncClient(timeout=30.0) as client:
-                    for person in audience:
-                        for tpl in msgs:
-                            mtxt = _render(tpl or "", {"nome": person.get("name") or "", "numero": person.get("phone") or "", "telefone": person.get("phone") or ""})
-                            try:
-                                hum = await _hum(bdb, conn_id)
-                                rr = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": mtxt, **hum})
-                                rs = rr.json() if rr.status_code == 200 else {}
-                                if rs.get("success"): sent_x += 1
-                                else: failed_x += 1
-                            except Exception:
-                                failed_x += 1
-                        count += 1
-                        # escalate
-                        cur_min, cur_max = interval_min, interval_max
-                        if escalate_after and count > escalate_after:
-                            cur_min = int(cur_min * escalate_factor)
-                            cur_max = int(cur_max * escalate_factor)
-                        # burst pause
-                        if burst_size and count % burst_size == 0 and count < len(audience):
-                            await _asyncio.sleep(burst_pause)
-                        elif count < len(audience):
-                            await _asyncio.sleep(_random.randint(cur_min, max(cur_min, cur_max)))
+    async def _wait_if_paused():
+        """If campaign is `pausada`, sleep until it's resumed or
+        cancelled. Returns True if cancelled/finished (caller should
+        exit), False otherwise."""
+        while True:
+            doc = await bdb.campaigns.find_one({"id": campaign_id}, {"_id": 0, "status": 1})
+            st = (doc or {}).get("status")
+            if st in ("cancelada", "concluida"):
+                return True
+            if st == "pausada":
+                await _asyncio.sleep(5)
+                continue
+            return False
+
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            cursor = bdb.campaign_deliveries.find(
+                {"campaign_id": campaign_id, "status": "pending"}, {"_id": 0}
+            ).sort("created_at", 1)
+            deliveries = await cursor.to_list(100000)
+            total = len(deliveries)
+            for d in deliveries:
+                if await _wait_if_paused():
+                    break
+                await bdb.campaign_deliveries.update_one(
+                    {"id": d["id"]}, {"$set": {"status": "sending"}}
+                )
+                ok_any = False
+                last_err = ""
+                for tpl in msgs:
+                    mtxt = _render(tpl or "", {"nome": d.get("name") or "", "numero": d["phone"], "telefone": d["phone"]})
+                    try:
+                        hum = await _hum(bdb, conn_id)
+                        rr = await client.post(
+                            f"{wa_url}/instances/{conn_id}/send",
+                            json={"phone": d["phone"], "message": mtxt, **hum},
+                        )
+                        rs = rr.json() if rr.status_code == 200 else {}
+                        if rs.get("success"):
+                            ok_any = True
+                        else:
+                            last_err = (rs.get("error") or f"http {rr.status_code}")[:200]
+                    except Exception as e:
+                        last_err = str(e)[:200]
+                if ok_any:
+                    sent_x += 1
+                    await bdb.campaign_deliveries.update_one(
+                        {"id": d["id"]},
+                        {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat()}}
+                    )
+                else:
+                    failed_x += 1
+                    await bdb.campaign_deliveries.update_one(
+                        {"id": d["id"]},
+                        {"$set": {"status": "failed", "error": last_err or "unknown",
+                                  "failed_at": datetime.now(timezone.utc).isoformat()}}
+                    )
                 await bdb.campaigns.update_one(
                     {"id": campaign_id},
-                    {"$set": {"status": "concluida", "sent_count": sent_x, "failed_count": failed_x,
-                              "completed_at": datetime.now(timezone.utc).isoformat()}}
+                    {"$set": {"sent_count": sent_x, "failed_count": failed_x}}
                 )
-            except Exception as _e:
-                await bdb.campaigns.update_one({"id": campaign_id},
-                    {"$set": {"status": "cancelada", "error": str(_e)[:200]}})
-        _asyncio.create_task(_runner())
-        return {"queued": True, "audience": len(audience), "estimated_minutes": int(estimated_seconds // 60)}
-
-    # Otherwise execute synchronously (small campaigns)
-    sent, failed, count = 0, 0, 0
-    # 2026-02-28 — Humanization helper (no-op when conexao nao tem
-    # `humanization.enabled=true`).
-    from wa_humanize import humanize_kwargs as _hum_sync
-    async with _httpx.AsyncClient(timeout=30.0) as client:
-        for person in audience:
-            for tpl in msgs:
-                msg = _render(tpl or "", {"nome": person.get("name") or "", "numero": person.get("phone") or "", "telefone": person.get("phone") or ""})
-                try:
-                    hum = await _hum_sync(db, conn_id)
-                    r = await client.post(f"{wa_url}/instances/{conn_id}/send", json={"phone": person["phone"], "message": msg, **hum})
-                    res = r.json() if r.status_code == 200 else {}
-                    if res.get("success"):
-                        sent += 1
-                    else:
-                        failed += 1
-                except Exception:
-                    failed += 1
-
-            if camp.get("open_ticket"):
-                # Create ticket if none open for this phone
-                existing = await db.tickets.find_one({
-                    "company_id": user["company_id"],
-                    "customer_phone": person["phone"],
-                    "status": {"$ne": "fechado"}
-                })
-                if not existing:
-                    auto_client = await find_or_create_client_by_phone(
-                        db, user["company_id"], person.get("phone"), name=person.get("name")
-                    )
-                    await db.tickets.insert_one({
-                        "id": str(uuid.uuid4()),
-                        "ticket_number": await next_ticket_number(db, user["company_id"]),
-                        "company_id": user["company_id"],
-                        "client_id": auto_client,
-                        "customer_name": person.get("name") or person["phone"],
-                        "customer_phone": person["phone"],
-                        "channel": "whatsapp",
-                        "status": camp.get("ticket_status") or "aberto",
-                        "priority": "medium",
-                        "tags": [],
-                        "value": 0.0,
-                        "messages": [],
-                        "assigned_to": camp.get("assigned_user_id"),
-                        "queue_id": camp.get("queue_id"),
-                        "connection_id": conn_id,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    })
-            count += 1
-            # apply small synchronous delay between recipients (except last)
-            if ab_enabled and count < len(audience):
+                count += 1
+                if not ab_enabled or count >= total:
+                    continue
+                # Pause check before sleeping so resume doesn't have to wait
+                if await _wait_if_paused():
+                    break
                 cur_min, cur_max = interval_min, interval_max
                 if escalate_after and count > escalate_after:
                     cur_min = int(cur_min * escalate_factor)
@@ -2157,12 +2183,214 @@ async def run_campaign_now(
                 else:
                     await _asyncio.sleep(_random.randint(cur_min, max(cur_min, cur_max)))
 
-    await db.campaigns.update_one(
-        {"id": campaign_id},
-        {"$set": {"status": "concluida", "sent_count": sent, "failed_count": failed,
-                  "completed_at": datetime.now(timezone.utc).isoformat()}}
+        # Only mark concluida if not cancelled
+        doc = await bdb.campaigns.find_one({"id": campaign_id}, {"_id": 0, "status": 1})
+        if (doc or {}).get("status") not in ("cancelada",):
+            await bdb.campaigns.update_one(
+                {"id": campaign_id},
+                {"$set": {"status": "concluida", "sent_count": sent_x, "failed_count": failed_x,
+                          "completed_at": datetime.now(timezone.utc).isoformat()}}
+            )
+    except Exception as e:
+        await bdb.campaigns.update_one(
+            {"id": campaign_id},
+            {"$set": {"status": "cancelada", "error": str(e)[:200],
+                      "sent_count": sent_x, "failed_count": failed_x}}
+        )
+
+
+@router.post("/campaigns/{campaign_id}/pause")
+async def pause_campaign(
+    campaign_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    res = await db.campaigns.update_one(
+        {"id": campaign_id, "company_id": user["company_id"], "status": "em_execucao"},
+        {"$set": {"status": "pausada", "paused_at": datetime.now(timezone.utc).isoformat()}},
     )
-    return {"sent": sent, "failed": failed, "total": len(audience)}
+    if res.matched_count == 0:
+        raise HTTPException(status_code=400, detail="Campanha nao esta em execucao")
+    return {"message": "Campanha pausada"}
+
+
+@router.post("/campaigns/{campaign_id}/resume")
+async def resume_campaign(
+    campaign_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    res = await db.campaigns.update_one(
+        {"id": campaign_id, "company_id": user["company_id"], "status": "pausada"},
+        {"$set": {"status": "em_execucao"}, "$unset": {"paused_at": ""}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=400, detail="Campanha nao esta pausada")
+    return {"message": "Campanha retomada"}
+
+
+@router.post("/campaigns/{campaign_id}/cancel")
+async def cancel_campaign(
+    campaign_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    res = await db.campaigns.update_one(
+        {"id": campaign_id, "company_id": user["company_id"], "status": {"$in": ["em_execucao", "pausada", "programada"]}},
+        {"$set": {"status": "cancelada", "cancelled_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=400, detail="Campanha nao pode ser cancelada")
+    return {"message": "Campanha cancelada"}
+
+
+@router.get("/campaigns/{campaign_id}/progress")
+async def get_campaign_progress(
+    campaign_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Real-time progress for the campaign — totals + recent deliveries
+    per status. Used by the live "olhinho" modal."""
+    camp = await db.campaigns.find_one(
+        {"id": campaign_id, "company_id": user["company_id"]},
+        {"_id": 0, "id": 1, "name": 1, "status": 1, "scheduled_at": 1, "started_at": 1,
+         "completed_at": 1, "sent_count": 1, "failed_count": 1, "total_count": 1, "error": 1},
+    )
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    pipeline = [
+        {"$match": {"campaign_id": campaign_id, "company_id": user["company_id"]}},
+        {"$group": {"_id": "$status", "n": {"$sum": 1}}},
+    ]
+    counts = {"pending": 0, "sending": 0, "sent": 0, "failed": 0}
+    async for row in db.campaign_deliveries.aggregate(pipeline):
+        counts[row["_id"]] = row["n"]
+    total = sum(counts.values()) or int(camp.get("total_count") or 0)
+    # Latest items per bucket (cap at 200 to keep payload small)
+    async def _list(st, limit=200):
+        return await db.campaign_deliveries.find(
+            {"campaign_id": campaign_id, "company_id": user["company_id"], "status": st},
+            {"_id": 0, "id": 1, "name": 1, "phone": 1, "status": 1, "error": 1, "sent_at": 1, "failed_at": 1},
+        ).sort([("sent_at", -1), ("failed_at", -1), ("created_at", 1)]).limit(limit).to_list(limit)
+    sent = await _list("sent")
+    failed = await _list("failed")
+    pending = await _list("pending", limit=50)
+    sending = await _list("sending", limit=20)
+    return {
+        "campaign": camp,
+        "totals": {**counts, "total": total},
+        "sent": sent,
+        "failed": failed,
+        "pending": pending,
+        "sending": sending,
+    }
+
+
+# === Excel import / template for contact lists ===
+@router.get("/contact-lists/template.xlsx")
+async def contact_list_template(user: dict = Depends(get_current_user)):
+    """Returns an .xlsx template with columns: Nome, Telefone, Email."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Contatos"
+    ws.append(["Nome", "Telefone", "Email"])
+    ws.append(["Joao Silva", "5511999999999", "joao@email.com"])
+    ws.append(["Maria Souza", "5511988888888", ""])
+    for col, width in zip("ABC", (25, 22, 28)):
+        ws.column_dimensions[col].width = width
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="modelo-contatos.xlsx"'},
+    )
+
+
+@router.post("/contact-lists/import-excel")
+async def import_contact_list_excel(
+    file: UploadFile = File(...),
+    name: str = "Lista Importada",
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Parse an uploaded xlsx and create a new contact list.
+
+    Accepts headers (case-insensitive): nome|name, telefone|phone, email.
+    Telefone is required; rows without a phone are skipped. Duplicates
+    (same phone) are de-duped, keeping the first non-empty name.
+    """
+    if not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Arquivo precisa ser .xlsx")
+    from openpyxl import load_workbook
+    try:
+        wb = load_workbook(io.BytesIO(await file.read()), read_only=True, data_only=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Planilha invalida: {e}")
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        raise HTTPException(status_code=400, detail="Planilha vazia")
+    headers = [str(h or "").strip().lower() for h in rows[0]]
+
+    def col(name_options):
+        for nm in name_options:
+            if nm in headers:
+                return headers.index(nm)
+        return -1
+
+    i_name = col(["nome", "name"])
+    i_phone = col(["telefone", "phone", "celular", "whatsapp"])
+    i_email = col(["email", "e-mail"])
+    if i_phone < 0:
+        raise HTTPException(status_code=400, detail="Coluna obrigatoria 'Telefone' nao encontrada")
+
+    seen = set()
+    contacts = []
+    skipped = 0
+    for r in rows[1:]:
+        if not r:
+            continue
+        phone_raw = r[i_phone] if i_phone < len(r) else None
+        if phone_raw is None or str(phone_raw).strip() == "":
+            skipped += 1
+            continue
+        phone = re.sub(r"\D", "", str(phone_raw))
+        if not phone:
+            skipped += 1
+            continue
+        if phone in seen:
+            continue
+        seen.add(phone)
+        nm = ""
+        if i_name >= 0 and i_name < len(r) and r[i_name]:
+            nm = str(r[i_name]).strip()
+        em = ""
+        if i_email >= 0 and i_email < len(r) and r[i_email]:
+            em = str(r[i_email]).strip()
+        contacts.append({"name": nm, "phone": phone, "email": em})
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "company_id": user["company_id"],
+        "name": name or "Lista Importada",
+        "description": f"Importada de {file.filename}",
+        "contacts": contacts,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.contact_lists.insert_one(doc)
+    return {
+        "id": doc["id"],
+        "name": doc["name"],
+        "imported_count": len(contacts),
+        "skipped_count": skipped,
+    }
+
+
+
 
 
 # === QUEUES (Filas & Chatbot) ===

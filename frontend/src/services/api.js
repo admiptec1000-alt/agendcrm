@@ -166,6 +166,16 @@ export const crmAPI = {
   deleteCampaign: (id) => api.delete(`/crm/campaigns/${id}`),
   previewCampaignAudience: (id) => api.post(`/crm/campaigns/${id}/preview-audience`),
   runCampaign: (id) => api.post(`/crm/campaigns/${id}/run`),
+  pauseCampaign: (id) => api.post(`/crm/campaigns/${id}/pause`),
+  resumeCampaign: (id) => api.post(`/crm/campaigns/${id}/resume`),
+  cancelCampaign: (id) => api.post(`/crm/campaigns/${id}/cancel`),
+  getCampaignProgress: (id) => api.get(`/crm/campaigns/${id}/progress`),
+  // Contact list Excel import / template
+  importContactListExcel: (formData, params) => api.post('/crm/contact-lists/import-excel', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    params,
+  }),
+  // template download is a direct link to /api/crm/contact-lists/template.xlsx
   // Campaign settings (global anti-block)
   getCampaignSettings: () => api.get('/crm/campaign-settings'),
   updateCampaignSettings: (data) => api.put('/crm/campaign-settings', data),

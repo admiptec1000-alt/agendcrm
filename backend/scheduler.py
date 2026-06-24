@@ -114,6 +114,81 @@ async def _process_scheduled_bulk(db):
             logger.warning(f"[scheduler] bulk message {msg.get('id')} failed: {e}")
 
 
+async def _process_scheduled_campaigns(db):
+    """2026-06-25 — Fires CRM campaigns whose `scheduled_at` is now or
+    in the past. Before this hook, campaigns scheduled via the
+    "Agendamento" field stayed forever in `status='programada'` because
+    nothing was watching the collection. We atomically claim the row
+    (status -> em_execucao) before invoking the runner to avoid double
+    firing if two scheduler ticks overlap."""
+    from routes.crm_routes import _fire_campaign_classic
+    now_iso = datetime.now(timezone.utc).isoformat()
+    while True:
+        # Atomic claim: only one tick can transition each row.
+        camp = await db.campaigns.find_one_and_update(
+            {"status": "programada", "scheduled_at": {"$lte": now_iso}},
+            {"$set": {"status": "em_execucao",
+                      "started_at": datetime.now(timezone.utc).isoformat(),
+                      "fired_by": "scheduler"}},
+            projection={"_id": 0},
+        )
+        if not camp:
+            return
+        bulk_cfg = camp.get("bulk_config") or {}
+        try:
+            if bulk_cfg.get("enabled"):
+                # Bulk mode: route through bulk_routes helper (system-fired)
+                from routes.bulk_routes import (
+                    create_bulk_job_from_campaign,
+                    JobFromCampaign,
+                    WindowConfig,
+                )
+                connection_ids = bulk_cfg.get("connection_ids") or (
+                    [camp.get("connection_id")] if camp.get("connection_id") else []
+                )
+                if not connection_ids:
+                    raise RuntimeError("Bulk: nenhum connection_ids")
+                payload = JobFromCampaign(
+                    connection_ids=connection_ids,
+                    interval_min_sec=int(bulk_cfg.get("interval_min_sec", 8)),
+                    interval_max_sec=int(bulk_cfg.get("interval_max_sec", 25)),
+                    daily_cap_per_connection=int(bulk_cfg.get("daily_cap_per_connection", 800)),
+                    opt_out_keywords=bulk_cfg.get("opt_out_keywords") or ["PARAR", "SAIR", "DESCADASTRAR"],
+                    window=WindowConfig(
+                        enabled=bool(bulk_cfg.get("window_enabled", True)),
+                        start=bulk_cfg.get("window_start", "09:00"),
+                        end=bulk_cfg.get("window_end", "18:00"),
+                        days_of_week=bulk_cfg.get("window_days") or [0, 1, 2, 3, 4, 5],
+                    ),
+                    auto_start=True,
+                )
+                # The bulk helper expects a `user` dict — synthesize one
+                # carrying just company_id (the helper only reads that).
+                fake_user = {"company_id": camp["company_id"], "id": "scheduler"}
+                job = await create_bulk_job_from_campaign(camp["id"], payload, user=fake_user, db=db)
+                await db.campaigns.update_one(
+                    {"id": camp["id"]},
+                    {"$set": {"last_bulk_job_id": job.get("id")}},
+                )
+                logger.info(f"[scheduler] campaign={camp['id']} bulk-fired job={job.get('id')}")
+            else:
+                result = await _fire_campaign_classic(db, camp)
+                if result.get("error"):
+                    await db.campaigns.update_one(
+                        {"id": camp["id"]},
+                        {"$set": {"status": "cancelada", "error": result["error"]}},
+                    )
+                    logger.warning(f"[scheduler] campaign={camp['id']} failed: {result['error']}")
+                else:
+                    logger.info(f"[scheduler] campaign={camp['id']} classic-fired total={result.get('total')}")
+        except Exception as e:
+            logger.warning(f"[scheduler] campaign {camp.get('id')} fire failed: {e}")
+            await db.campaigns.update_one(
+                {"id": camp["id"]},
+                {"$set": {"status": "cancelada", "error": str(e)[:200]}},
+            )
+
+
 async def _process_ticket_auto_close(db):
     """Close tickets that have gone past the per-company inactivity timeout.
     Setting on `companies.ticket_auto_close_hours` (0 = disabled). We only
@@ -814,6 +889,7 @@ async def tick():
     await _run_step("reminders",          lambda: _process_reminders(db, base_url))
     await _run_step("surveys",            lambda: _process_surveys(db, base_url))
     await _run_step("scheduled_bulk",     lambda: _process_scheduled_bulk(db))
+    await _run_step("scheduled_campaigns",lambda: _process_scheduled_campaigns(db))
     await _run_step("ticket_auto_close",  lambda: _process_ticket_auto_close(db))
     await _run_step("billing_reminders",  lambda: _process_billing_reminders(db))
     from routes.bulk_routes import process_bulk_tick

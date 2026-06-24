@@ -1,0 +1,67 @@
+{
+  "iteration": 60,
+  "summary": "Iter 60 — backend pytest 12/12 PASSED (Excel template + import with dedup + .csv reject, campaign /pause /resume /cancel /progress endpoints with correct 400 shapes for invalid states, /run with empty audience returns 400 'Audiencia vazia', /run with classic mode seeds campaign_deliveries and returns mode=classic + queued+total, pause/resume during execution flips status to pausada then em_execucao, scheduler._process_scheduled_campaigns picks up status='programada' with past scheduled_at and transitions to em_execucao). Frontend smoke verified Listas de Contato tab shows Modelo Excel + Importar Excel buttons (data-testid=download-template-btn, import-excel-btn) and clicking Modelo Excel downloads modelo-contatos.xlsx (network request to /api/crm/contact-lists/template.xlsx returns 200).",
+  "backend_results": {
+    "pytest_files": ["/app/backend/tests/test_iteration_60.py (12/12 passed)"],
+    "junit_xml": "/app/test_reports/pytest/iteration_60.xml",
+    "passed": 12,
+    "failed": 0,
+    "skipped": 0,
+    "total": 12,
+    "coverage_areas": [
+      "GET /api/crm/contact-lists/template.xlsx returns 200 + correct content-type + Content-Disposition + valid xlsx with sheet 'Contatos' and headers Nome/Telefone/Email",
+      "POST /api/crm/contact-lists/import-excel rejects .csv with 400",
+      "POST /api/crm/contact-lists/import-excel parses xlsx, dedup by phone, skips empty phone, returns {id,name,imported_count,skipped_count}",
+      "POST /api/crm/campaigns/{id}/run with empty audience returns 400 'Audiencia vazia'",
+      "POST /api/crm/campaigns/{id}/pause returns 400 when not em_execucao",
+      "POST /api/crm/campaigns/{id}/resume returns 400 when not pausada",
+      "POST /api/crm/campaigns/{id}/cancel returns 400 when status not in [em_execucao,pausada,programada]",
+      "GET /api/crm/campaigns/{id}/progress returns {campaign, totals:{pending,sending,sent,failed,total}, sent[], failed[], pending[], sending[]}",
+      "POST /api/crm/campaigns/{id}/run classic mode seeds campaign_deliveries, returns {mode:'classic', queued:true, total:N}, campaign goes to em_execucao",
+      "pause during em_execucao flips status to 'pausada' (verified via progress.campaign.status)",
+      "resume from 'pausada' flips status back to em_execucao/concluida",
+      "scheduler._process_scheduled_campaigns picks status='programada' with past scheduled_at, transitions to em_execucao and seeds deliveries"
+    ]
+  },
+  "frontend_results": {
+    "method": "playwright e2e on REACT_APP_BACKEND_URL",
+    "verified": {
+      "listas_contato_tab_buttons": "data-testid=download-template-btn and data-testid=import-excel-btn render in Listas de Contato tab",
+      "template_download": "Click download-template-btn triggers download (suggested filename 'modelo-contatos.xlsx') and network call to /api/crm/contact-lists/template.xlsx returns 200",
+      "pausada_label_orange": "Not visible in current tenant (no paused campaign live) — could not visually verify color"
+    },
+    "not_verified_due_to_state": [
+      "view-campaign-<id>, pause-campaign-<id>, resume-campaign-<id> data-testids — all 3 listed campaigns are status=Rascunho so these buttons aren't rendered. Visual eye/play/edit icons are present in the Acoes column but their data-testid attributes weren't queryable in the current state.",
+      "Campaign progress modal (campaign-progress-modal) — would only open for concluida/em_execucao/pausada/cancelada campaigns; none exist in tenant."
+    ]
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "critical_code_review_comments": [
+    "crm_routes._fire_campaign_classic correctly wipes campaign_deliveries before re-runs (line 2052) — safe for re-execution.",
+    "_classic_runner._wait_if_paused polls every 5s — acceptable, but consider event-based wakeup later if many campaigns paused simultaneously.",
+    "scheduler._process_scheduled_campaigns uses find_one_and_update for atomic claim — concurrent-safe. Good.",
+    "POST /campaigns/{id}/cancel allows from [em_execucao, pausada, programada] only — rascunho can't be cancelled (returns 400). Verify UX expects this.",
+    "import_contact_list_excel: the `name` query param defaults to 'Lista Importada' when omitted — consider requiring it to avoid noisy duplicates.",
+    "Minor: action_items list on Listagem tab shows eye icons even for Rascunho campaigns but they open the old AudienceModal — that's per-spec (only concluida/em_execucao/pausada/cancelada open the new CampaignProgressModal). The data-testid pattern view-campaign-<id> should still be set on the rascunho/programada eye-icon for testability — currently we couldn't find it via that selector."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_60.py",
+    "/app/test_reports/pytest/iteration_60.xml"
+  ],
+  "action_items": [
+    "Optional: add data-testid=view-campaign-<id> also on the rascunho/programada eye-button (currently absent) so the audience modal flow is testable end-to-end.",
+    "Optional: seed a campaign with status=em_execucao in dev tenant so QA can visually verify pause-campaign / resume-campaign / Pausada orange badge."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_60.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "Partial — Excel template/import UI verified; pause/resume/progress UI not visible because no em_execucao/pausada campaign exists in tenant"},
+  "test_credentials": "CRM Admin crm@test.com / crm123 at /crmtest/login (subdomain crmtest)",
+  "seed_data_creation": "Created temporary channel_connections doc (TEST_iter60_conn_*) + contact_list (TEST_iter60_camp_list) + campaign (TEST_iter60_run_*) for the run/pause/resume class. Also a transient programada campaign for scheduler test. All cleaned up in teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression at /app/backend/tests/test_iteration_60.py (12 tests, all passing). To visually verify the new orange 'Pausada' badge and pause-campaign-<id>/resume-campaign-<id>/view-campaign-<id> testids, the tenant needs at least one campaign in em_execucao/pausada state — the current tenant only has 3 Rascunho campaigns."
+}

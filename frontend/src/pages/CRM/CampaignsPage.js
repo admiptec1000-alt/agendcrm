@@ -13,6 +13,7 @@ const STATUS_LABEL = {
   draft: { label: 'Rascunho', bg: 'bg-slate-100', text: 'text-slate-600' },
   programada: { label: 'Programada', bg: 'bg-blue-100', text: 'text-blue-700' },
   em_execucao: { label: 'Em execucao', bg: 'bg-amber-100', text: 'text-amber-700' },
+  pausada: { label: 'Pausada', bg: 'bg-orange-100', text: 'text-orange-700' },
   concluida: { label: 'Concluida', bg: 'bg-emerald-100', text: 'text-emerald-700' },
   cancelada: { label: 'Cancelada', bg: 'bg-red-100', text: 'text-red-700' },
 };
@@ -30,6 +31,9 @@ const CampaignsPage = () => {
   const [showCampModal, setShowCampModal] = useState(false);
   const [editingCamp, setEditingCamp] = useState(null);
   const [previewing, setPreviewing] = useState(null);
+  // 2026-06-25 — Modal "olhinho" agora mostra progresso em tempo real
+  // (enviadas/pendentes/erros) em vez do antigo `AudienceModal` estatico.
+  const [progressFor, setProgressFor] = useState(null);
   const [audienceData, setAudienceData] = useState(null);
   // 2026-02-28 — Disparo em massa: modal de boot + tab de monitoramento.
   const [bulkLaunchFor, setBulkLaunchFor] = useState(null);
@@ -51,11 +55,27 @@ const CampaignsPage = () => {
   };
 
   const handlePreview = async (c) => {
+    // 2026-06-25 — Para campanhas que NUNCA rodaram (draft/programada
+    // sem entrega), mostramos o preview da audiencia. Para campanhas
+    // em execucao/concluidas, abrimos o modal de progresso em tempo real.
+    if (['em_execucao', 'pausada', 'concluida', 'cancelada'].includes(c.status)) {
+      setProgressFor(c);
+      return;
+    }
     setPreviewing(c); setAudienceData(null);
     try {
       const r = await crmAPI.previewCampaignAudience(c.id);
       setAudienceData(r.data);
     } catch (e) { toast.error('Erro ao calcular audiencia'); }
+  };
+
+  const handlePause = async (c) => {
+    try { await crmAPI.pauseCampaign(c.id); toast.success('Campanha pausada'); reload(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Erro ao pausar'); }
+  };
+  const handleResume = async (c) => {
+    try { await crmAPI.resumeCampaign(c.id); toast.success('Campanha retomada'); reload(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Erro ao retomar'); }
   };
 
   const handleRun = async (c) => {
@@ -129,8 +149,16 @@ const CampaignsPage = () => {
                       <td className="px-4 py-2.5 text-slate-600">{c.confirmation_enabled ? 'Habilitada' : 'Desabilitada'}</td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center justify-end gap-0.5">
-                          <button onClick={() => handlePreview(c)} className="p-1.5 rounded hover:bg-slate-100" title="Audiencia"><Eye className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleRun(c)} className="p-1.5 rounded hover:bg-emerald-100 text-emerald-700" title="Enviar agora (modo classico)" data-testid={`run-campaign-${c.id}`}><Send className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => handlePreview(c)} className="p-1.5 rounded hover:bg-slate-100" title={['em_execucao', 'pausada', 'concluida', 'cancelada'].includes(c.status) ? 'Ver progresso' : 'Audiencia'} data-testid={`view-campaign-${c.id}`}><Eye className="w-3.5 h-3.5" /></button>
+                          {c.status === 'em_execucao' && (
+                            <button onClick={() => handlePause(c)} className="p-1.5 rounded hover:bg-orange-100 text-orange-700" title="Pausar campanha" data-testid={`pause-campaign-${c.id}`}><Pause className="w-3.5 h-3.5" /></button>
+                          )}
+                          {c.status === 'pausada' && (
+                            <button onClick={() => handleResume(c)} className="p-1.5 rounded hover:bg-emerald-100 text-emerald-700" title="Retomar campanha" data-testid={`resume-campaign-${c.id}`}><Play className="w-3.5 h-3.5" /></button>
+                          )}
+                          {!['em_execucao', 'pausada'].includes(c.status) && (
+                            <button onClick={() => handleRun(c)} className="p-1.5 rounded hover:bg-emerald-100 text-emerald-700" title="Enviar agora (modo classico)" data-testid={`run-campaign-${c.id}`}><Send className="w-3.5 h-3.5" /></button>
+                          )}
                           <button onClick={() => setBulkLaunchFor(c)} className="p-1.5 rounded hover:bg-violet-100 text-violet-700" title="Disparo em massa (multi-conexao, spintax, janela, opt-out)" data-testid={`bulk-launch-${c.id}`}><Rocket className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleEdit(c)} className="p-1.5 rounded hover:bg-slate-100" title="Editar"><Pencil className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleDelete(c)} className="p-1.5 rounded hover:bg-red-50 text-red-600" title="Excluir"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -162,6 +190,13 @@ const CampaignsPage = () => {
           campaign={previewing}
           data={audienceData}
           onClose={() => { setPreviewing(null); setAudienceData(null); }}
+        />
+      )}
+
+      {progressFor && (
+        <CampaignProgressModal
+          campaign={progressFor}
+          onClose={() => { setProgressFor(null); reload(); }}
         />
       )}
 
@@ -718,11 +753,189 @@ const AudienceModal = ({ campaign, data, onClose }) => (
   </div>
 );
 
+/* ============== CAMPAIGN PROGRESS MODAL (live) ==============
+ * 2026-06-25 — Substitui o antigo AudienceModal estatico para campanhas
+ * que ja rodaram ou estao rodando. Mostra:
+ *   • Totais por status (enviadas / pendentes / em envio / falhas)
+ *   • Barra de progresso
+ *   • 3 abas: Enviadas, Pendentes, Falhas (com motivo do erro)
+ *   • Auto-refresh a cada 3s enquanto a campanha esta ativa
+ *   • Atalhos: Pausar / Retomar conforme o status
+ */
+const CampaignProgressModal = ({ campaign, onClose }) => {
+  const [progress, setProgress] = useState(null);
+  const [tab, setTab] = useState('sent');
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await crmAPI.getCampaignProgress(campaign.id);
+      setProgress(r.data);
+    } catch (e) { /* ignore — keep last snapshot */ }
+    setLoading(false);
+  }, [campaign.id]);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(() => {
+      const st = progress?.campaign?.status;
+      // Stop polling when terminal.
+      if (st && ['concluida', 'cancelada'].includes(st)) return;
+      load();
+    }, 3000);
+    return () => clearInterval(id);
+  }, [load, progress?.campaign?.status]);
+
+  const totals = progress?.totals || { pending: 0, sending: 0, sent: 0, failed: 0, total: 0 };
+  const camp = progress?.campaign || campaign;
+  const stLbl = STATUS_LABEL[camp.status] || STATUS_LABEL.draft;
+  const done = (totals.sent || 0) + (totals.failed || 0);
+  const pct = totals.total ? Math.round((done / totals.total) * 100) : 0;
+
+  const onPause = async () => {
+    try { await crmAPI.pauseCampaign(campaign.id); toast.success('Pausada'); load(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Erro'); }
+  };
+  const onResume = async () => {
+    try { await crmAPI.resumeCampaign(campaign.id); toast.success('Retomada'); load(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Erro'); }
+  };
+
+  const list = (
+    tab === 'sent' ? (progress?.sent || []) :
+    tab === 'pending' ? [...(progress?.sending || []), ...(progress?.pending || [])] :
+    (progress?.failed || [])
+  );
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" data-testid="campaign-progress-modal" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl my-8" onMouseDown={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-slate-200">
+          <div className="flex items-center gap-2 min-w-0">
+            <Activity className="w-4 h-4 text-primary" />
+            <h3 className="text-base font-bold truncate">{camp.name}</h3>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${stLbl.bg} ${stLbl.text}`}>{stLbl.label}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            {camp.status === 'em_execucao' && (
+              <button onClick={onPause} className="p-1.5 rounded hover:bg-orange-100 text-orange-700" title="Pausar" data-testid="progress-pause-btn"><Pause className="w-4 h-4" /></button>
+            )}
+            {camp.status === 'pausada' && (
+              <button onClick={onResume} className="p-1.5 rounded hover:bg-emerald-100 text-emerald-700" title="Retomar" data-testid="progress-resume-btn"><Play className="w-4 h-4" /></button>
+            )}
+            <button onClick={load} className="p-1.5 rounded hover:bg-slate-100 text-slate-600" title="Atualizar"><RefreshCw className="w-4 h-4" /></button>
+            <button onClick={onClose} className="p-1.5 rounded hover:bg-slate-100"><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+
+        <div className="p-4">
+          {/* Totals grid */}
+          <div className="grid grid-cols-4 gap-2 mb-3">
+            <ProgressStat icon={<CheckCircle2 className="w-3.5 h-3.5" />} color="emerald" label="Enviadas" value={totals.sent || 0} />
+            <ProgressStat icon={<Clock className="w-3.5 h-3.5" />} color="slate" label="Pendentes" value={(totals.pending || 0) + (totals.sending || 0)} />
+            <ProgressStat icon={<AlertCircle className="w-3.5 h-3.5" />} color="red" label="Erros" value={totals.failed || 0} />
+            <ProgressStat icon={<Activity className="w-3.5 h-3.5" />} color="indigo" label="Total" value={totals.total || 0} />
+          </div>
+
+          {/* Progress bar */}
+          <div className="mb-3">
+            <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+              <span>{done} de {totals.total} concluidas</span>
+              <span className="font-semibold tabular-nums">{pct}%</span>
+            </div>
+            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 transition-all duration-500"
+                style={{ width: `${pct}%` }}
+                data-testid="progress-bar-fill"
+              />
+            </div>
+          </div>
+
+          {/* Sub-tabs */}
+          <div className="flex gap-1 border-b border-slate-200 mb-2">
+            <SubTab active={tab === 'sent'} onClick={() => setTab('sent')} color="emerald" label={`Enviadas (${totals.sent || 0})`} testId="progress-tab-sent" />
+            <SubTab active={tab === 'pending'} onClick={() => setTab('pending')} color="slate" label={`Pendentes (${(totals.pending || 0) + (totals.sending || 0)})`} testId="progress-tab-pending" />
+            <SubTab active={tab === 'failed'} onClick={() => setTab('failed')} color="red" label={`Erros (${totals.failed || 0})`} testId="progress-tab-failed" />
+          </div>
+
+          {/* List */}
+          <div className="max-h-72 overflow-y-auto space-y-1" data-testid={`progress-list-${tab}`}>
+            {loading && !progress && <p className="text-xs text-slate-400 text-center py-4">Carregando...</p>}
+            {!loading && list.length === 0 && (
+              <p className="text-xs text-slate-400 text-center py-6">
+                {tab === 'sent' ? 'Nenhuma mensagem enviada ainda' :
+                 tab === 'pending' ? 'Nenhuma mensagem pendente' :
+                 'Nenhum erro registrado'}
+              </p>
+            )}
+            {list.map((d, i) => (
+              <div key={d.id || i} className="text-xs px-3 py-1.5 rounded-md bg-slate-50 flex items-center justify-between gap-2">
+                <span className="truncate">{d.name || '(sem nome)'}</span>
+                <span className="text-slate-400 ml-2 flex-shrink-0">{d.phone}</span>
+                {tab === 'failed' && d.error && (
+                  <span className="text-red-600 text-[10px] truncate max-w-[40%]" title={d.error}>{d.error}</span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {camp.error && (
+            <div className="mt-3 text-xs px-3 py-2 rounded-md bg-red-50 border border-red-200 text-red-700" data-testid="progress-error-banner">
+              <AlertCircle className="w-3.5 h-3.5 inline mr-1" /> {camp.error}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ProgressStat = ({ icon, label, value, color }) => {
+  const styles = {
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    slate:   'bg-slate-50 text-slate-700 border-slate-200',
+    red:     'bg-red-50 text-red-700 border-red-200',
+    indigo:  'bg-indigo-50 text-indigo-700 border-indigo-200',
+  };
+  return (
+    <div className={`border rounded-lg p-2 ${styles[color] || styles.slate}`}>
+      <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider opacity-80">
+        {icon}
+        {label}
+      </div>
+      <p className="text-lg font-bold tabular-nums mt-0.5">{value}</p>
+    </div>
+  );
+};
+
+const SubTab = ({ active, onClick, label, color, testId }) => {
+  const activeStyles = {
+    emerald: 'border-emerald-500 text-emerald-700',
+    slate: 'border-slate-500 text-slate-700',
+    red: 'border-red-500 text-red-700',
+  };
+  return (
+    <button
+      onClick={onClick}
+      data-testid={testId}
+      className={`text-xs px-3 py-1.5 border-b-2 -mb-px font-medium ${
+        active ? activeStyles[color] : 'border-transparent text-slate-500 hover:text-slate-700'
+      }`}
+    >
+      {label}
+    </button>
+  );
+};
+
+
 /* ============== CONTACT LISTS TAB ============== */
 const ContactListsTab = () => {
   const [lists, setLists] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = React.useRef(null);
 
   const reload = async () => {
     try { const r = await crmAPI.listContactLists(); setLists(r.data); } catch (e) {}
@@ -735,13 +948,69 @@ const ContactListsTab = () => {
     catch (e) { toast.error('Erro'); }
   };
 
+  const downloadTemplate = () => {
+    // The endpoint sets Content-Disposition so the browser triggers a
+    // download. We piggyback on the auth header that `api` would set by
+    // grabbing the token from localStorage manually — simplest path.
+    const base = process.env.REACT_APP_BACKEND_URL;
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    fetch(`${base}/api/crm/contact-lists/template.xlsx`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.ok ? r.blob() : Promise.reject(r))
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'modelo-contatos.xlsx';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => toast.error('Erro ao baixar modelo'));
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ''; // reset so re-selecting the same file works
+    const name = window.prompt('Nome da lista a ser criada:', file.name.replace(/\.xlsx$/i, ''));
+    if (!name) return;
+    setImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const r = await crmAPI.importContactListExcel(formData, { name });
+      toast.success(`${r.data?.imported_count || 0} contato(s) importado(s)${r.data?.skipped_count ? `, ${r.data.skipped_count} ignorado(s)` : ''}`);
+      reload();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Erro ao importar');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <p className="text-xs text-slate-500">{lists.length} listas</p>
-        <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-list-btn">
-          <Plus className="w-4 h-4" /> Nova Lista
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={downloadTemplate} className="btn-secondary text-sm flex items-center gap-1.5" data-testid="download-template-btn" title="Baixar planilha modelo">
+            <FileText className="w-4 h-4" /> Modelo Excel
+          </button>
+          <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="btn-secondary text-sm flex items-center gap-1.5" data-testid="import-excel-btn" title="Importar planilha xlsx">
+            <Plus className="w-4 h-4" /> {importing ? 'Importando...' : 'Importar Excel'}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={handleFileChange}
+            data-testid="import-excel-input"
+          />
+          <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary text-sm flex items-center gap-1.5" data-testid="new-list-btn">
+            <Plus className="w-4 h-4" /> Nova Lista
+          </button>
+        </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {lists.length === 0 && <p className="col-span-full text-center text-sm text-slate-400 py-10">Nenhuma lista criada</p>}
