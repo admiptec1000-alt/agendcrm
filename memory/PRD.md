@@ -1,3 +1,31 @@
+## 2026-06-25 — Campanhas: Pause/Resume + Scheduler + Import Excel + Progresso ao Vivo ✅
+
+### 1. Scheduler agora dispara campanhas `programada`
+`scheduler.py::_process_scheduled_campaigns` faz `find_one_and_update` atomico das campanhas com `status='programada'` e `scheduled_at<=now` → marca `em_execucao` → dispara via `_fire_campaign_classic` (ou bulk se `bulk_config.enabled`). Antes desta correcao, campanhas com data agendada ficavam paradas eternamente porque nenhum job estava observando a colecao.
+
+### 2. Pause/Resume/Cancel + nova colecao `campaign_deliveries`
+- `_fire_campaign_classic(db, camp)` faz seed de 1 doc por destinatario em `campaign_deliveries` com status `pending|sending|sent|failed|error`. O loop async `_classic_runner` checa `db.campaigns.status` a cada iteracao — se `pausada`, dorme 5s e re-checa; se `cancelada`/`concluida`, sai. Cada envio atualiza `campaign_deliveries.{status, sent_at|failed_at, error}`.
+- Endpoints: `POST /campaigns/{id}/pause`, `/resume`, `/cancel`. Idempotentes com 400 em estado invalido.
+
+### 3. Olhinho => modal de progresso ao vivo
+- `GET /campaigns/{id}/progress` retorna `{campaign, totals:{pending,sending,sent,failed,total}, sent[], failed[], pending[], sending[]}`.
+- Frontend `CampaignProgressModal` (`data-testid=campaign-progress-modal`) abre quando o status nao e `draft|programada`. Auto-refresh a cada 3s (para quando concluida/cancelada). Mostra:
+  - 4 cards de totais (Enviadas/Pendentes/Erros/Total)
+  - Barra de progresso (`progress-bar-fill`)
+  - 3 sub-abas (Enviadas / Pendentes / Erros — com motivo do erro)
+  - Atalhos Pause/Resume conforme o status
+
+### 4. Importacao Excel + template
+- `GET /api/crm/contact-lists/template.xlsx` retorna xlsx com colunas `Nome, Telefone, Email`. Tab `Contatos` com 2 linhas exemplo.
+- `POST /api/crm/contact-lists/import-excel` (multipart .xlsx + querystring `name`) parseia, deduplica por telefone (regex `\D` removido), ignora linhas sem telefone, retorna `{id, name, imported_count, skipped_count}`.
+- UI: botoes "Modelo Excel" (`download-template-btn`) e "Importar Excel" (`import-excel-btn`) na aba "Listas de Contato".
+
+### Testes
+Backend: 12/12 pytest em `/app/backend/tests/test_iteration_60.py`. Frontend: smoke E2E confirma download template + presenca dos botoes. Pause/Resume UI conditionals validados via leitura do JSX (botoes so renderizam quando status casa).
+
+---
+
+
 ## 2026-06-25 — Contadores 1:1 com lista + Sync 7d WhatsApp + Painel "Ferramentas" SA ✅
 
 ### A. Contadores das abas refletem fielmente a lista
