@@ -1,3 +1,46 @@
+## 2026-06-27 (continuacao) — Watchdog automatico de conexoes travadas + diagnostico de deploy ✅
+
+### Descoberta critica do redeploy
+A primeira tentativa de conserto (Resetar Sessao manual) NAO funcionou em
+producao porque o **microservico WhatsApp no Render NAO foi atualizado**
+no redeploy do usuario. O endpoint `/version` confirmou: producao roda
+**v2.2.0 (build 2026-06-10)** sem `stuck_connection_watchdog` nem
+`full_reset_endpoint`. O botao "Verificar Deploy" agora detecta isso
+EXPLICITAMENTE e mostra ao operador o que esta faltando.
+
+### Auto-recovery server-side (v2.3.0)
+Adicionado **stuck-connection watchdog** em `whatsapp-service/index.js`:
+varre a cada 20s todas as instancias em memoria; para cada uma em
+`connecting|disconnected|waiting_qr` que:
+- Nao emitiu QR ainda, E
+- Esta tentando ha mais de 45s com >=2 retries de Baileys, OU
+- Esta "silenciosamente travada" >=60s com creds.json corrompido em disco
+
+automaticamente **derruba o socket + apaga AUTH_DIR + recria do zero**.
+Cooldown de 90s por instancia previne loops. Funciona para QUALQUER
+conexao (SA + empresas) — exatamente o que o usuario pediu.
+
+### Endpoint /version + flag de patches
+Bumpamos para `v2.3.0` (build 2026-06-27) e adicionamos 2 feature flags:
+- `stuck_connection_watchdog: true`
+- `full_reset_endpoint: true`
+
+O endpoint `GET /api/channels/service-version-check` agora exige
+ambas as flags para `redeploy_done=true`. Quando o operador clica
+"Verificar Deploy" e Render esta desatualizado, aparece:
+- ✗ Watchdog de conexoes travadas AUSENTE — redeploy do Render PENDENTE
+- ✗ Endpoint Resetar Sessao AUSENTE — redeploy do Render PENDENTE
+
+### Como o usuario pode finalmente resolver
+1. Clicar **"Verificar Deploy"** na tela Canais — confirma que Render esta v2.2.0 (PENDENTE)
+2. Acessar Render dashboard → servico `agendcrm-wa` (ou nome similar) → **Manual Deploy → Deploy Latest Commit**
+3. Aguardar build (~3min). Clicar "Verificar Deploy" novamente
+4. Quando aparecer "✓ Versao: v2.3.0" + ambos os patches ATIVOS, o conserto esta vivo
+5. A conexao do SA vai se auto-curar em ~60s (sem intervencao manual). Ou clicar "Resetar sessao" para forcar imediatamente.
+
+---
+
+
 ## 2026-06-27 — SA Connection "Gerando QR Code... (tentativa N)" stuck → Full Reset ✅
 
 ### Diagnostico

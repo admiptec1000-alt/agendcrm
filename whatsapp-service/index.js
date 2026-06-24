@@ -851,6 +851,10 @@ async function createConnection(instanceId, options = {}) {
     lastError: null,
     reconnectAttempts: previousAttempts,
     lastActivityAt: Date.now(),
+    // 2026-06-27 — Immutable creation timestamp used by the stuck-connection
+    // watchdog so it can detect "trying for 60s, no QR" without being
+    // confused by other events that update lastActivityAt.
+    createdAt: Date.now(),
   };
 
   sock.ev.on('connection.update', async (update) => {
@@ -2130,6 +2134,100 @@ setTimeout(() => {
   }, DISK_CHECK_INTERVAL_MS);
 }, 60 * 1000);
 
+// ────────────────────────────────────────────────────────────────────
+// STUCK-CONNECTION WATCHDOG (2026-06-27)
+// ────────────────────────────────────────────────────────────────────
+// Symptom: a connection sits in `connecting`/`disconnected` forever and
+// Baileys never emits a QR. Root cause is typically a stale or partially
+// corrupted `creds.json` left in AUTH_DIR/<id>/ — Baileys reads it,
+// believes the session is authenticated, attempts to restore the
+// websocket, fails the handshake, schedules an exponential-backoff
+// reconnect (5s, 10s, 20s, 40s, 80s...), and never reaches the `qr`
+// event. Was unrecoverable in production for the Super Admin account
+// because the operator had no way to wipe the auth without SSH access.
+//
+// What this watchdog does, every 20s:
+//   For each instance in memory whose status is NOT `connected` AND has
+//   NO QR pending AND has been "trying" for ≥ 45s AND has accumulated
+//   ≥ 2 reconnect attempts → nuke its AUTH_DIR + close socket + fresh
+//   createConnection(). This forces Baileys to start a brand-new
+//   pairing flow → QR appears in ~5-10s.
+//
+// Tight guards (we don't want runaway resets):
+//   - Per-instance `_lastWatchdogResetAt` cooldown of 90s (one reset
+//     per minute and a half max per instance).
+//   - We ONLY reset instances that the operator EXPECTS to be online
+//     (status === 'connecting'/'disconnected'/'waiting_qr' with no QR
+//     yet emitted). We NEVER touch `connected` instances.
+//   - We log every reset with the reason so the support team can see
+//     in Render logs why each instance was healed.
+const STUCK_WATCHDOG_INTERVAL_MS = 20 * 1000;        // check every 20s
+const STUCK_WATCHDOG_STUCK_AFTER_MS = 45 * 1000;     // stuck if no QR after 45s
+const STUCK_WATCHDOG_MIN_RECONNECT_ATTEMPTS = 2;     // give Baileys 2 retries first
+const STUCK_WATCHDOG_RESET_COOLDOWN_MS = 90 * 1000;  // max 1 reset / 90s per instance
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, inst] of Object.entries(connections)) {
+    if (!inst) continue;
+    if (inst.status === 'connected') continue;
+    if (inst.qr || inst.qrBase64) continue;   // QR already emitted — operator must scan
+    const createdAt = inst.createdAt || inst.connectedAt || inst.lastActivityAt || now;
+    const tryingForMs = now - createdAt;
+    const reconnectAttempts = inst.reconnectAttempts || 0;
+
+    // Trigger #1 (loud): Baileys logged at least 2 reconnect attempts AND
+    //                    we still don't have a QR after 45s.
+    const trigger1 = tryingForMs >= STUCK_WATCHDOG_STUCK_AFTER_MS && reconnectAttempts >= STUCK_WATCHDOG_MIN_RECONNECT_ATTEMPTS;
+
+    // Trigger #2 (silent): Baileys is doing NOTHING (0 reconnect events)
+    //                     but we've been "connecting" for 60s+ with no QR
+    //                     and there are stale `creds.json` bytes on disk.
+    //                     Almost always means corrupted auth that needs
+    //                     a hard wipe.
+    let trigger2 = false;
+    if (!trigger1 && tryingForMs >= 60 * 1000 && reconnectAttempts === 0) {
+      try {
+        const credsPath = path.join(AUTH_DIR, id, 'creds.json');
+        if (fs.existsSync(credsPath)) trigger2 = true;
+      } catch (_) {}
+    }
+
+    if (!trigger1 && !trigger2) continue;
+    if (inst._lastWatchdogResetAt && (now - inst._lastWatchdogResetAt) < STUCK_WATCHDOG_RESET_COOLDOWN_MS) continue;
+
+    const reason = trigger1
+      ? `stuck ${Math.round(tryingForMs / 1000)}s after ${reconnectAttempts} retries`
+      : `silent-stuck ${Math.round(tryingForMs / 1000)}s, stale creds.json present`;
+    console.warn(
+      `[stuck-watchdog] AUTO-RESET ${id} — status=${inst.status} reason=${reason} ` +
+      `(last error: ${inst.lastError || '-'})`
+    );
+    recordEvent(id, 'watchdog_auto_reset', `${reason}; wiping auth`);
+
+    // Tear down the socket
+    try {
+      if (inst.sock) {
+        try { inst.sock.ev.removeAllListeners?.(); } catch (_) {}
+        try {
+          if (typeof inst.sock.end === 'function') inst.sock.end(undefined);
+          else if (typeof inst.sock.ws?.close === 'function') inst.sock.ws.close();
+        } catch (_) {}
+      }
+    } catch (_) {}
+    // Mark cooldown BEFORE wiping so a slow re-init doesn't get reset again
+    inst._lastWatchdogResetAt = now;
+    delete connections[id];
+    const authDir = path.join(AUTH_DIR, id);
+    try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (e) {
+      console.warn(`[stuck-watchdog] rmSync ${id} failed: ${e.message}`);
+    }
+    // Re-init in background (avoid blocking the loop)
+    createConnection(id).catch(e => console.error(`[stuck-watchdog] re-init ${id} failed: ${e.message}`));
+  }
+}, STUCK_WATCHDOG_INTERVAL_MS);
+
+
 // Manual trigger so operators can free disk space NOW if Render shows the
 // volume nearing capacity. Supports ?dry_run=1 to preview what would be
 // removed without touching the disk. GET returns the LAST snapshot so the
@@ -2250,7 +2348,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.2.0',
+    version: 'v2.3.0',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -2263,8 +2361,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.2.0',
-    built_at: '2026-06-10',
+    version: 'v2.3.0',
+    built_at: '2026-06-27',
     features: {
       sent_message_store: true,
       multi_message_types: true,
@@ -2320,6 +2418,19 @@ app.get('/version', (req, res) => {
       // (uptime, lastInboundAt, log de eventos via /instances/health-all).
       conservative_watchdog: true,
       health_event_log: true,
+      // v2.2.x — Baileys 7 privacy tokens
+      baileys_7_privacy_tokens: true,
+      // v2.3.0 — Stuck-connection watchdog + full-reset endpoint.
+      // Every 20s scans for instances stuck in connecting/disconnected
+      // with no QR + (>=2 reconnect attempts OR stale creds.json after
+      // 60s). Auto-wipes auth dir + fresh init. Fixes the "Gerando QR
+      // Code... (tentativa N)" infinite loop without operator action.
+      // The Super Admin connection was the canonical reproducer.
+      stuck_connection_watchdog: true,
+      // v2.3.0 — POST /instances/:id/full-reset wipes the entire
+      // AUTH_DIR for one connection and re-inits Baileys from scratch.
+      // Exposed via the backend as POST /api/channels/connections/{id}/full-reset.
+      full_reset_endpoint: true,
       // v2.2.0 — Baileys 7.x: envia tctoken/cstoken nativamente (fix do
       // erro 463 "Reach-out Time-lock" que bloqueava entregas), LID nativo
       // via remoteJidAlt/participantAlt, runtime ESM.

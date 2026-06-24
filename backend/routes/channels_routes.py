@@ -181,11 +181,31 @@ async def service_version_check(user: dict = Depends(get_current_user)):
                     checks["details"].append("⚠ FASTAPI_URL aponta para localhost — mensagens recebidas NAO chegam ao backend!")
                 else:
                     checks["details"].append(f"✓ FASTAPI_URL: {fu}")
+                # 2026-06-27 — Verifica patches especificos do conserto da
+                # conexao Super Admin travada (Gerando QR Code...). Sem o
+                # watchdog + endpoint de full-reset, o problema retorna.
+                feats = data.get("features") or {}
+                if feats.get("stuck_connection_watchdog"):
+                    checks["details"].append("✓ Watchdog de conexoes travadas ATIVO")
+                else:
+                    checks["details"].append("✗ Watchdog de conexoes travadas AUSENTE — redeploy do Render PENDENTE")
+                if feats.get("full_reset_endpoint"):
+                    checks["details"].append("✓ Endpoint Resetar Sessao ATIVO")
+                else:
+                    checks["details"].append("✗ Endpoint Resetar Sessao AUSENTE — redeploy do Render PENDENTE")
             else:
                 checks["details"].append("✗ Endpoint /version ausente — REDEPLOY PENDENTE (versao antiga)")
     except Exception as e:
         checks["details"].append(f"✗ Erro: {str(e)[:120]}")
-    checks["redeploy_done"] = bool(checks["online"] and checks.get("version"))
+    # 2026-06-27 — `redeploy_done=true` agora exige que as features novas
+    # estejam ativas (nao basta o microservico responder).
+    feats = checks.get("features") or {}
+    checks["redeploy_done"] = bool(
+        checks["online"]
+        and checks.get("version")
+        and feats.get("stuck_connection_watchdog")
+        and feats.get("full_reset_endpoint")
+    )
     return checks
 
 
