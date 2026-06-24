@@ -589,6 +589,54 @@ async def force_reconnect_channel(
     return {"ok": True}
 
 
+@router.post("/connections/{conn_id}/full-reset")
+async def full_reset_channel(
+    conn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-06-27 — Nuclear reset for the "stuck connecting / no QR"
+    symptom on WhatsApp connections. Wipes the entire on-disk auth dir
+    (creds.json + app-state + signal sessions) and re-creates a fresh
+    socket. The operator will need to scan the QR code again.
+
+    Trigger paths:
+      - Manual button "Resetar conexao" in the QR card (visible after
+        ~5 failed polls)
+      - Auto-recovery in the frontend QR poller after 8+ failed polls
+        with no QR (covers SA system company and tenant companies
+        equally — this is exactly what the user asked for: "mesma
+        confiabilidade e dinamica para o Super Admin").
+    """
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    if conn.get("type") != "whatsapp":
+        raise HTTPException(status_code=400, detail="Reset apenas suportado em conexoes WhatsApp")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/full-reset")
+        if r.status_code >= 400:
+            raise HTTPException(502, f"Baileys retornou {r.status_code}: {r.text[:200]}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"full-reset error: {e}")
+        raise HTTPException(500, f"Falha ao resetar conexao: {str(e)[:200]}")
+    # DB: clear QR/status so the poller picks up fresh state from Baileys.
+    await db.channel_connections.update_one(
+        {"id": conn_id},
+        {"$set": {
+            "status": "waiting_qr",
+            "qr_code": None,
+            "send_failures_count": 0,
+            "last_full_reset_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"ok": True, "message": "Sessao resetada. Aguardando novo QR Code."}
+
+
+
 @router.post("/connections/{conn_id}/reset-signal-session")
 async def reset_signal_session(
     conn_id: str,

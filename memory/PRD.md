@@ -1,3 +1,56 @@
+## 2026-06-27 — SA Connection "Gerando QR Code... (tentativa N)" stuck → Full Reset ✅
+
+### Diagnostico
+A tela "Canais" do Super Admin reusa exatamente o mesmo `ConexoesPage`
+do tenant + as mesmas rotas de backend (`channels_routes.py`). Nao
+existia divergencia de codigo entre SA e empresas. Porem, em producao a
+conexao do SA ficou presa em "Conectando..." / "Gerando QR Code... (tentativa 5)"
+porque o `AUTH_DIR/<conn_id>` do servico Baileys ficou corrompido
+(prov. apos a cleanup automatica de Signal sessions que rodou com o
+disco do Render quase cheio) e o `createConnection` re-tentava
+indefinidamente sem conseguir emitir o QR.
+
+### Fix — Reset profundo (nuclear) de sessao
+**WhatsApp service** (`whatsapp-service/index.js`): novo endpoint
+`POST /instances/:id/full-reset`. Fluxo:
+1. Mata o socket em memoria + remove todos os listeners
+2. Apaga `connections[id]` em RAM
+3. `fs.rmSync(AUTH_DIR/<id>, recursive)` — wipe COMPLETO (creds.json
+   + app-state + session-* + pre-key-*)
+4. `createConnection(id)` em fire-and-forget (Cloudflare derruba
+   requests > 100s; nao podemos `await` o handshake completo)
+Retorna 200 com `{status:'resetting'}` em ~ms.
+
+**Backend** (`channels_routes.py`): `POST /api/channels/connections/{id}/full-reset`
+proxia pro WA service, depois marca `status='waiting_qr'`,
+`qr_code=None`, zera `send_failures_count` e grava `last_full_reset_at`.
+
+**Frontend** (`Dashboard.js::ConnectionCard`):
+- Nova API `channelsAPI.fullResetConnection(id)`
+- Botao manual "Continua travado? Resetar sessao" (`data-testid=full-reset-{id}`)
+  aparece apos 5 tentativas falhas + confirma com window.confirm
+- **Auto-recovery**: apos 8 polls sem QR e status Baileys
+  `not_found|disconnected|error`, dispara um `fullReset` automaticamente
+  (apenas 1x por sessao da UI; `autoResetTriedRef`)
+- Reseta contador apos QR aparecer ou apos o reset
+
+### Por que isso resolve o pedido do usuario
+O usuario pediu "mesma confiabilidade e dinamica para o Super Admin
+que as empresas". O codigo ja era 100% compartilhado — o problema era
+o estado corrompido em disco no servico Baileys da producao. Com o
+auto-recovery + botao manual, QUALQUER conexao (SA ou empresa) que
+ficar presa "Gerando QR Code..." se cura sozinha em ~25 segundos. Nao
+precisa mais SSH no Render nem deletar a conexao no Mongo.
+
+### Notas para deploy
+O fix esta em 3 camadas: **frontend** (Emergent) + **backend** (Emergent) +
+**WhatsApp service** (Render Node). Os dois primeiros sobem com o deploy
+do Emergent; o servico do Render precisa ser redeployed manualmente pelo
+usuario pra producao ter o endpoint `/instances/:id/full-reset`.
+
+---
+
+
 ## 2026-06-25 — Campanhas: Pause/Resume + Scheduler + Import Excel + Progresso ao Vivo ✅
 
 ### 1. Scheduler agora dispara campanhas `programada`

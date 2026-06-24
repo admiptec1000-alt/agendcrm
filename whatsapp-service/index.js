@@ -1904,6 +1904,43 @@ app.post('/instances/:id/disconnect', async (req, res) => {
   }
 });
 
+// 2026-06-27 — Nuclear reset for "stuck connecting / no QR" instances.
+// Same effect as a full delete-then-recreate but preserves the
+// connection_id (and any Mongo references to it). Path:
+//   1. Tear down the in-memory socket + listeners
+//   2. Drop the connections[id] entry
+//   3. Wipe the on-disk auth dir entirely (creds.json, app-state, sessions)
+//   4. Issue a fresh createConnection() so Baileys re-emits a brand new QR
+// Used by the backend `/api/channels/connections/{id}/full-reset` and by
+// the auto-recovery branch in the frontend QR poller when 8+ polls fail.
+//
+// IMPORTANT: createConnection() awaits fetchLatestBaileysVersion() +
+// the very first WS handshake which together can easily take 10-30s.
+// Cloudflare in front of the platform terminates idle backend requests
+// after ~100s — so we ALWAYS return immediately and kick the heavy
+// re-init in the background. The frontend QR poller will pick it up
+// from the next poll cycle.
+app.post('/instances/:id/full-reset', async (req, res) => {
+  const { id } = req.params;
+  const existing = connections[id];
+  recordEvent(id, 'full_reset', 'auth dir wiped, fresh init');
+  try {
+    if (existing?.sock) {
+      try { existing.sock.ev.removeAllListeners?.(); } catch (e) {}
+      try {
+        if (typeof existing.sock.end === 'function') existing.sock.end(undefined);
+        else if (typeof existing.sock.ws?.close === 'function') existing.sock.ws.close();
+      } catch (e) {}
+    }
+  } catch (e) { /* ignore */ }
+  delete connections[id];
+  const authDir = path.join(AUTH_DIR, id);
+  try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+  // Fire-and-forget re-init so the HTTP request returns within ms.
+  createConnection(id).catch(e => console.error(`[${id}] full-reset re-init failed:`, e.message));
+  return res.json({ status: 'resetting', message: 'auth wiped, fresh init in progress' });
+});
+
 
 // ─────────────────────────────────────────────────────────────────────────
 // Signal session cleanup (2026-06-15)

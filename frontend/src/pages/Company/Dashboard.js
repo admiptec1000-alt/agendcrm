@@ -3963,6 +3963,11 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
   const [pollingAttempts, setPollingAttempts] = useState(0);
   const [showFlowEdit, setShowFlowEdit] = useState(false);
   const [showHealth, setShowHealth] = useState(false);
+  // 2026-06-27 — Track whether we've already auto-triggered a full-reset
+  // for this connection card during the current QR session, to avoid
+  // looping. User can still manually reset via the explicit button.
+  const autoResetTriedRef = React.useRef(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (conn.status === 'waiting_qr' || conn.status === 'connecting') {
@@ -3978,6 +3983,8 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
             return true; // stop
           } else if (res.data.qr_base64) {
             setQrData(res.data.qr_base64);
+            // Reset the auto-recovery guard once a QR finally shows up.
+            autoResetTriedRef.current = false;
           }
           // After 5 failed attempts, auto-try sync (covers the case where Render
           // cold-started and the current instance id no longer matches the DB).
@@ -3989,6 +3996,25 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
                 onRefresh();
                 return true;
               }
+            } catch { /* silent */ }
+          }
+          // 2026-06-27 — Auto full-reset after 8 polls if still no QR and
+          // Baileys reports the instance as unknown/disconnected. Fixes
+          // the Super Admin "Gerando QR Code... (tentativa N)" infinite
+          // loop caused by stale auth files surviving on the WA service
+          // disk between deploys / cleanup runs.
+          if (
+            attempts === 8
+            && !res.data.qr_base64
+            && !autoResetTriedRef.current
+            && ['not_found', 'disconnected', 'error'].includes(res.data.status)
+          ) {
+            autoResetTriedRef.current = true;
+            try {
+              await channelsAPI.fullResetConnection(conn.id);
+              toast.info('Conexao travada — resetando sessao automaticamente...');
+              attempts = 0; // restart polling counter
+              setPollingAttempts(0);
             } catch { /* silent */ }
           }
         } catch (e) {}
@@ -4003,6 +4029,7 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
       return () => clearInterval(interval);
     } else {
       setPolling(false); setQrData(null); setPollingAttempts(0);
+      autoResetTriedRef.current = false;
     }
   }, [conn.status, conn.id]);
 
@@ -4013,6 +4040,22 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
       toast.success('Reiniciando conexao...');
       onRefresh();
     } catch (e) { toast.error('Erro ao reconectar'); }
+  };
+
+  const handleFullReset = async () => {
+    if (!window.confirm('Resetar a sessao apaga os dados de autenticacao desta conexao no servidor e exige escanear o QR novamente. Continuar?')) return;
+    setResetting(true);
+    setQrData(null); setPollingAttempts(0);
+    autoResetTriedRef.current = true;
+    try {
+      await channelsAPI.fullResetConnection(conn.id);
+      toast.success('Sessao resetada — aguarde o novo QR Code');
+      onRefresh();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Erro ao resetar sessao');
+    } finally {
+      setResetting(false);
+    }
   };
 
   const handleSync = async () => {
@@ -4141,6 +4184,18 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
                 <button onClick={handleForceReconnect} className="mt-3 text-xs text-primary font-medium hover:underline" data-testid={`retry-connect-${conn.id}`}>
                   Demorando demais? Clique para reconectar
                 </button>
+              )}
+              {pollingAttempts >= 5 && (
+                <div className="mt-2">
+                  <button
+                    onClick={handleFullReset}
+                    disabled={resetting}
+                    className="text-xs text-red-600 font-medium hover:underline disabled:opacity-60"
+                    data-testid={`full-reset-${conn.id}`}
+                  >
+                    {resetting ? 'Resetando...' : 'Continua travado? Resetar sessao'}
+                  </button>
+                </div>
               )}
             </div>
           )}
