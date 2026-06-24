@@ -1,3 +1,44 @@
+## 2026-06-27 — Bot pause: regra "operador iniciou = bot fica de fora" ✅
+
+### Regra solicitada pelo usuario
+"Se EU iniciei a conversa (de dentro da plataforma ou pelo numero), o bot
+NAO pode disparar mesmo apos o cliente interagir. Em QUALQUER momento que
+eu interagir o bot pausa. So volta se eu retomar manualmente OU se eu
+fechar o ticket e o cliente me chamar de novo num novo ticket."
+
+### O que mudou
+1. **`bot_pause.pause_bot_on_ticket_if_enabled` agora SEMPRE pausa** quando
+   o operador toca o ticket (toggle da empresa ligado). Antes pulava se o
+   ticket ainda nao tinha flow ativo — entao se operador iniciasse antes
+   do bot, o cliente respondia e o flow disparava. Agora a flag fica de
+   pe desde o primeiro toque do operador.
+2. **`webhook/message` com `from_me=true` sem ticket existente agora CRIA
+   o ticket com `bot_paused=true, bot_paused_reason="operator_initiated_from_phone",
+   initiated_by_agent=true`**. Antes ignorava + nao criava ticket → quando
+   o cliente respondia, novo ticket nascia → flow auto-disparava.
+3. **Anti-loop do auto-responder** (`flow_engine`): apos 3 tentativas de
+   menu invalidas consecutivas (sintoma classico de "WhatsApp Business
+   ausencia" em ping-pong com o bot), pausa o ticket e marca com a tag
+   `auto-resposta-detectada`. Estanca as 30+ mensagens repetidas na
+   madrugada que o usuario reportou.
+4. **`messages.upsert` com `type='append'`** (sync em background) continua
+   sendo processado para preencher historico do ticket — mas o dedup
+   estrito por `wa_message_id` (linha 1444) ja impede dupla execucao do
+   flow para a mesma mensagem reentregue pos-reconexao.
+
+### Resume do bot
+Saidas do estado `bot_paused=true` permanecem so duas:
+- Fechar/Reabrir o ticket → `resume_bot_on_ticket` limpa as flags
+- Botao manual "Retomar bot" no chat → `bot_paused_reason="manual_toggle"`
+
+### Testes
+3 cenarios validados via pytest direto contra Mongo: pause sem flow,
+pause com flow, setting desligado (no-op). Backend hot-reloaded sem
+erros.
+
+---
+
+
 ## 2026-06-27 (final) — SA QR resolvido ✅ — CAUSA RAIZ: ENOSPC por inode exhaustion
 
 ### Causa real do problema (que o usuario insistiu em apontar e estava CERTO)

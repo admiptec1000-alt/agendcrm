@@ -1321,17 +1321,58 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
 
     if not ticket:
         if from_me:
-            # Operator sent a message from the phone to a brand-new number
-            # with NO existing ticket. We could auto-create one, but the
-            # safer default is to skip it: the operator is initiating
-            # contact outside the CRM, and creating a ticket would orphan
-            # it from the funnel/flow. We still keep the message_log row
-            # above so audits remain complete.
+            # 2026-06-27 — Operator initiated contact from the LINKED PHONE
+            # (or WhatsApp Web). Previously we skipped creating a ticket
+            # entirely — but that meant the next inbound from the client
+            # would create a FRESH ticket → which then triggered the
+            # default_flow (line ~1411 below) and the bot started
+            # answering. The user's hard rule: "se eu chamei o cliente,
+            # mesmo de fora da plataforma, o bot NAO pode disparar quando
+            # o cliente responder". Now we create the ticket eagerly with
+            # `bot_paused=True` so the next inbound is captured by the
+            # bot_paused guard in `advance_flow`. Bot only resumes if
+            # ticket is closed (resume_bot_on_ticket) or the operator
+            # hits the manual "retomar bot" toggle.
+            ticket_id = str(uuid.uuid4())
+            ticket_number = await next_ticket_number(db, company_id)
+            client_id = await find_or_create_client_by_phone(db, company_id, phone, name=name)
+            is_lid_op = _looks_like_lid(phone)
+            ticket = {
+                "id": ticket_id,
+                "ticket_number": ticket_number,
+                "company_id": company_id,
+                "connection_id": instance_id,
+                "client_id": client_id,
+                "customer_name": name,
+                "customer_phone": phone,
+                "customer_email": None,
+                "status": "aberto",
+                "priority": "medium",
+                "channel": "whatsapp",
+                "is_group": False,
+                "description": (text[:140] if text else None),
+                "assigned_to": None,
+                "queue_id": (conn.get("queue_ids") or [None])[0] if len(conn.get("queue_ids") or []) == 1 else None,
+                "messages": [new_message],
+                "tags": ["Numero Oculto"] if is_lid_op else [],
+                "value": 0.0,
+                "pending_lid_resolution": is_lid_op,
+                "lid_jid": lid_jid if is_lid_op else None,
+                # Operator initiated — bot is permanently disabled for
+                # this ticket lifecycle.
+                "bot_paused": True,
+                "bot_paused_at": datetime.now(timezone.utc).isoformat(),
+                "bot_paused_reason": "operator_initiated_from_phone",
+                "initiated_by_agent": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.tickets.insert_one(ticket)
             logger.info(
-                f"[webhook/message][from_me] no open ticket for phone={phone}; "
-                f"skipping ticket creation (operator initiated from phone)"
+                f"[webhook/message][from_me] ticket={ticket_id} created with "
+                f"bot_paused=true (operator initiated from phone) phone={phone}"
             )
-            return {"ok": True, "skipped": "from_me_no_existing_ticket"}
+            return {"ok": True, "created_paused": True, "ticket_id": ticket_id}
         ticket_id = str(uuid.uuid4())
         ticket_number = await next_ticket_number(db, company_id)
         client_id = await find_or_create_client_by_phone(db, company_id, phone, name=name)

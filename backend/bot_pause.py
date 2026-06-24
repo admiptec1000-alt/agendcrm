@@ -55,12 +55,15 @@ async def pause_bot_on_ticket_if_enabled(
     enabled = await is_pause_setting_enabled(db, company_id)
     if not enabled:
         return False
-    # Only pause if there's actually a running flow on this ticket. Tickets
-    # without `active_flow_id` are not bot-driven; flipping the flag would
-    # be harmless but noisy in logs.
-    has_flow = bool(ticket.get("active_flow_id") or ticket.get("active_flow_node_id"))
-    if not has_flow:
-        return False
+    # 2026-06-27 — Antes pulavamos quando o ticket ainda nao tinha flow
+    # ativo (entrada `active_flow_id`/`active_flow_node_id`). Mas o usuario
+    # reportou: "se eu chamei o cliente, mesmo antes do bot estartar, ele
+    # nao pode disparar quando o cliente responder". Agora paused=True e
+    # gravado em QUALQUER ticket que o operador toque — assim, no proximo
+    # inbound do cliente, `_trigger_flow_for_ticket` → `advance_flow` ve a
+    # flag e retorna sem disparar. Sai do "pausado" apenas via:
+    #  - fechar/reabrir o ticket (resume_bot_on_ticket)
+    #  - botao manual "Retomar bot" no chat (manual_toggle)
     now = datetime.now(timezone.utc).isoformat()
     await db.tickets.update_one(
         {"id": ticket["id"]},
