@@ -1473,12 +1473,35 @@ app.post('/instances/:id/send', async (req, res) => {
         candidates.push('55' + digits);
       }
       // Fallback 4: BR 9th digit variants — add/remove the mobile "9"
+      // Cobre o caso classico do "Lista copa": numero entrou como
+      // 62 9 9999 9999 (11 digitos), virou 55629999999 (13 digitos com 55),
+      // mas a conta WhatsApp ANTIGA esta registrada como 55629999999 sem o
+      // 9 (12 digitos). Geramos TODAS as combinacoes e onWhatsApp escolhe
+      // qual existe.
       if (digits.length === 13 && digits.startsWith('55')) {
         const withoutNine = digits.slice(0, 4) + digits.slice(5);
-        candidates.push(withoutNine);
+        candidates.push(withoutNine);  // 5562 + ultimos 8
       } else if (digits.length === 12 && digits.startsWith('55')) {
         // Add the 9th digit after DDD
         candidates.push(digits.slice(0, 4) + '9' + digits.slice(4));
+      }
+      // Fallback 5 — 11-digit local (62999999999): alem do '55+digits',
+      // tambem geramos a variante SEM o 9 prefixado, com 55 na frente.
+      // Sem isso, planilhas BR "DDD + 9 + 8 dig" so testavam o caminho
+      // com 9 (que falha em contas pre-2012).
+      if (digits.length === 11 && !digits.startsWith('55')) {
+        const ddd = digits.slice(0, 2);
+        const noNine = digits.slice(3);  // pula o nono digito (idx 2 = '9')
+        // Soh adiciona se realmente comeca com 9 (mobile BR), pra nao
+        // truncar fixos que parecem "12 9999 9999" sem ser mobile.
+        if (digits[2] === '9') {
+          candidates.push('55' + ddd + noNine);
+        }
+      }
+      // Fallback 6 — 10-digit local (6292365509): variante mobile com 9.
+      if (digits.length === 10 && !digits.startsWith('55')) {
+        const ddd = digits.slice(0, 2);
+        candidates.push('55' + ddd + '9' + digits.slice(2));
       }
 
       const seen = new Set();
@@ -1828,6 +1851,16 @@ app.post('/instances/:id/send-media', async (req, res) => {
       if (digits.length === 12 && digits.startsWith('62')) candidates.push('55' + digits);
       if (digits.length === 13 && digits.startsWith('55')) candidates.push(digits.slice(0, 4) + digits.slice(5));
       else if (digits.length === 12 && digits.startsWith('55')) candidates.push(digits.slice(0, 4) + '9' + digits.slice(4));
+      // 2026-06-30 — Variantes "11 digitos locais com 9" e "10 digitos
+      // locais sem 9", igual ao /send. Sem isso, planilhas tipo
+      // "Lista copa" tinham 514 falhas porque so testavamos a versao
+      // com 9 (que WhatsApp pre-2012 rejeita).
+      if (digits.length === 11 && !digits.startsWith('55') && digits[2] === '9') {
+        candidates.push('55' + digits.slice(0, 2) + digits.slice(3));
+      }
+      if (digits.length === 10 && !digits.startsWith('55')) {
+        candidates.push('55' + digits.slice(0, 2) + '9' + digits.slice(2));
+      }
 
       const seen = new Set();
       const uniq = candidates.filter(c => c && !seen.has(c) && seen.add(c));
@@ -2390,7 +2423,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.3.1',
+    version: 'v2.3.2',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -2403,8 +2436,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.3.1',
-    built_at: '2026-06-27',
+    version: 'v2.3.2',
+    built_at: '2026-06-30',
     features: {
       sent_message_store: true,
       multi_message_types: true,
@@ -2482,6 +2515,13 @@ app.get('/version', (req, res) => {
       // just byte usage), because on small volumes inodes exhaust long
       // before bytes do. Triggers the same 7d/1d cleanup tiers.
       inode_aware_disk_monitor: true,
+      // v2.3.2 — Expanded BR phone fallback candidates. Antes geravamos
+      // so 2-3 variantes (provided + 55-prefixed); agora geramos TODAS
+      // as combinacoes possiveis com/sem o 9, e o onWhatsApp() escolhe
+      // qual existe. Conserto especifico do bug "Lista copa" onde 514
+      // de 1839 contatos eram rejeitados porque so testavamos a versao
+      // com 9 (contas WhatsApp pre-2012 estao registradas sem o 9).
+      br_phone_full_fallback: true,
       // v2.2.0 — Baileys 7.x: envia tctoken/cstoken nativamente (fix do
       // erro 463 "Reach-out Time-lock" que bloqueava entregas), LID nativo
       // via remoteJidAlt/participantAlt, runtime ESM.

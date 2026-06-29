@@ -1,3 +1,40 @@
+## 2026-06-30 — BR phone fallback expandido (corrige "Lista copa" 514 falhas) ✅
+
+### O usuario tinha razao
+Analise da planilha real `listanacopa.xlsx` (1839 contatos) mostrou:
+- **19 contatos** em formato 10 digitos `(62) 9236-5509` → o UNICO formato que enviou
+- **1819 contatos** em formato 11 digitos `(62) 99653-9677` → todos rejeitados
+
+O fallback antigo do `/send` e `/send-media` gerava:
+- Para 11 digitos: `62996539677` + `5562996539677` (so com 9)
+- Para 10 digitos: `6292365509` + `556292365509` (so sem 9)
+
+**Faltava a variante cruzada**: WhatsApp para contas registradas
+pre-2012 retorna a JID SEM o 9 mobile. Como `onWhatsApp()` so checa
+os candidatos que geramos, contas antigas com o "9" no input nunca
+faziam match.
+
+### Fix em `/send` e `/send-media`
+Agora geramos TODAS as combinacoes BR e deixamos `onWhatsApp()`
+escolher qual existe:
+- 11 digitos local com 9 (`62 9 XXXX XXXX`) → adiciona variante SEM o 9 com 55 (`5562 XXXX XXXX`)
+- 10 digitos local sem 9 (`62 XXXX XXXX`) → adiciona variante COM o 9 com 55 (`5562 9 XXXX XXXX`)
+- Mantem todos os fallbacks antigos (55 prefix add/remove, BR-12 etc.)
+
+### Impacto
+Em 1839 contatos da "Lista copa": **+1826 candidatos JID adicionais**
+testados via `onWhatsApp()`. Os ~514 que apareceram como "Not connected"
+(ou que continuariam rejeitando apos uma reconexao) devem agora
+encontrar a JID correta no primeiro disparo.
+
+### Versao
+Bump `v2.3.1` → **`v2.3.2`**. Nova flag `br_phone_full_fallback: true`
+em `/version`. `service-version-check` deve validar essa flag no proximo
+ciclo (TODO).
+
+---
+
+
 ## 2026-06-29 — Anexo em campanhas modo BULK + auto-pause em desconexao ✅
 
 ### Causa do desastre
