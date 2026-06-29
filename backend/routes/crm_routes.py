@@ -1829,6 +1829,7 @@ async def create_campaign(
         "ticket_status": data.ticket_status or "fechado",
         "messages": data.messages or ([data.message_template] if data.message_template else []),
         "attachment_url": data.attachment_url,
+        "attachment_filename": data.attachment_filename,
         "anti_block": (data.anti_block.model_dump() if data.anti_block else {
             "enabled": True, "interval_min_seconds": 30, "interval_max_seconds": 90,
             "burst_size": 50, "burst_pause_seconds": 300, "daily_limit": 250,
@@ -2025,8 +2026,10 @@ async def _fire_campaign_classic(db: AsyncIOMotorDatabase, camp: dict) -> dict:
     if not audience:
         return {"error": "Audiencia vazia"}
     msgs = [m for m in (camp.get("messages") or []) if m and m.strip()]
-    if not msgs:
-        return {"error": "Sem mensagens definidas"}
+    # 2026-06-27 — Permite campanha "midia-only" (PDF/imagem sem caption).
+    # Antes exigiamos pelo menos 1 mensagem; agora basta ter o anexo.
+    if not msgs and not camp.get("attachment_url"):
+        return {"error": "Sem mensagens nem anexo definidos"}
 
     conn_id = camp.get("connection_id")
     if not conn_id:
@@ -2079,16 +2082,24 @@ async def _fire_campaign_classic(db: AsyncIOMotorDatabase, camp: dict) -> dict:
     )
 
     import asyncio as _asyncio
-    _asyncio.create_task(_classic_runner(campaign_id, conn_id, msgs, ab))
+    _asyncio.create_task(_classic_runner(campaign_id, conn_id, msgs, ab, camp.get("attachment_url"), camp.get("attachment_filename")))
     return {"queued": True, "total": len(audience), "mode": "classic"}
 
 
-async def _classic_runner(campaign_id: str, conn_id: str, msgs: list, ab: dict):
-    """Background dispatch loop with pause/cancel awareness."""
+async def _classic_runner(campaign_id: str, conn_id: str, msgs: list, ab: dict, attachment_url: str = None, attachment_filename: str = None):
+    """Background dispatch loop with pause/cancel awareness.
+
+    2026-06-27 — Now supports an optional attachment (image/PDF/doc). When
+    `attachment_url` is present, we fetch the bytes ONCE and reuse them
+    across all deliveries; the first message in `msgs` is sent as the
+    media caption (if any), then remaining messages are sent as text.
+    Empty messages array + attachment => media-only send.
+    """
     import asyncio as _asyncio
     import random as _random
     import httpx as _httpx
     import os as _os
+    import base64 as _b64
     from motor.motor_asyncio import AsyncIOMotorClient as _Cli
     from notifications import render_template as _render
     from wa_humanize import humanize_kwargs as _hum
@@ -2096,6 +2107,32 @@ async def _classic_runner(campaign_id: str, conn_id: str, msgs: list, ab: dict):
     wa_url = _os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
     cli = _Cli(_os.environ["MONGO_URL"])
     bdb = cli[_os.environ["DB_NAME"]]
+
+    # Pre-load the attachment ONCE (instead of per recipient) — same bytes,
+    # same mime, sent to many contacts. Saves a few hundred ms per send and
+    # avoids hammering the object storage / disk.
+    media_b64 = None
+    media_mime = None
+    if attachment_url:
+        try:
+            from routes.upload_routes import get_object as _get_object
+            # attachment_url is "/api/upload/files/<path>" — strip the prefix
+            # to get the storage path. Anything else (external URL): fetch via HTTP.
+            if attachment_url.startswith("/api/upload/files/"):
+                storage_path = attachment_url[len("/api/upload/files/"):]
+                data, content_type = _get_object(storage_path)
+                media_b64 = _b64.b64encode(data).decode("ascii")
+                media_mime = content_type or "application/octet-stream"
+            else:
+                async with _httpx.AsyncClient(timeout=30.0) as _c:
+                    rr = await _c.get(attachment_url)
+                    if rr.status_code == 200:
+                        media_b64 = _b64.b64encode(rr.content).decode("ascii")
+                        media_mime = rr.headers.get("content-type") or "application/octet-stream"
+            print(f"[classic_runner] campaign={campaign_id} attachment loaded ({len(media_b64 or '')} chars b64, mime={media_mime})")
+        except Exception as e:
+            print(f"[classic_runner] failed to load attachment for campaign={campaign_id}: {e}")
+            media_b64 = None
 
     ab_enabled = ab.get("enabled", True)
     interval_min = max(0, int(ab.get("interval_min_seconds", 30) or 0))
@@ -2136,7 +2173,33 @@ async def _classic_runner(campaign_id: str, conn_id: str, msgs: list, ab: dict):
                 )
                 ok_any = False
                 last_err = ""
-                for tpl in msgs:
+                # 2026-06-27 — If we have media, send it FIRST. The first
+                # template message (if any) becomes the caption; the rest
+                # are sent as separate text messages below.
+                msgs_remaining = list(msgs)
+                if media_b64:
+                    caption_tpl = msgs_remaining.pop(0) if msgs_remaining else ""
+                    caption_txt = _render(caption_tpl or "", {"nome": d.get("name") or "", "numero": d["phone"], "telefone": d["phone"]}) if caption_tpl else ""
+                    try:
+                        rr = await client.post(
+                            f"{wa_url}/instances/{conn_id}/send-media",
+                            json={
+                                "phone": d["phone"],
+                                "filename": attachment_filename or "anexo.bin",
+                                "mimetype": media_mime,
+                                "data_base64": media_b64,
+                                "caption": caption_txt,
+                            },
+                            timeout=60.0,
+                        )
+                        rs = rr.json() if rr.status_code == 200 else {}
+                        if rs.get("success"):
+                            ok_any = True
+                        else:
+                            last_err = (rs.get("error") or f"media http {rr.status_code}")[:200]
+                    except Exception as e:
+                        last_err = f"media: {str(e)[:200]}"
+                for tpl in msgs_remaining:
                     mtxt = _render(tpl or "", {"nome": d.get("name") or "", "numero": d["phone"], "telefone": d["phone"]})
                     try:
                         hum = await _hum(bdb, conn_id)

@@ -440,6 +440,7 @@ class CampaignCreate(BaseModel):
     # Messages (1..5 sequential)
     messages: List[str] = []
     attachment_url: Optional[str] = None
+    attachment_filename: Optional[str] = None
     # Anti-block parameters
     anti_block: Optional[CampaignAntiBlock] = None
     # 2026-02-28 — Modo Disparo em Massa (multi-conexao + spintax + janela + opt-out)
@@ -463,6 +464,7 @@ class CampaignUpdate(BaseModel):
     ticket_status: Optional[str] = None
     messages: Optional[List[str]] = None
     attachment_url: Optional[str] = None
+    attachment_filename: Optional[str] = None
     anti_block: Optional[CampaignAntiBlock] = None
     bulk_config: Optional[BulkConfig] = None
     status: Optional[str] = None  # draft | programada | em_execucao | concluida | cancelada

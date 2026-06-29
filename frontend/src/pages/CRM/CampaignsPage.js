@@ -239,6 +239,7 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
     ticket_status: campaign?.ticket_status || 'fechado',
     messages: campaign?.messages?.length ? campaign.messages : ['', '', '', '', ''],
     attachment_url: campaign?.attachment_url || '',
+    attachment_filename: campaign?.attachment_filename || '',
     // 2026-02-28 — Modo Disparo em Massa: parametros extras para 20k+
     bulk_config: campaign?.bulk_config || {
       enabled: false,
@@ -258,6 +259,37 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
   const [conns, setConns] = useState([]);
   const [lists, setLists] = useState([]);
   const [queues, setQueues] = useState([]);
+  // 2026-06-27 — Anexo (imagem/PDF/doc) que vai junto com a 1a mensagem.
+  // Upload via POST /api/upload/ → guarda `attachment_url` no form.
+  const fileInputRef = React.useRef(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+
+  const handleFileAttach = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    // 16 MB cap (WhatsApp media limit varies — keep conservative).
+    if (file.size > 16 * 1024 * 1024) {
+      toast.error('Arquivo muito grande (max 16 MB)');
+      return;
+    }
+    setUploadingFile(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post('/upload/', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setForm(f => ({
+        ...f,
+        attachment_url: r.data?.url || '',
+        attachment_filename: file.name,
+      }));
+      toast.success('Arquivo anexado');
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Falha ao enviar arquivo');
+    } finally {
+      setUploadingFile(false);
+    }
+  };
 
   useEffect(() => {
     Promise.all([
@@ -281,7 +313,10 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
   const save = async () => {
     if (!form.name.trim()) { toast.error('Nome obrigatorio'); return; }
     const cleanMessages = form.messages.filter(m => m && m.trim());
-    if (cleanMessages.length === 0) { toast.error('Adicione pelo menos uma mensagem'); return; }
+    if (cleanMessages.length === 0 && !form.attachment_url) {
+      toast.error('Adicione pelo menos uma mensagem ou anexe um arquivo');
+      return;
+    }
     const payload = {
       name: form.name,
       audience_mode: form.audience_mode,
@@ -296,6 +331,7 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
       ticket_status: form.ticket_status,
       messages: cleanMessages,
       attachment_url: form.attachment_url || null,
+      attachment_filename: form.attachment_filename || null,
       bulk_config: form.bulk_config,
     };
     try {
@@ -574,10 +610,45 @@ const CampaignModal = ({ campaign, onClose, onSaved }) => {
         </div>
 
         <div className="flex justify-between items-center gap-2 p-4 border-t border-slate-200">
-          <button className="btn-secondary text-xs flex items-center gap-1.5">
-            <FileText className="w-3.5 h-3.5" /> Anexar Arquivo
-          </button>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingFile}
+              className="btn-secondary text-xs flex items-center gap-1.5 disabled:opacity-60"
+              data-testid="attach-file-btn"
+              title="Anexar imagem, PDF ou documento que ira junto com a primeira mensagem"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              {uploadingFile ? 'Enviando...' : 'Anexar Arquivo'}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,application/pdf,video/*,audio/*,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+              className="hidden"
+              onChange={handleFileAttach}
+              data-testid="attach-file-input"
+            />
+            {form.attachment_url && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs max-w-[260px]" data-testid="attachment-chip">
+                <FileText className="w-3 h-3 flex-shrink-0" />
+                <span className="truncate" title={form.attachment_filename || form.attachment_url}>
+                  {form.attachment_filename || 'Arquivo anexado'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, attachment_url: '', attachment_filename: '' }))}
+                  className="hover:text-red-600 flex-shrink-0"
+                  title="Remover anexo"
+                  data-testid="remove-attachment-btn"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 flex-shrink-0">
             <button onClick={onClose} className="btn-secondary text-sm">Fechar</button>
             <button onClick={save} className="btn-primary text-sm" data-testid="save-campaign-btn">{isEditing ? 'Salvar' : 'Adicionar'}</button>
           </div>

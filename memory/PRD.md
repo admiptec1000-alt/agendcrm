@@ -1,3 +1,41 @@
+## 2026-06-29 — Anexar Arquivo nas Campanhas funcionando ✅
+
+### Bug
+O botao "Anexar Arquivo" no rodape do modal de campanha era so um botao
+sem `onClick` — clicar nele nao fazia nada.
+
+### Fix (frontend)
+- `useRef` + `<input type=file hidden>` + handler que faz `POST /api/upload/`
+  e grava `attachment_url` no form
+- Chip indigo com nome do arquivo + botao `×` para remover
+- Toast "Arquivo anexado" no sucesso, erro detalhado no erro
+- Limite de 16 MB (limite seguro do WhatsApp media)
+- `data-testid`: `attach-file-btn`, `attach-file-input`, `attachment-chip`,
+  `remove-attachment-btn`
+- Validacao do save permite "campanha media-only" (sem mensagens, so
+  com anexo)
+
+### Fix (backend)
+- Model `CampaignCreate` e `CampaignUpdate`: novo campo
+  `attachment_filename` (Optional[str]) — usado como `fileName` no
+  `/send-media` do Baileys e pelo chip do frontend
+- `_fire_campaign_classic` aceita campanha "media-only" (antes
+  rejeitava com "Sem mensagens definidas")
+- `_classic_runner` agora carrega o anexo UMA VEZ (via
+  `routes.upload_routes.get_object`) e usa `/send-media` do Baileys.
+  Primeira mensagem vira caption do anexo; demais sao enviadas como
+  texto sequencial. Funciona para imagem, video, audio, PDF e
+  documentos genericos.
+
+### Testes
+- `POST /api/upload/` → URL retornada ✓
+- `POST /api/crm/campaigns` com `attachment_url` + `attachment_filename` ✓
+- `POST /api/crm/campaigns` com SO anexo (sem mensagens) → criada com `status=draft` ✓
+- UI: botao + input escondido + upload real + chip visivel + toast de sucesso ✓
+
+---
+
+
 ## 2026-06-27 — Bot pause: regra "operador iniciou = bot fica de fora" ✅
 
 ### Regra solicitada pelo usuario
