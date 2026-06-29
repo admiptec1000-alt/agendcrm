@@ -48,6 +48,42 @@ async def dispatch_send_text(db, connection_id: str, to_phone: str, message: str
     return await _send_via_baileys(db, connection_id, to_phone, message)
 
 
+async def dispatch_send_media(db, connection_id: str, to_phone: str, data_base64: str, mimetype: str, filename: str = "anexo.bin", caption: str = "") -> dict:
+    """Send a media message via Baileys (image/video/audio/document).
+
+    2026-06-29 — Added for bulk-mode campaigns with attachments. Returns
+    the same {success, message_id, provider, error} envelope as
+    dispatch_send_text so the dispatcher loop can treat both paths
+    uniformly. Meta Cloud media send is not implemented here yet (out of
+    scope for the current bug; tenants on Meta Cloud already use
+    template-based media which has its own pipeline).
+    """
+    if not (connection_id and to_phone and data_base64):
+        return {"success": False, "error": "missing connection_id/to/data_base64", "provider": "unknown"}
+    wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as cli:
+            r = await cli.post(
+                f"{wa_url}/instances/{connection_id}/send-media",
+                json={
+                    "phone": to_phone,
+                    "data_base64": data_base64,
+                    "mimetype": mimetype or "application/octet-stream",
+                    "filename": filename or "anexo.bin",
+                    "caption": caption or "",
+                },
+            )
+            if r.status_code != 200:
+                return {"success": False, "error": f"baileys media http {r.status_code}: {r.text[:120]}", "provider": "baileys"}
+            body = r.json() if r.content else {}
+            if not body.get("success"):
+                return {"success": False, "error": body.get("error") or "baileys media returned success=false", "provider": "baileys"}
+            return {"success": True, "message_id": body.get("message_id"), "provider": "baileys"}
+    except Exception as e:
+        return {"success": False, "error": f"baileys media exc: {str(e)[:120]}", "provider": "baileys"}
+
+
+
 async def _send_via_baileys(db, connection_id: str, to_phone: str, message: str) -> dict:
     wa_url = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
     # Humanization (typing/presence)

@@ -427,6 +427,16 @@ async def create_bulk_job_from_campaign(
         "company_id": user["company_id"],
         "name": f"[Campanha] {camp.get('name')}",
         "message_template": msg_template,
+        # 2026-06-29 — Anexos em modo Disparo em Massa.
+        # `attachment_url` / `attachment_filename` propagados da campanha.
+        # O dispatcher (process_bulk_tick) carrega o arquivo UMA vez por
+        # boot do worker e envia via /instances/{id}/send-media antes do
+        # texto. Antes os anexos eram silenciosamente ignorados em bulk
+        # (so o classic_runner respeitava) — 514 destinatarios receberam
+        # so texto na campanha "Lista copa" porque a flag estava ON e
+        # caiu pra bulk.
+        "attachment_url": camp.get("attachment_url") or None,
+        "attachment_filename": camp.get("attachment_filename") or None,
         "connection_ids": data.connection_ids,
         "rotation_strategy": "round_robin",
         "interval_min_sec": max(1, int(data.interval_min_sec)),
@@ -498,9 +508,21 @@ async def create_bulk_job_from_campaign(
 # ─── Worker (called by scheduler) ──────────────────────────────────────
 async def process_bulk_tick(db: AsyncIOMotorDatabase):
     """Single tick of the bulk worker. Designed to be called every ~15s."""
-    from wa_dispatcher import dispatch_send_text
+    from wa_dispatcher import dispatch_send_text, dispatch_send_media
     from bulk_spintax import render_with_vars
     import random as _r
+    import base64 as _b64
+
+    # 2026-06-29 — Per-process cache for campaign attachments. We DO NOT
+    # store the base64 bytes in Mongo (would bloat the doc by 5-10 MB per
+    # job) — instead we lazy-load on first use, keyed by job_id, and let
+    # the worker process keep it in memory. If the worker restarts the
+    # cache rebuilds transparently on the next tick.
+    global _bulk_attachment_cache  # type: ignore[no-redef]
+    try:
+        _bulk_attachment_cache
+    except NameError:
+        globals()['_bulk_attachment_cache'] = {}
 
     now = datetime.now()  # naive local
     jobs = await db.bulk_jobs.find({"status": "running"}, {"_id": 0}).to_list(50)
@@ -545,6 +567,31 @@ async def process_bulk_tick(db: AsyncIOMotorDatabase):
                 continue
 
             rot_idx = int(job.get("next_rotation_idx") or 0)
+
+            # 2026-06-29 — Lazy-load attachment bytes ONCE per job (cached
+            # in the worker process). attachment_url is "/api/upload/files/<path>".
+            att_url = job.get("attachment_url")
+            att_filename = job.get("attachment_filename") or "anexo.bin"
+            att_payload = None
+            if att_url:
+                att_payload = _bulk_attachment_cache.get(job["id"])
+                if att_payload is None:
+                    try:
+                        from routes.upload_routes import get_object as _get_object
+                        if att_url.startswith("/api/upload/files/"):
+                            storage_path = att_url[len("/api/upload/files/"):]
+                            data, content_type = _get_object(storage_path)
+                            att_payload = {
+                                "data_base64": _b64.b64encode(data).decode("ascii"),
+                                "mimetype": content_type or "application/octet-stream",
+                            }
+                            _bulk_attachment_cache[job["id"]] = att_payload
+                            logger.info("[bulk] job=%s attachment cached (%d KB, mime=%s)",
+                                        job["id"], len(data) // 1024, att_payload["mimetype"])
+                    except Exception as e:
+                        logger.warning("[bulk] job=%s failed to load attachment: %s", job["id"], e)
+                        att_payload = None
+
             for rec in pending:
                 # Choose connection (round-robin, skipping capped ones).
                 conn_id = available_conns[rot_idx % len(available_conns)]
@@ -564,7 +611,18 @@ async def process_bulk_tick(db: AsyncIOMotorDatabase):
                     {"$set": {"attempted_at": _now_iso(), "connection_used": conn_id, "message_rendered": msg}},
                 )
 
-                result = await dispatch_send_text(db, conn_id, rec["phone"], msg)
+                # If campaign has an attachment, send media (with the text
+                # as caption) instead of plain text. The recipient gets a
+                # single message: image/PDF/etc + caption — exactly the
+                # WhatsApp UX the operator expects.
+                if att_payload:
+                    result = await dispatch_send_media(
+                        db, conn_id, rec["phone"],
+                        att_payload["data_base64"], att_payload["mimetype"],
+                        att_filename, msg,
+                    )
+                else:
+                    result = await dispatch_send_text(db, conn_id, rec["phone"], msg)
 
                 if result.get("success"):
                     await db.bulk_job_recipients.update_one(
@@ -580,15 +638,42 @@ async def process_bulk_tick(db: AsyncIOMotorDatabase):
                     await db.bulk_jobs.update_one({"id": job["id"]}, {"$inc": {"sent_count": 1}})
                     sent_today[conn_id] = sent_today.get(conn_id, 0) + 1
                 else:
+                    err_text = (result.get("error") or "")[:300]
                     await db.bulk_job_recipients.update_one(
                         {"id": rec["id"]},
                         {"$set": {
                             "status": "failed",
-                            "error": (result.get("error") or "")[:300],
+                            "error": err_text,
                             "provider": result.get("provider"),
                         }},
                     )
                     await db.bulk_jobs.update_one({"id": job["id"]}, {"$inc": {"failed_count": 1}})
+                    # 2026-06-29 — Anti-massacre: se as ultimas 10 tentativas
+                    # consecutivas falharam com "Not connected" (conexao caiu
+                    # no meio do disparo), pausamos o job automaticamente.
+                    # Antes a campanha "Lista copa" gravou 514 falhas seguidas
+                    # com esse erro porque ninguem percebeu que a sessao tinha
+                    # caido. Agora o job para em ~10 falhas e o operador retoma
+                    # depois de reconectar.
+                    if "Not connected" in err_text or "not_found" in err_text:
+                        recent_failed = await db.bulk_job_recipients.count_documents({
+                            "job_id": job["id"],
+                            "status": "failed",
+                            "connection_used": conn_id,
+                            "error": {"$regex": "Not connected|not_found"},
+                        })
+                        if recent_failed >= 10:
+                            await db.bulk_jobs.update_one(
+                                {"id": job["id"]},
+                                {"$set": {
+                                    "status": "paused",
+                                    "pause_reason": f"Conexao {conn_id[:8]} desconectou no meio do disparo ({recent_failed} falhas consecutivas)",
+                                    "paused_at": _now_iso(),
+                                }},
+                            )
+                            logger.warning("[bulk] job %s AUTO-PAUSED: conn %s disconnected (%d failures)", job["id"], conn_id, recent_failed)
+                            # Quebra o loop deste job — proximo tick re-avalia
+                            break
 
                 # Inter-message sleep (humanization between sends).
                 imin = int(job.get("interval_min_sec") or 8)

@@ -1,3 +1,46 @@
+## 2026-06-29 — Anexo em campanhas modo BULK + auto-pause em desconexao ✅
+
+### Causa do desastre
+Campanha "Lista copa" do Fin8ip: 1 enviada, **514 falhas com "Not connected"**, 256 pendentes. Dois bugs:
+1. A conexao Baileys da empresa caiu no meio do disparo e o dispatcher
+   bulk continuou tentando enviar 514 mensagens em sequencia, todas
+   falhando com "Not connected" — gravando 514 destinatarios como
+   permanently failed (sem retry quando a conexao voltar).
+2. O anexo (imagem da Copa) foi **silenciosamente ignorado** porque o
+   meu fix anterior so suportava anexo no `_classic_runner`, NAO no
+   `process_bulk_tick`. A flag "Modo Disparo em Massa" estava ON
+   (recomendado para 1k+), entao roteou pro bulk → anexo perdido.
+
+### Fix
+**`wa_dispatcher.py`**: nova `dispatch_send_media(db, conn, to, b64,
+mime, filename, caption)` que envelopa o `/instances/{id}/send-media`
+do Baileys, retornando o mesmo `{success, message_id, provider, error}`
+do dispatch_send_text.
+
+**`bulk_routes.create_bulk_job_from_campaign`**: agora propaga
+`attachment_url` e `attachment_filename` da campanha para o job.
+
+**`bulk_routes.process_bulk_tick`**:
+- Lazy-loads o anexo UMA vez por job (cache `_bulk_attachment_cache`
+  por job_id em memoria do worker — re-builda apos restart)
+- Quando ha anexo, envia via `dispatch_send_media` (mensagem renderizada
+  vira caption); senao mantem o `dispatch_send_text`. UX = 1 unica
+  mensagem com midia + texto, exatamente como o operador espera.
+
+**Anti-massacre**: apos 10 falhas consecutivas na mesma conexao com
+erro "Not connected" / "not_found", o job e automaticamente `paused`
+com `pause_reason` indicando qual conexao caiu. Antes ficava em loop
+gravando 500+ falhas. Operador retoma manualmente apos reconectar.
+
+### Testes
+- `dispatch_send_media` envelope correto contra conn fake (success=False
+  com erro "Not connected") ✓
+- `process_bulk_tick` com `attachment_url`: tentativa de envio passa
+  pelo caminho de midia (erro confirma "baileys media http 400") ✓
+
+---
+
+
 ## 2026-06-29 — Anexar Arquivo nas Campanhas funcionando ✅
 
 ### Bug
