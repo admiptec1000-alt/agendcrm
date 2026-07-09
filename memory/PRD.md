@@ -1,3 +1,45 @@
+## 2026-07-09 — QR "refs attempts ended" loop resolvido (v2.3.3) ✅
+
+### Diagnostico do log de saude
+A tela "Saude da conexao WhatsApp 1" que o usuario compartilhou mostrou
+9 tentativas seguidas de reconexao, TODAS com o mesmo erro:
+```
+QR refs attempts ended (status=408)
+```
+Cada QR ficava disponivel por ~2min (default Baileys), o operador nao
+escaneava a tempo, e a reconexao ia para o **backoff exponencial** (5s,
+10s, 20s, 40s, 80s, 160s, 300s max). Apos 5 tentativas o operador
+esperava 5 minutos entre cada QR — impossivel de escanear.
+
+### Fix (`whatsapp-service/index.js` v2.3.3)
+1. **`qrTimeout: 60000`** em `makeWASocket()` (default era ~20s por
+   ref). Baileys gera 6 refs consecutivas -> 60s x 6 = **6 minutos**
+   de janela pra escanear cada ciclo.
+2. **Fast retry on QR expiry**: detectamos `errMsg.match(/QR refs
+   attempts ended/i)` e reiniciamos em 3 SEGUNDOS (ignorando o
+   backoff exponencial). Nao incrementa `reconnectAttempts` porque
+   isto NAO e falha de rede — e apenas usuario nao scaneou.
+3. Log de evento novo `qr_expired_fast_retry` no painel de saude.
+
+### "Verificar Deploy" agora valida
+Novos flags esperados em `/version`:
+- `qr_fast_regen: true` (v2.3.3)
+- `br_phone_full_fallback: true` (v2.3.2)
+
+Sem eles, `redeploy_done: false` e o botao fica vermelho.
+
+### Estado atual em producao (07-09)
+Render esta em **v2.3.1** — o usuario ainda NAO redeployou depois do
+v2.3.2 e v2.3.3. Ate o proximo `Manual Deploy` no dashboard do Render,
+ambos os problemas persistem:
+- Instabilidade diaria da conexao (QR loop de 5min)
+- 514+ falhas por planilhas com formato BR "9-digit" nao normalizado
+
+Ambos os fixes estao prontos no branch principal — so falta o deploy.
+
+---
+
+
 ## 2026-06-30 — BR phone fallback expandido (corrige "Lista copa" 514 falhas) ✅
 
 ### O usuario tinha razao

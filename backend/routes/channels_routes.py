@@ -201,6 +201,14 @@ async def service_version_check(user: dict = Depends(get_current_user)):
                     checks["details"].append("✓ Monitor de inodes ATIVO")
                 else:
                     checks["details"].append("✗ Monitor de inodes AUSENTE — redeploy do Render PENDENTE (v2.3.1+)")
+                if feats.get("br_phone_full_fallback"):
+                    checks["details"].append("✓ Fallback BR completo (com/sem 9) ATIVO")
+                else:
+                    checks["details"].append("✗ Fallback BR completo AUSENTE — redeploy do Render PENDENTE (v2.3.2+)")
+                if feats.get("qr_fast_regen"):
+                    checks["details"].append("✓ QR regen rapido (sem backoff) ATIVO")
+                else:
+                    checks["details"].append("✗ QR regen rapido AUSENTE — redeploy do Render PENDENTE (v2.3.3+)")
             else:
                 checks["details"].append("✗ Endpoint /version ausente — REDEPLOY PENDENTE (versao antiga)")
     except Exception as e:
@@ -215,6 +223,8 @@ async def service_version_check(user: dict = Depends(get_current_user)):
         and feats.get("full_reset_endpoint")
         and feats.get("enospc_auto_recovery")
         and feats.get("inode_aware_disk_monitor")
+        and feats.get("br_phone_full_fallback")
+        and feats.get("qr_fast_regen")
     )
     return checks
 

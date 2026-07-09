@@ -832,6 +832,14 @@ async function createConnection(instanceId, options = {}) {
     defaultQueryTimeoutMs: 0,
     keepAliveIntervalMs: 25000,
     retryRequestDelayMs: 500,
+    // 2026-07-09 (v2.3.3) — Give the operator MORE time to scan the QR
+    // before Baileys rotates a ref. Default is ~20s per ref × 6 refs =
+    // ~2 min total; on prod the "Lista Vibi" WhatsApp constantly hit
+    // "QR refs attempts ended" (status=408) because the user opened
+    // the panel, went to grab the phone, and by the time they scanned
+    // the QR was already dead. 60s × 6 refs = 6 min → real people can
+    // scan in peace.
+    qrTimeout: 60000,
     // 2026-02-17 (v2.1.15) — Pass NodeCache-based retry counter so Baileys'
     // retry-receipt protocol actually works. Without this, every undecrypted
     // message on the recipient stays as "Aguardando mensagem" forever.
@@ -902,6 +910,14 @@ async function createConnection(instanceId, options = {}) {
       const errMsg = lastDisconnect?.error?.message || 'Connection closed';
       const isConflict = errMsg.includes('conflict') || errMsg.includes('replaced') || statusCode === 440;
       const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      // 2026-07-09 — "QR refs attempts ended" (status 408) is NOT a real
+      // disconnect. It just means the QR expired without being scanned.
+      // Baileys throws it up as a socket close, and if we apply the
+      // exponential backoff (5s → 5min) the operator sits watching a
+      // spinner for 5 minutes waiting for the next QR. We special-case
+      // this to re-create the socket in 3s so the QR panel refreshes
+      // almost instantly.
+      const isQrExpired = /QR refs attempts ended/i.test(errMsg);
       const shouldReconnect = !isLoggedOut && !isConflict;
       instance.status = 'disconnected';
       instance.lastError = errMsg;
@@ -920,6 +936,17 @@ async function createConnection(instanceId, options = {}) {
             createConnection(instanceId).catch(e => console.error(`[${instanceId}] retry failed:`, e.message));
           }
         }, 60000);
+      } else if (isQrExpired && shouldReconnect) {
+        // Fast retry — QR expired, operator just needs a fresh one.
+        // Do NOT increment reconnectAttempts (that's for real network
+        // failures, not user idle-scan).
+        recordEvent(instanceId, 'qr_expired_fast_retry', 'QR nao foi escaneado — gerando novo em 3s');
+        console.log(`[${instanceId}] QR expired — regenerating in 3s (no backoff)`);
+        setTimeout(() => {
+          if (connections[instanceId] && connections[instanceId].status !== 'connected') {
+            createConnection(instanceId).catch(e => console.error(`[${instanceId}] QR retry failed:`, e.message));
+          }
+        }, 3000);
       } else if (shouldReconnect) {
         // Exponential backoff: 5s, 10s, 20s, 40s, 80s, 160s, capped at 5min.
         // This prevents hammering WA servers when they are throttling us
@@ -2423,7 +2450,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     instances: Object.keys(connections).length,
-    version: 'v2.3.2',
+    version: 'v2.3.3',
     details: Object.values(connections).map(c => ({
       id: c.id,
       status: c.status,
@@ -2436,8 +2463,8 @@ app.get('/health', (req, res) => {
 // Explicit version endpoint so backend can verify which patches are live
 app.get('/version', (req, res) => {
   res.json({
-    version: 'v2.3.2',
-    built_at: '2026-06-30',
+    version: 'v2.3.3',
+    built_at: '2026-07-09',
     features: {
       sent_message_store: true,
       multi_message_types: true,
@@ -2522,6 +2549,12 @@ app.get('/version', (req, res) => {
       // de 1839 contatos eram rejeitados porque so testavamos a versao
       // com 9 (contas WhatsApp pre-2012 estao registradas sem o 9).
       br_phone_full_fallback: true,
+      // v2.3.3 — QR expiry now retries in 3s (no exponential backoff)
+      // AND qrTimeout was bumped from Baileys default (~20s) to 60s per
+      // ref, so operators tem 6 min pra escanear em vez de 2 min.
+      // Fixa o loop "QR refs attempts ended" que forcava reconexao
+      // manual todo dia.
+      qr_fast_regen: true,
       // v2.2.0 — Baileys 7.x: envia tctoken/cstoken nativamente (fix do
       // erro 463 "Reach-out Time-lock" que bloqueava entregas), LID nativo
       // via remoteJidAlt/participantAlt, runtime ESM.
