@@ -3968,9 +3968,26 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
   // looping. User can still manually reset via the explicit button.
   const autoResetTriedRef = React.useRef(false);
   const [resetting, setResetting] = useState(false);
+  // 2026-07-10 — "Tela em branco apos Reconectar" fix. Depois que o
+  // operador clica Reconectar, o backend seta status='connecting' e
+  // devolve, mas o `onRefresh()` faz uma nova roundtrip a `/connections`
+  // e o Mongo pode ainda estar propagando a escrita. Nesse intervalo
+  // (~50-500ms) o `conn.status` da prop chega como `'disconnected'` e o
+  // painel do QR — que so renderiza em `waiting_qr|connecting` — some.
+  // Resultado: a tela ficava em branco na percepcao do usuario ate o
+  // proximo poll cair. Agora foramos localmente uma "expectativa de
+  // conectando" ate a proxima `conn` chegar com status coerente.
+  const [expectingConnecting, setExpectingConnecting] = useState(false);
+  useEffect(() => {
+    // Assim que o backend reflete a mudanca, liberamos o override local.
+    if (conn.status === 'connecting' || conn.status === 'waiting_qr' || conn.status === 'connected') {
+      setExpectingConnecting(false);
+    }
+  }, [conn.status]);
+  const effectiveStatus = expectingConnecting && conn.status === 'disconnected' ? 'connecting' : conn.status;
 
   useEffect(() => {
-    if (conn.status === 'waiting_qr' || conn.status === 'connecting') {
+    if (effectiveStatus === 'waiting_qr' || effectiveStatus === 'connecting') {
       setPolling(true);
       let attempts = 0;
       const fetchQR = async () => {
@@ -4035,11 +4052,19 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
 
   const handleForceReconnect = async () => {
     setQrData(null); setPollingAttempts(0);
+    // 2026-07-10 — Optimistic UI: assume "connecting" imediatamente para
+    // que o painel de QR ja apareca (com spinner "Gerando QR Code...")
+    // enquanto o backend + Baileys terminam de subir a sessao. Sem isso,
+    // durante o roundtrip de ~200-800ms o painel some (tela em branco).
+    setExpectingConnecting(true);
     try {
       await channelsAPI.connectChannel(conn.id);
       toast.success('Reiniciando conexao...');
       onRefresh();
-    } catch (e) { toast.error('Erro ao reconectar'); }
+    } catch (e) {
+      setExpectingConnecting(false);
+      toast.error('Erro ao reconectar');
+    }
   };
 
   const handleFullReset = async () => {
@@ -4166,7 +4191,7 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
       {showHealth && (
         <ConnectionHealthModal conn={conn} health={health} onClose={() => setShowHealth(false)} />
       )}
-      {(conn.status === 'waiting_qr' || conn.status === 'connecting') && (
+      {(effectiveStatus === 'waiting_qr' || effectiveStatus === 'connecting') && (
         <div className="mt-4 p-4 bg-slate-50 rounded-xl text-center">
           {qrData ? (
             <div>

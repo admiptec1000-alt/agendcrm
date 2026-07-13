@@ -1,3 +1,40 @@
+## 2026-07-10 — "Tela em branco apos Reconectar" resolvido ✅
+
+### Bug reportado
+Ao clicar em **Reconectar** na tela de Canais, em vez de aparecer o QR
+code, a tela ficava em branco (nem QR, nem spinner, nem botao).
+
+### Causa
+Race condition entre o `handleForceReconnect`:
+1. Local: `setQrData(null); setPollingAttempts(0);`
+2. `POST /api/channels/connections/{id}/connect` → backend seta
+   `status='connecting'` no Mongo e retorna
+3. `onRefresh()` refaz `GET /api/channels/connections` — mas se a
+   escrita anterior ainda estava propagando, retornava `status='disconnected'`
+4. React re-renderiza o card com `conn.status='disconnected'` →
+   condicional do painel QR `(waiting_qr | connecting)` = **false**
+5. Header mostra botao "Conectar" mas o painel do QR simplesmente
+   NAO renderiza → **tela em branco**
+
+### Fix (`Dashboard.js::ConnectionCard`)
+Optimistic UI: novo estado local `expectingConnecting` setado como
+`true` no click do reconectar. Uso de `effectiveStatus` no lugar de
+`conn.status` para o polling e para o render do painel QR:
+```js
+const effectiveStatus = expectingConnecting && conn.status === 'disconnected'
+  ? 'connecting'
+  : conn.status;
+```
+Assim que o backend refletir a mudanca (`conn.status in
+['connecting','waiting_qr','connected']`), `useEffect` limpa o
+override — nenhuma flag stale.
+
+Cobre tanto o botao "QR expirou? Gerar novo" quanto o link
+"Demorando demais? Clique para reconectar".
+
+---
+
+
 ## 2026-07-09 — QR "refs attempts ended" loop resolvido (v2.3.3) ✅
 
 ### Diagnostico do log de saude
