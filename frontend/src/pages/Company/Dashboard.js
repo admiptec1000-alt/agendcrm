@@ -12,7 +12,7 @@ import {
   Sparkles, Calendar, CalendarCheck, CalendarDays, UserCheck, FolderOpen, Scissors,
   CreditCard, Briefcase, DollarSign, PieChart, Globe, Bell, Settings,
   Puzzle, BarChart3, LifeBuoy, Plus, Search, Pencil, Trash2, X, Check,
-  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins, Paperclip, PlugZap, Activity
+  ChevronLeft, ChevronRight, ChevronDown, Phone, Mail, Clock, Upload, Image, GripVertical, ArrowRight, CheckCircle2, Circle, Monitor, Send, Shield, User, Menu, MessageCircle, Filter, Download, FileText, HandCoins, Paperclip, PlugZap, Activity, AlertCircle
 } from 'lucide-react';
 import FlowBuilderPage from '../CRM/FlowBuilderPage';
 import SGPGatewayPage from '../CRM/SGPGatewayPage';
@@ -670,6 +670,69 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
       </div>
     );
   }
+  return (
+    <PageErrorBoundary page={page} setActivePage={setActivePage}>
+      <PageContentInner page={page} hasFeature={hasFeature} setActivePage={setActivePage} menuGroups={menuGroups} />
+    </PageErrorBoundary>
+  );
+};
+
+// 2026-07-11 — Sem ErrorBoundary, um erro sincrono em qualquer pagina
+// (ex: ConexoesPage num Chrome que caiu com um chunk parcial ou uma
+// dependencia bloqueada por adblocker/extensao) fazia o React 18
+// desmontar TODA a arvore → tela em branco. O usuario reportou isso em
+// alguns Chromes onde clicar em "Conexoes" deixava a tela toda branca.
+// Agora capturamos o erro localmente, mostramos uma tela de erro amigavel
+// com botao "Voltar ao painel" e o stack pro suporte.
+class PageErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) {
+    console.error('[PageErrorBoundary]', this.props.page, err, info);
+  }
+  componentDidUpdate(prev) {
+    // Ao trocar de pagina, resetamos o erro para dar chance da proxima tela.
+    if (prev.page !== this.props.page && this.state.err) this.setState({ err: null });
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="max-w-2xl mx-auto mt-16 p-6 bg-white border border-red-200 rounded-2xl shadow-sm">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-lg bg-red-100 text-red-700 flex items-center justify-center flex-shrink-0">
+            <AlertCircle className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">Erro ao carregar esta tela</h3>
+            <p className="text-sm text-slate-500 mt-1">
+              Aconteceu um erro ao renderizar <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{this.props.page}</code>. Voce pode tentar voltar ao painel ou recarregar a pagina.
+            </p>
+          </div>
+        </div>
+        <details className="mb-4 text-xs">
+          <summary className="cursor-pointer text-slate-500 hover:text-slate-700">Detalhes tecnicos</summary>
+          <pre className="mt-2 p-3 bg-slate-50 rounded-lg overflow-auto text-[11px] text-slate-700 max-h-48">
+            {this.state.err?.message}{'\n\n'}{this.state.err?.stack}
+          </pre>
+        </details>
+        <div className="flex gap-2">
+          <button
+            onClick={() => this.props.setActivePage?.('dashboard')}
+            className="btn-primary text-sm"
+            data-testid="error-back-btn"
+          >Voltar ao painel</button>
+          <button
+            onClick={() => window.location.reload()}
+            className="btn-secondary text-sm"
+            data-testid="error-reload-btn"
+          >Recarregar pagina</button>
+        </div>
+      </div>
+    );
+  }
+}
+
+const PageContentInner = ({ page, hasFeature, setActivePage, menuGroups }) => {
   switch (page) {
     case 'dashboard': return <DashboardPage setActivePage={setActivePage} menuGroups={menuGroups} />;
     case 'kanban': return <KanbanPage setActivePage={setActivePage} />;

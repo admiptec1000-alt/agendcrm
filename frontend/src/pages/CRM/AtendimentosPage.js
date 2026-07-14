@@ -138,6 +138,14 @@ const TicketValueEditor = ({ ticket, onSaved }) => {
 const AtendimentosPage = () => {
   const { user } = useAuth();
   const [tickets, setTickets] = useState([]);
+  // 2026-07-11 — Cache local por aba pra reduzir latencia percebida na
+  // troca. Antes: clicar em "Atendendo" mantinha a lista antiga da aba
+  // anterior visivel ate a resposta HTTP chegar (200-1500ms em Render).
+  // Agora: sempre que uma aba carrega, cache-amos ela; ao trocar,
+  // mostramos o cache IMEDIATAMENTE e fazemos o refresh em background.
+  // Cache curto (30s) pra nao ficar exibindo dado stale demais.
+  const tabCacheRef = useRef({});
+  const [tabLoading, setTabLoading] = useState(false);
   const [counts, setCounts] = useState({ atendendo: 0, aguardando: 0, grupos: 0, encerrados: 0, total: 0 });
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showContactInfo, setShowContactInfo] = useState(false);
@@ -195,11 +203,20 @@ const AtendimentosPage = () => {
   }, [selectedTicket?.messages?.length, selectedTicket?.id]);
 
   const loadData = useCallback(async () => {
+    // 2026-07-11 — Perceived-latency fix: se ha cache recente pra
+    // essa combinacao (aba + filtros) e a idade < 30s, mostra ele
+    // imediatamente. O fetch continua rodando em background e
+    // atualiza a lista quando chegar. Percepcao ao usuario: troca
+    // de aba INSTANTANEA.
+    const cacheKey = `${activeTab}|${channelFilter}|${searchTerm}|${filterConnId}|${filterQueueId}|${filterUserId}|${filterTagName}`;
+    const cached = tabCacheRef.current[cacheKey];
+    if (cached && (Date.now() - cached.ts) < 30000) {
+      setTickets(cached.tickets);
+      setCounts(cached.counts);
+    } else {
+      setTabLoading(true);
+    }
     try {
-      // 2026-06-25 — Sidebar filters now go SERVER-side (same payload
-      // for /tickets and /tickets/counts) so badges and the rendered
-      // list always agree, even on tenants with >1000 tickets where
-      // client-side filtering used to drop rows after server truncation.
       const params = { tab: activeTab };
       if (channelFilter) params.channel = channelFilter;
       if (searchTerm) params.search = searchTerm;
@@ -220,7 +237,9 @@ const AtendimentosPage = () => {
       ]);
       setTickets(ticketsRes.data);
       setCounts(countsRes.data);
+      tabCacheRef.current[cacheKey] = { tickets: ticketsRes.data, counts: countsRes.data, ts: Date.now() };
     } catch (e) { /* silent */ }
+    finally { setTabLoading(false); }
   }, [activeTab, channelFilter, searchTerm, filterConnId, filterUserId, filterTagName, filterQueueId]);
 
   const loadTags = async () => {

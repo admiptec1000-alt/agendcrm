@@ -1,3 +1,36 @@
+## 2026-07-14 — ErrorBoundary + cache de aba (tela branca em Chrome + delay ao trocar aba) ✅
+
+### Bug A — Tela branca em "Conexoes" em alguns Chromes
+Alguns clientes reportavam que ao entrar em Canais/Conexoes num Chrome
+especifico, a tela ficava toda branca. Nao havia ErrorBoundary no
+projeto — entao qualquer erro sincrono em qualquer pagina desmontava a
+arvore inteira do React 18 e o usuario via um `<div>` vazio.
+
+**Fix**: nova classe `PageErrorBoundary` envolvendo `<PageContent>` em
+`Dashboard.js`. Se qualquer pagina der throw, mostra:
+- Titulo "Erro ao carregar esta tela"
+- Nome da pagina que falhou (`code`)
+- `<details>` com stack trace pro suporte copiar
+- Botao "Voltar ao painel" + "Recarregar pagina"
+- Auto-reset ao trocar de pagina (para nao ficar preso no erro antigo)
+
+Cobertura: TODAS as paginas do dashboard, nao so Conexoes.
+
+### Bug B — Delay ao trocar de aba (Atendendo/Aguardando/Grupos/Encerrados)
+Cada troca disparava `loadData` → fetch GET /tickets + /tickets/counts
+(200-1500ms na Render). Enquanto isso, o usuario via a lista da aba
+anterior estagnada ate o novo dado chegar.
+
+**Fix**: cache local por combinacao (aba + filtros) com TTL de 30s no
+`AtendimentosPage`. Ao trocar de aba, o cache mostra os tickets
+INSTANTANEAMENTE; o refresh continua em background e atualiza a lista
+quando terminar. Nova flag `tabLoading` disponivel para futura indicacao
+visual (spinner ou skeleton). Percepcao: troca de aba INSTANT em cache
+hit; primeira carga da aba usa o comportamento antigo.
+
+---
+
+
 ## 2026-07-10 — "Tela em branco apos Reconectar" resolvido ✅
 
 ### Bug reportado
