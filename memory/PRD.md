@@ -1,3 +1,77 @@
+## 2026-07-15 — Diagnostico de crash + Fix "mensagens nao chegam no CRM" ✅
+
+### Bug A — Mensagens recebidas nao chegam no CRM (status conectado) 🔥
+Cliente reportou que mensagens enviadas para o numero conectado nao apareciam
+no CRM, mesmo com status "conectado". Numero de teste: 55 62 99371-6929.
+
+**Root cause encontrado**: `whatsapp-service/index.js` no handler
+`messages.upsert` (linha ~1299) fazia `const m = msg.message || {}` e ia
+direto extrair `m.conversation`, `m.imageMessage`, etc. Mas o WhatsApp
+moderno envelopa mensagens em:
+- `ephemeralMessage.message` — chat efemero (padrao para muitos contatos!)
+- `viewOnceMessage(V2)(V2Extension).message` — view-once
+- `documentWithCaptionMessage.message`
+- `editedMessage.message`
+
+Sem unwrap, `m.conversation` fica `undefined` → `text=""` → linha 1340
+`if (!text) continue;` DESCARTA silenciosamente a mensagem, e o operador
+ve "conectado mas nada chega".
+
+**Fix**: loop de unwrap ate 5 niveis antes de extrair o texto (mesma coisa
+aplicada no handler `messaging-history.set`). Alem disso, quando uma
+mensagem inbound eh de fato descartada agora logamos
+`DROP_EMPTY_MSG phone=X types=[a,b,c] mid=Y` no stderr — assim proxima
+regressao similar eh diagnosticavel em segundos.
+
+**Impacto**: Recupera todas as mensagens efemeras (recurso ativo por
+padrao em muitos WhatsApp hoje) e view-once que estavam sumindo do CRM.
+
+### Bug B — Erro "Erro ao carregar esta tela" em Conexoes (producao)
+O ErrorBoundary agora captura o crash em vez de tela branca — mas nao
+enviava telemetria, entao nao sabiamos QUAL erro estava disparando.
+
+**Fix**:
+1. Nova rota `POST /api/diag/frontend-crash` (unauthenticated — de proposito,
+   uma pagina crashada pode nao ter token valido). Deduplica pelo
+   fingerprint (page + message + primeira linha do stack) em janela de
+   5min pra nao floodar. Auto-limpa quando passa de 500 registros ou 30d.
+2. Nova rota `GET /api/diag/frontend-crashes` (super admin) para consultar
+   os erros capturados. Suporta filtro `?page=conexoes`.
+3. Nova rota `DELETE /api/diag/frontend-crashes` (super admin) para limpar
+   apos um fix redeployado.
+4. `PageErrorBoundary` em `Dashboard.js` agora faz `fetch(...)` com
+   `keepalive: true` no `componentDidCatch` mandando: page, message,
+   stack, componentStack, user-agent, url, e hints de user_email +
+   company_id lidos do localStorage. Nada bloqueante.
+
+**Impacto**: proxima vez que o cliente relatar "Conexoes deu erro", o
+Super Admin consulta `/api/diag/frontend-crashes` (ou via curl) e ve o
+stack real. Nao precisa reproducao pelo usuario.
+
+### Files touched
+- `backend/routes/diag_routes.py` (NEW)
+- `backend/server.py` (registro do router)
+- `whatsapp-service/index.js` (unwrap de envelopes + drop-log)
+- `frontend/src/pages/Company/Dashboard.js` (PageErrorBoundary → POST)
+
+### O que o operador precisa fazer (deploy)
+1. Redeploy do **backend** no Render → ativa `/api/diag/frontend-crash*`
+2. Redeploy do **whatsapp-service** no Render → ativa unwrap de mensagens efemeras
+3. Redeploy do **frontend** (Vercel/Emergent) → ErrorBoundary passa a reportar
+
+### Como consultar os crashes capturados
+```bash
+TOKEN=$(curl -s -X POST https://agendcrm.onrender.com/api/auth/super-admin/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@agentcrm.com","password":"..."}' | jq -r .access_token)
+
+curl https://agendcrm.onrender.com/api/diag/frontend-crashes?page=conexoes \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+---
+
+
 ## 2026-07-14 — ErrorBoundary + cache de aba (tela branca em Chrome + delay ao trocar aba) ✅
 
 ### Bug A — Tela branca em "Conexoes" em alguns Chromes

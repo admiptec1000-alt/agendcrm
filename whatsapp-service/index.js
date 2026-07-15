@@ -1126,7 +1126,19 @@ async function createConnection(instanceId, options = {}) {
           const remoteJid = msg.key?.remoteJid || '';
           if (!remoteJid || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
           // Extract a textual preview from the message
-          const m = msg.message || {};
+          // 2026-07-14 — Same envelope unwrap as messages.upsert so
+          // disappearing/view-once historical chats also get their
+          // preview text (previously stored as empty).
+          let m = msg.message || {};
+          for (let i = 0; i < 5; i++) {
+            if (m.ephemeralMessage?.message) { m = m.ephemeralMessage.message; continue; }
+            if (m.viewOnceMessage?.message) { m = m.viewOnceMessage.message; continue; }
+            if (m.viewOnceMessageV2?.message) { m = m.viewOnceMessageV2.message; continue; }
+            if (m.viewOnceMessageV2Extension?.message) { m = m.viewOnceMessageV2Extension.message; continue; }
+            if (m.documentWithCaptionMessage?.message) { m = m.documentWithCaptionMessage.message; continue; }
+            if (m.editedMessage?.message) { m = m.editedMessage.message; continue; }
+            break;
+          }
           const text = m.conversation
             || m.extendedTextMessage?.text
             || m.imageMessage?.caption
@@ -1296,7 +1308,29 @@ async function createConnection(instanceId, options = {}) {
         }, { timeout: 5000 }).catch(() => {});
       }
 
-      const m = msg.message || {};
+      // 2026-07-14 — Unwrap message envelopes. WhatsApp wraps the real
+      // payload inside `ephemeralMessage.message` (disappearing chat —
+      // now enabled by default for many contacts!), `viewOnceMessage(V2)`,
+      // `viewOnceMessageV2Extension`, `documentWithCaptionMessage` and
+      // `editedMessage.message`. Without this unwrap, `m.conversation`,
+      // `m.imageMessage`, etc. are all `undefined` → text stays empty →
+      // `if (!text) continue;` at line ~1340 SILENTLY DROPS the message
+      // and the operator never sees the client's reply in the CRM.
+      // This bug matches the exact symptom reported in prod: "status
+      // conectado mas as mensagens nao chegam no CRM".
+      let rawMsg = msg.message || {};
+      const UNWRAP_LIMIT = 5; // safety guard against pathological nesting
+      for (let i = 0; i < UNWRAP_LIMIT; i++) {
+        if (rawMsg.ephemeralMessage?.message) { rawMsg = rawMsg.ephemeralMessage.message; continue; }
+        if (rawMsg.viewOnceMessage?.message) { rawMsg = rawMsg.viewOnceMessage.message; continue; }
+        if (rawMsg.viewOnceMessageV2?.message) { rawMsg = rawMsg.viewOnceMessageV2.message; continue; }
+        if (rawMsg.viewOnceMessageV2Extension?.message) { rawMsg = rawMsg.viewOnceMessageV2Extension.message; continue; }
+        if (rawMsg.documentWithCaptionMessage?.message) { rawMsg = rawMsg.documentWithCaptionMessage.message; continue; }
+        if (rawMsg.editedMessage?.message) { rawMsg = rawMsg.editedMessage.message; continue; }
+        if (rawMsg.protocolMessage?.editedMessage) { rawMsg = rawMsg.protocolMessage.editedMessage; continue; }
+        break;
+      }
+      const m = rawMsg;
       // Support a variety of message types
       let text = m.conversation
         || m.extendedTextMessage?.text
@@ -1337,7 +1371,19 @@ async function createConnection(instanceId, options = {}) {
           mediaFilename = m.documentMessage.fileName || null;
         }
       }
-      if (!text) continue;
+      if (!text) {
+        // 2026-07-14 — Log dropped messages so we can spot novel message
+        // types in production (poll updates, protocol msgs, reactions,
+        // stickers we don't render, etc). Without this, silent drops
+        // read as "connected but no messages" from the operator's POV.
+        try {
+          const keys = Object.keys(rawMsg || {});
+          if (!fromMe && keys.length) {
+            console.warn(`[${instanceId}] DROP_EMPTY_MSG phone=${phone} types=[${keys.join(',')}] mid=${msg.key?.id}`);
+          }
+        } catch (_) {}
+        continue;
+      }
 
       // Download media bytes when present so the agent can actually play /
       // view it in the chat (WhatsApp encrypts media; Baileys handles the

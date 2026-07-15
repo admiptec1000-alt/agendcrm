@@ -685,10 +685,56 @@ const PageContent = ({ page, hasFeature, setActivePage, menuGroups }) => {
 // Agora capturamos o erro localmente, mostramos uma tela de erro amigavel
 // com botao "Voltar ao painel" e o stack pro suporte.
 class PageErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { err: null }; }
-  static getDerivedStateFromError(err) { return { err }; }
+  constructor(props) { super(props); this.state = { err: null, reported: false }; }
+  static getDerivedStateFromError(err) { return { err, reported: false }; }
   componentDidCatch(err, info) {
     console.error('[PageErrorBoundary]', this.props.page, err, info);
+    // 2026-07-14 — Fire-and-forget POST to /api/diag/frontend-crash so
+    // the crash is visible to us without needing the user to open the
+    // browser console. Anonymous (endpoint is unauthenticated on purpose
+    // — a crashing page may not have a valid token) but we include the
+    // logged-in user hint from localStorage when available.
+    try {
+      if (this.state.reported) return;
+      this.setState({ reported: true });
+      const backend = process.env.REACT_APP_BACKEND_URL;
+      if (!backend) return;
+      // Best-effort user/tenant hints (safe if absent).
+      let userEmail = null, companyId = null;
+      try {
+        const rawUser = localStorage.getItem('user') || sessionStorage.getItem('user');
+        if (rawUser) {
+          const u = JSON.parse(rawUser);
+          userEmail = u?.email || null;
+          companyId = u?.company_id || null;
+        }
+      } catch (_) { /* ignore */ }
+      const payload = {
+        page: this.props.page,
+        message: err?.message || String(err),
+        stack: err?.stack || null,
+        component_stack: info?.componentStack || null,
+        user_agent: navigator.userAgent,
+        url: window.location.href,
+        user_email: userEmail,
+        company_id: companyId,
+        context: {
+          react_version: React.version,
+          screen: `${window.screen?.width}x${window.screen?.height}`,
+          viewport: `${window.innerWidth}x${window.innerHeight}`,
+        },
+      };
+      // Use `keepalive` so the request completes even if the user
+      // navigates away / reloads immediately.
+      try {
+        fetch(`${backend}/api/diag/frontend-crash`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        }).catch(() => {});
+      } catch (_) { /* ignore */ }
+    } catch (_) { /* boundary must never throw */ }
   }
   componentDidUpdate(prev) {
     // Ao trocar de pagina, resetamos o erro para dar chance da proxima tela.
