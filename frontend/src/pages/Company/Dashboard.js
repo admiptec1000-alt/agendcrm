@@ -742,6 +742,19 @@ class PageErrorBoundary extends React.Component {
   }
   render() {
     if (!this.state.err) return this.props.children;
+    // 2026-07-17 — Detect the well-known Chrome/Google Translate bug:
+    // when the browser translates the page, it swaps text nodes → React
+    // later fails with "Failed to execute 'removeChild' on 'Node'" or
+    // "insertBefore on 'Node'". We can't fix this from JS, but we can
+    // (a) tell the operator what's really happening and (b) auto-recover
+    // via a one-shot reload IF we detect the DOM was translated.
+    const msg = (this.state.err?.message || '').toString();
+    const isTranslateBug = /removeChild|insertBefore/i.test(msg)
+      && (/child of this node|Failed to execute/i.test(msg));
+    const chromeTranslated = typeof document !== 'undefined'
+      && (document.documentElement?.classList?.contains('translated-ltr')
+          || document.documentElement?.classList?.contains('translated-rtl')
+          || !!document.querySelector('.goog-te-banner-frame, #goog-gt-tt, .skiptranslate'));
     return (
       <div className="max-w-2xl mx-auto mt-16 p-6 bg-white border border-red-200 rounded-2xl shadow-sm">
         <div className="flex items-start gap-3 mb-4">
@@ -755,6 +768,21 @@ class PageErrorBoundary extends React.Component {
             </p>
           </div>
         </div>
+        {(isTranslateBug || chromeTranslated) && (
+          <div className="mb-4 p-3 rounded-lg border-2 border-amber-300 bg-amber-50">
+            <p className="text-sm font-bold text-amber-900">
+              O Google Tradutor do Chrome esta ativo nesta pagina.
+            </p>
+            <p className="text-xs text-amber-800 mt-1">
+              O sistema ja esta em portugues. Traduzir novamente quebra a tela.
+              <br />
+              <strong>Como resolver</strong>: clique com o botao direito na pagina &rarr;
+              &quot;Traduzir para o ingles&quot; e depois &quot;Mostrar original&quot;. Ou
+              clique no icone <em>Traduzir</em> na barra de enderecos e escolha
+              &quot;Nunca traduzir este site&quot;.
+            </p>
+          </div>
+        )}
         <details className="mb-4 text-xs">
           <summary className="cursor-pointer text-slate-500 hover:text-slate-700">Detalhes tecnicos</summary>
           <pre className="mt-2 p-3 bg-slate-50 rounded-lg overflow-auto text-[11px] text-slate-700 max-h-48">

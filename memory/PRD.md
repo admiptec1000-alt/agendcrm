@@ -1,3 +1,59 @@
+## 2026-07-17 — Fix definitivo: tela branca em Conexoes (Chrome Translate) ✅
+
+### Root cause identificado (agora com evidencia)
+O usuario mandou screenshot do console do Chrome mostrando:
+- `NotFoundError: Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.` (repetido dezenas de vezes)
+- `html.translated-ltr` no elemento `<html>`
+- Widget `<div id="goog-gt-tt" class="skiptranslate">` no body
+
+Isto e o bug conhecido do React vs Google Translate:
+- Chrome/Google Translate substitui text nodes IN-PLACE apos o React
+  ja ter comitado o DOM
+- Quando React tenta remover/reordenar esses nodes (troca de rota,
+  re-render de lista), acha que os nodes originais deveriam estar
+  ali e da `removeChild` no lugar errado
+- Resultado: excecao sincrona → arvore desmonta → tela em branco
+- Este problema ha anos afeta React 18 (issue #11538)
+
+Aparece SO em computadores onde o usuario tem "sempre traduzir portugues"
+ativado no Chrome — por isso reproduzia em uns PCs mas nao em outros.
+
+### Fixes aplicados
+
+**1) `frontend/public/index.html`**
+- `<html lang="pt-BR" translate="no">` (sinal HTML5 padrao)
+- `<meta name="google" content="notranslate">` (sinal do Google)
+- `<meta http-equiv="Content-Language" content="pt-br">`
+- `<meta name="mobile-web-app-capable" content="yes">` (correcao do
+  warning de deprecated que aparecia junto)
+
+Esses tres sinais juntos fazem TODO tradutor moderno (Chrome, Edge,
+Safari Reader, extensoes tipo ImTranslator) pular a pagina. Alem de nao
+quebrar, tambem para o Chrome de OFERECER o botao "traduzir" na barra.
+
+**2) `PageErrorBoundary` em `Dashboard.js`**
+- Detecta `removeChild|insertBefore` + `translated-ltr` no <html> ou
+  presenca do `#goog-gt-tt`
+- Se detectar, exibe banner amarelo com instrucao explicita:
+  "clique com botao direito → Mostrar original / Nunca traduzir este site"
+- O crash-report para /api/diag/frontend-crash continua ligado, entao
+  se este mesmo padrao voltar em outra pagina, ficamos sabendo
+
+### Impacto
+- Chrome NAO vai mais oferecer/aplicar traducao no site
+- Quem ja tinha "sempre traduzir" configurado antes: quando abrir a
+  proxima aba nova, o sinal `translate="no"` desativa a regra salva
+- Para usuarios que ainda estao com traducao ativa numa aba antiga:
+  ao dar crash, o ErrorBoundary agora explica exatamente o que fazer
+
+### Deploy necessario
+- Frontend: SIM (mudanca no index.html + Dashboard.js)
+- Backend: nao (mudanca so no frontend)
+- WhatsApp-service: nao
+
+---
+
+
 ## 2026-07-15 — Diagnostico de crash + Fix "mensagens nao chegam no CRM" ✅
 
 ### Bug A — Mensagens recebidas nao chegam no CRM (status conectado) 🔥
