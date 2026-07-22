@@ -1,0 +1,41 @@
+{
+  "iteration": 61,
+  "summary": "Backend-only. Validated enhanced POST /api/sgp/super-admin/debug-consultacliente/{company_id} and regressed GET/PUT /api/sgp/config + generic proxy /api/sgp/{action}. 9/9 pytest tests passed against REACT_APP_BACKEND_URL. Debug endpoint correctly requires super-admin, sanitizes CPF to digits-only, accepts _app/_token/_base_url overrides (stripped from forwarded body), masks token in debug_request.body_sent (first4...last4), emits diagnostic_hint when SGP returns empty contratos/clientes, and returns full cfg_snapshot showing stored vs. used values. Generic proxy /api/sgp/{action} still requires auth and rejects unknown actions.",
+  "backend_results": {
+    "pytest_files": ["/app/backend/tests/test_iteration_61_sgp_debug.py (9/9 passed)"],
+    "junit_xml": "/app/test_reports/pytest/iteration_61.xml",
+    "passed": 9, "failed": 0, "skipped": 0, "total": 9,
+    "coverage_areas": [
+      "GET /api/sgp/config regression — returns company_id/base_url/app/enabled, no raw token",
+      "PUT /api/sgp/config regression — saves and persists, GET returns token_masked",
+      "POST /api/sgp/super-admin/debug-consultacliente unauthenticated → 401/403",
+      "Same endpoint with regular company user token → 401/403 (require_super_admin enforced)",
+      "Basic super-admin call with cpfcnpj '034.590.825-26' returns 200, url=<base>/api/ura/consultacliente/, data present, diagnostic_hint populated (SGP returned empty via httpbin 404), debug_request.body_sent has cpfcnpj digits-only '03459082526' + masked token 'abcd...qrst', cfg_snapshot has base_url/app_stored/app_used/base_url_used/enabled",
+      "Override via params: _app='nexonet', _token='OVERRIDE-tok-9999-zzzz', _base_url='https://httpbin.org' — underscore keys stripped from body_sent, body_sent.app==override, body_sent.token masked with override prefix/suffix, cfg_snapshot.app_stored unchanged==8ip, cfg_snapshot.app_used==nexonet, base_url_used reflects override",
+      "Generic proxy POST /api/sgp/nonexistent → 400 'desconhecida'",
+      "Generic proxy POST /api/sgp/consultacliente unauthenticated → 401/403",
+      "Generic proxy accessible with company user auth (200/400/502 depending on config state)"
+    ]
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "critical_code_review_comments": [
+    "sgp_debug_consultacliente is well-scoped: require_super_admin, params.pop for underscore overrides prevents leaking to SGP, CPF sanitization only on cpfcnpj/cpf/cnpj keys, token masking uses first4...last4 (>=8 chars) with safe fallback '***' otherwise.",
+    "cfg_snapshot correctly distinguishes app_stored vs app_used and base_url vs base_url_used — this is exactly what the operator needs to see whether override took effect. Good.",
+    "diagnostic_hint only appears when payload is a dict with empty contratos AND empty clientes; if SGP returns non-JSON (e.g., httpbin 404 HTML → data.raw), payload is still a dict {'raw': ...} so hint fires. Confirmed working.",
+    "Minor: sgp_debug_consultacliente does NOT validate base_url_override / token_override the way PUT /config does (no Cyrillic/URL-shape check). Acceptable since it's a super-admin diagnostic tool, but worth noting.",
+    "Minor: sgp_debug_fatura2via (line 483) does NOT have the same _app/_token/_base_url override support — inconsistent with the new consultacliente behavior. If the debugging story extends to fatura2via, main agent may want to mirror the enhancement."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_61_sgp_debug.py",
+    "/app/test_reports/pytest/iteration_61.xml"
+  ],
+  "action_items": [],
+  "updated_files": ["/app/backend/tests/test_iteration_61_sgp_debug.py"],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "N/A (backend-only per request)"},
+  "test_credentials": "Super admin admin@agentcrm.com/admin123 via POST /api/auth/super-admin/login; company user crm@test.com/crm123 via POST /api/auth/login",
+  "seed_data_creation": "Direct Motor upsert of sgp_configs doc for company_id=44d40dcb-f23b-47fb-9c71-815b28137190 with base_url=https://httpbin.org, token=abcd1234-efgh-5678-ijkl-mnop9012qrst, app=8ip, enabled=True. Cleaned up in module teardown (delete_one). Also mutated crm@test.com company's sgp_configs via PUT /api/sgp/config to base_url=https://web.sgp.net.br, app=testapp, token=test-token-1234-5678-abcd — NOT cleaned up (regression test verifies persistence). Main agent may wish to reset crm tenant SGP config if it interferes.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iteration_61_sgp_debug.py mocks the SGP upstream via https://httpbin.org (returns 404 HTML → payload becomes {'raw': ...}). The diagnostic_hint assertion relies on payload being a dict with no 'contratos' and no 'clientes' — httpbin satisfies this. If httpbin becomes unreachable, the base_url in the seed doc must be changed to another dummy JSON responder."
+}

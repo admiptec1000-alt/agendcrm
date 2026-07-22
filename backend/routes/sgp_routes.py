@@ -415,19 +415,64 @@ async def sgp_debug_consultacliente(
     cfg = await db.sgp_configs.find_one({"company_id": company_id}, {"_id": 0})
     if not cfg or not cfg.get("enabled") or not cfg.get("base_url") or not cfg.get("token"):
         raise HTTPException(400, "Integracao SGP nao configurada para esta empresa")
-    url = cfg["base_url"].rstrip("/") + "/api/ura/consultacliente/"
-    body = {**(data.params or {}), "token": cfg["token"], "app": cfg.get("app") or "8ip"}
+    # 2026-07-22 — Aceita overrides `_app` / `_token` / `_base_url` DENTRO
+    # de `params` para o super-admin poder A/B testar sem precisar salvar
+    # config (ex: "sera que o app é 'nexonet' em vez de '8ip'?"). Chaves
+    # comecam com "_" para nao serem enviadas como parametros SGP reais.
+    raw_params = dict(data.params or {})
+    app_override = raw_params.pop("_app", None)
+    token_override = raw_params.pop("_token", None)
+    base_url_override = raw_params.pop("_base_url", None)
+    # Sanitize CPF/CNPJ (SGP so aceita digitos)
+    import re as _re
+    for k, v in list(raw_params.items()):
+        if k in ("cpfcnpj", "cpf", "cnpj") and isinstance(v, str):
+            raw_params[k] = _re.sub(r"\D", "", v)
+    base_url = (base_url_override or cfg["base_url"]).rstrip("/")
+    url = base_url + "/api/ura/consultacliente/"
+    effective_app = (app_override or cfg.get("app") or "8ip")
+    effective_token = (token_override or cfg["token"])
+    body = {**raw_params, "token": effective_token, "app": effective_app}
     async with httpx.AsyncClient(timeout=20.0) as cli:
         r = await cli.post(url, json=body)
     try:
         payload = r.json()
     except Exception:
         payload = {"raw": r.text}
-    # Echo the FULL payload (super-admin only). Strip the token from any
-    # nested echo to be safe.
     if isinstance(payload, dict) and "token" in payload:
         payload["token"] = "<redacted>"
-    return {"status": r.status_code, "url": url, "data": payload}
+    # Diagnostico friendly no topo: contratos_count + hint sobre `app`.
+    hint = None
+    if isinstance(payload, dict):
+        contratos = payload.get("contratos") if isinstance(payload.get("contratos"), list) else []
+        clientes = payload.get("clientes") if isinstance(payload.get("clientes"), list) else []
+        if not contratos and not clientes:
+            hint = (
+                "SGP retornou vazio. Cheque na ordem: "
+                "1) o campo 'app' esta correto pra esse provedor (nao presuma '8ip'); "
+                "2) o token tem permissao para URA/consultacliente; "
+                "3) o CPF esta CADASTRADO como TITULAR no SGP (nao apenas como responsavel financeiro); "
+                "4) a URA foi ATIVADA no painel SGP do provedor."
+            )
+    # Echo do request pra facilitar copy-paste no relato ao suporte.
+    debug_request = {
+        "url": url,
+        "body_sent": {**body, "token": (effective_token[:4] + "..." + effective_token[-4:]) if len(effective_token) >= 8 else "***"},
+    }
+    return {
+        "status": r.status_code,
+        "url": url,
+        "data": payload,
+        "diagnostic_hint": hint,
+        "debug_request": debug_request,
+        "cfg_snapshot": {
+            "base_url": cfg["base_url"],
+            "app_stored": cfg.get("app") or "8ip",
+            "app_used": effective_app,
+            "base_url_used": base_url,
+            "enabled": cfg.get("enabled"),
+        },
+    }
 
 
 # Same idea, but for `fatura2via`. Use this when the customer reports that
