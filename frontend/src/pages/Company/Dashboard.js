@@ -6519,6 +6519,7 @@ const SgpConfigCard = () => {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [tokenMasked, setTokenMasked] = useState('');
+  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
     api.get('/sgp/config')
@@ -6638,6 +6639,238 @@ const SgpConfigCard = () => {
             className="ml-auto text-xs text-primary hover:underline">
             Como gerar token? ↗
           </a>
+        </div>
+        <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center gap-2">
+          <p className="text-xs text-slate-600 flex-1">
+            <span className="font-semibold text-slate-800">Primeira vez integrando?</span>{' '}
+            Siga o passo a passo completo — desde criar o token no SGP ate importar o fluxo pronto.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowGuide(true)}
+            data-testid="sgp-open-guide-btn"
+            className="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary/10 text-primary hover:bg-primary/20 whitespace-nowrap"
+          >
+            📖 Abrir guia de integracao SGP
+          </button>
+        </div>
+      </div>
+      {showGuide && <SgpIntegrationGuideModal onClose={() => setShowGuide(false)} />}
+    </div>
+  );
+};
+
+// 2026-07-22 — Passo a passo completo de integracao SGP.
+// Baseado na documentacao oficial (bookstack.sgp.net.br e Postman
+// collection publica). Aparece ao clicar em "Abrir guia de integracao SGP"
+// no card de config. Cobre desde a geracao do token no painel SGP ate a
+// primeira mensagem funcionando no bot — usado quando um novo tenant
+// entra em producao pela primeira vez ou quando o bot responde "nao
+// localizei" por config errada de token/app/permissoes.
+const SgpIntegrationGuideModal = ({ onClose }) => {
+  const Step = ({ n, title, children }) => (
+    <div className="flex gap-3 pb-4 border-b border-slate-100 last:border-0">
+      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center font-bold text-xs">
+        {n}
+      </div>
+      <div className="flex-1 min-w-0">
+        <h4 className="font-semibold text-slate-900 text-sm mb-1">{title}</h4>
+        <div className="text-xs text-slate-700 space-y-1.5 leading-relaxed">{children}</div>
+      </div>
+    </div>
+  );
+  const Code = ({ children }) => (
+    <code className="px-1.5 py-0.5 bg-slate-100 rounded text-[11px] font-mono text-slate-800">{children}</code>
+  );
+  const Path = ({ children }) => (
+    <span className="font-medium text-slate-900">{children}</span>
+  );
+  return (
+    <div
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+      onClick={onClose}
+      data-testid="sgp-guide-modal"
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl my-8"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between p-5 border-b border-slate-200 sticky top-0 bg-white rounded-t-2xl">
+          <div>
+            <h3 className="font-bold text-lg text-slate-900">Integrando o SGP passo a passo</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Guia completo baseado na documentacao oficial da SGP. Siga tudo na ordem — depois de
+              habilitar tem 5 min de bot funcionando.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded hover:bg-slate-100"
+            data-testid="sgp-guide-close-btn"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+            <p className="text-xs text-amber-900">
+              <strong>Pre-requisito</strong>: o provedor precisa ter o modulo <em>URA</em> ativo
+              no plano do SGP. Sem URA, o token e as permissoes nao aparecem no painel. Se voce
+              nao ve as opcoes descritas abaixo, contate o suporte SGP para liberar URA na conta.
+            </p>
+          </div>
+
+          <Step n={1} title="Fazer login no painel SGP como administrador">
+            <p>
+              Acesse o painel do provedor (ex.: <Code>https://web.sgp.net.br/admin</Code> ou o
+              dominio proprio do ISP). Use uma conta com <strong>permissao de admin</strong> —
+              usuarios comuns nao veem o menu de tokens.
+            </p>
+          </Step>
+
+          <Step n={2} title="Gerar o token da API">
+            <p>
+              No menu esquerdo do SGP, navegue para:
+            </p>
+            <p>
+              <Path>Sistema &rarr; Ferramentas &rarr; Painel Admin &rarr; Tokens</Path>
+            </p>
+            <p>
+              Clique em <strong>+ Novo Token</strong> (ou <em>Adicionar</em>). Preencha:
+            </p>
+            <ul className="list-disc list-inside space-y-0.5 ml-2">
+              <li><strong>Nome</strong>: <Code>AgentCRM</Code> (ou o nome que preferir)</li>
+              <li><strong>App / AppName</strong>: identificador do provedor no SGP.
+                <span className="block text-slate-500 text-[11px] mt-0.5">
+                  Ex.: se o provedor se chama <em>Nexo Net</em>, geralmente e <Code>nexonet</Code>,
+                  <Code>nexo</Code> ou <Code>nexo_net</Code>. Confirme no SGP ou pergunte ao
+                  suporte deles. ATENCAO: e case-sensitive.
+                </span>
+              </li>
+              <li><strong>Usuario mapeado</strong>: escolha um usuario do SGP que tenha as
+                permissoes de URA (proximo passo).</li>
+            </ul>
+            <p>
+              Salve. O token gerado tem formato UUID (<Code>xxxx-xxxx-xxxx-xxxx</Code>). Copie e
+              guarde — no SGP so aparece uma vez.
+            </p>
+          </Step>
+
+          <Step n={3} title="Habilitar as permissoes URA no usuario do token">
+            <p>Ainda no SGP:</p>
+            <p>
+              <Path>Sistema &rarr; Usuarios</Path>
+            </p>
+            <p>
+              Localize o usuario mapeado no passo 2, clique em <strong>Editar &rarr; Permissoes</strong>{' '}
+              (ou <em>Grupos</em>). Habilite as seguintes permissoes de URA:
+            </p>
+            <ul className="list-disc list-inside space-y-0.5 ml-2">
+              <li><Code>URA - Consultar Cliente</Code> (obrigatorio)</li>
+              <li><Code>URA - Fatura 2a Via</Code> (para o bot mandar boleto/Pix)</li>
+              <li><Code>URA - Verifica Acesso</Code> (para diagnostico "conexao lenta"/"sem sinal")</li>
+              <li><Code>URA - Liberacao por Promessa</Code> (para "liberacao de confianca")</li>
+              <li><Code>URA - Manutencoes</Code> (para o item "suporte tecnico")</li>
+            </ul>
+            <p className="text-slate-500">
+              Sem essas permissoes o SGP recebe a chamada mas devolve vazio <strong>sem
+              erro</strong>, e o bot mostra "Nao localizei" mesmo com CPF valido.
+            </p>
+          </Step>
+
+          <Step n={4} title="Coletar os 3 dados que voce vai colar aqui no AgentCRM">
+            <p>Anote (do proprio SGP):</p>
+            <ul className="list-disc list-inside space-y-0.5 ml-2">
+              <li><strong>Base URL</strong>: raiz do SGP.
+                <span className="block text-slate-500 text-[11px] mt-0.5">
+                  Ex.: <Code>https://web.sgp.net.br</Code> ou <Code>https://sgp.nomedoprovedor.com.br</Code>.{' '}
+                  <strong>SEM</strong> <Code>/admin</Code>, <strong>SEM</strong> <Code>/api</Code>, <strong>SEM</strong> barra no final.
+                </span>
+              </li>
+              <li><strong>Token</strong>: o UUID gerado no passo 2</li>
+              <li><strong>App identifier</strong>: o "App/AppName" do passo 2. NAO use <Code>8ip</Code> se seu
+                SGP usa outro identificador.</li>
+            </ul>
+          </Step>
+
+          <Step n={5} title="Preencher esse formulario e salvar">
+            <p>De volta a esta tela do AgentCRM:</p>
+            <ol className="list-decimal list-inside space-y-0.5 ml-2">
+              <li>Cole a <strong>Base URL</strong></li>
+              <li>Cole o <strong>Token</strong></li>
+              <li>Preencha o <strong>App identifier</strong> exato (case-sensitive)</li>
+              <li>Marque <strong>Ativa</strong></li>
+              <li>Clique <strong>Salvar</strong></li>
+            </ol>
+          </Step>
+
+          <Step n={6} title="Testar a conexao">
+            <p>Clique em <strong>Testar conexao</strong>. Interpretacao:</p>
+            <ul className="list-disc list-inside space-y-0.5 ml-2">
+              <li><strong className="text-emerald-700">OK 200</strong> &rarr; tudo certo, pode ir pro proximo passo</li>
+              <li><strong className="text-red-700">302 ou HTML</strong> &rarr; Base URL errada
+                (voce colou o painel Django em vez da raiz da API)</li>
+              <li><strong className="text-red-700">401 / 403</strong> &rarr; Token invalido ou sem
+                permissao URA</li>
+              <li><strong className="text-amber-700">200 mas contratos vazios ao consultar CPF real</strong> &rarr;{' '}
+                App identifier errado ou CPF nao e titular no SGP</li>
+            </ul>
+          </Step>
+
+          <Step n={7} title="Importar o fluxo pronto no Flowbuilder">
+            <p>
+              No menu lateral, va em <Path>Flowbuilder</Path> e clique em{' '}
+              <strong>Importar fluxo SGP</strong>. Um fluxo completo{' '}
+              (<em>"SGP - Atendimento Web Internet"</em>) sera criado <em>desativado</em>, com todos
+              os nos ja apontando para o proxy interno <Code>/api/sgp/&lt;acao&gt;</Code>.
+            </p>
+            <p>
+              Depois: <Path>Conexoes &rarr; icone de fluxo</Path> na sua conexao WhatsApp &rarr; selecione o
+              fluxo importado &rarr; ative.
+            </p>
+          </Step>
+
+          <Step n={8} title="Testar do WhatsApp real">
+            <p>
+              Manda mensagem do seu celular para o numero conectado. O bot deve mostrar o menu
+              principal. Digite <Code>1</Code> (Ja sou cliente), depois um CPF <strong>de
+              titular real</strong>. Deve retornar os contratos.
+            </p>
+            <p className="text-slate-500">
+              Se ainda der "Nao localizei" com CPF valido, o problema esta no lado SGP:
+              <br />&bull; App identifier diferente (mais provavel)
+              <br />&bull; CPF cadastrado como responsavel, nao como titular
+              <br />&bull; Permissao URA nao foi salva no usuario do token
+            </p>
+          </Step>
+
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700">
+            <p className="font-semibold text-slate-800 mb-1">Referencia oficial SGP</p>
+            <ul className="space-y-0.5">
+              <li>
+                Documentacao completa da API:{' '}
+                <a href="https://bookstack.sgp.net.br/books/api/page/autenticacoes-via-api" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  bookstack.sgp.net.br/books/api ↗
+                </a>
+              </li>
+              <li>
+                Colecao Postman (todos os endpoints URA):{' '}
+                <a href="https://documenter.getpostman.com/view/6682240/2sB34hHg2V" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  documenter.getpostman.com ↗
+                </a>
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div className="p-4 border-t border-slate-200 flex justify-end bg-slate-50 rounded-b-2xl">
+          <button
+            onClick={onClose}
+            className="btn-primary text-sm"
+            data-testid="sgp-guide-done-btn"
+          >
+            Entendi, fechar
+          </button>
         </div>
       </div>
     </div>
