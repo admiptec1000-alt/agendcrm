@@ -1,0 +1,23 @@
+{
+  "summary": "Backend testing of close_message_cooldown_days for the ticket lifecycle. 10/10 pytest cases pass covering: (1) GET/PUT /api/crm/company/ticket-settings returns and persists close_message_cooldown_days with 400 on <0 and >365 and accepts 0/365; (2) Manual close via PUT /api/crm/tickets/{id} status=fechado: cooldown-hit skips send (no manual_close system msg appended, ticket still closes), cooldown=0 always sends (msg appended), cooldown expired (prior msg older than window) sends again, cooldown is company-scoped (prior msg in another company_id does NOT block), send_close_message_on_manual=False bypasses everything with no msg.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_62_close_cooldown.py",
+    "/app/test_reports/pytest/iteration_62.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backend/routes/crm_routes.py L717 pushes the manual_close system message even when the WA service returns a 4xx/5xx (httpx.post does not raise on non-2xx). That is what makes the cooldown record persist on 400 responses — probably acceptable (cooldown ties to intent) but worth flagging: an operator will silently NOT get a real WhatsApp send while the DB shows a 'sent' system message, and subsequent closes within cooldown will be silenced. Consider calling r.raise_for_status() or checking r.status_code before appending, or record a distinct reason like 'manual_close_attempt_failed' when non-2xx."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_62_close_cooldown.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "seed_data_creation": "Per-test unique phone numbers (55119<uuid>). Tickets seeded via motor with connection_id/customer_phone. All test tickets and OTHER_COMPANY_ID tickets deleted in module teardown. Company settings reset to close_message_cooldown_days=0, send_close_message_on_manual=False after the run.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "crm@test.com / crm123",
+  "context_for_next_testing_agent": "PUT /api/crm/tickets/{id} (not PATCH as the request stated) is the manual-close endpoint. The cooldown query in crm_routes.py ~L674 filters by company_id + customer_phone + messages elemMatch(system:true, reason in [auto_close, manual_close], timestamp >= cutoff_iso). WA_SERVICE_URL points to https://agendcrm.onrender.com which returns 400 (reachable but unknown instance); httpx does NOT raise on 400 so the manual_close system msg IS pushed to the DB after 'send'. Use unique phone per test to avoid cross-test cooldown collisions.",
+  "rca_of_the_issue": "N/A — no defects found. Initial two failures in the first run were test-isolation issues (shared phone across scenarios caused legitimate cooldown hits from prior test's seeded/appended messages). Fixed by allocating a fresh phone per test method."
+}

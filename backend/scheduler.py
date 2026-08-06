@@ -205,7 +205,7 @@ async def _process_ticket_auto_close(db):
     # tick — most tenants have it off.
     cursor = db.companies.find(
         {"ticket_auto_close_hours": {"$gt": 0}},
-        {"_id": 0, "id": 1, "name": 1, "ticket_auto_close_hours": 1, "ticket_auto_close_message": 1},
+        {"_id": 0, "id": 1, "name": 1, "ticket_auto_close_hours": 1, "ticket_auto_close_message": 1, "close_message_cooldown_days": 1},
     )
     async for c in cursor:
         hours = int(c.get("ticket_auto_close_hours") or 0)
@@ -213,6 +213,12 @@ async def _process_ticket_auto_close(db):
             continue
         cutoff = (now - timedelta(hours=hours)).isoformat()
         message_template = c.get("ticket_auto_close_message") or ""
+        # 2026-07-27 — Cooldown por telefone: se ja enviei a mensagem de
+        # encerramento pra este contato dentro do periodo, pulo o envio e
+        # so fecho o ticket em silencio. 0 = sempre envia (comportamento
+        # antigo).
+        cooldown_days = int(c.get("close_message_cooldown_days") or 0)
+        cooldown_cutoff_iso = (now - timedelta(days=cooldown_days)).isoformat() if cooldown_days > 0 else None
         # 2026-05-28 — BUG FIX: antes filtrava por ["aberto","em_andamento"]
         # mas os tickets reais ficam em `aberto|atendendo|aguardando`. Por
         # isso o auto-close NUNCA funcionava em prod. Agora pega TUDO que
@@ -254,6 +260,24 @@ async def _process_ticket_auto_close(db):
                             f"[scheduler] auto-close skipped ticket={t.get('id')}: missing phone/connection"
                         )
                         continue
+                    # Cooldown check per company/phone.
+                    if cooldown_cutoff_iso:
+                        prior = await db.tickets.find_one({
+                            "company_id": c["id"],
+                            "customer_phone": phone,
+                            "messages": {"$elemMatch": {
+                                "system": True,
+                                "reason": {"$in": ["auto_close", "manual_close"]},
+                                "timestamp": {"$gte": cooldown_cutoff_iso},
+                            }},
+                        }, {"_id": 0, "id": 1})
+                        if prior:
+                            logger.info(
+                                f"[scheduler] auto-close cooldown hit ticket={t.get('id')} "
+                                f"phone={phone} cooldown_days={cooldown_days} "
+                                f"prior_ticket={prior.get('id')} — skip send"
+                            )
+                            continue
                     company_name = c.get("name") or ""
                     # 2026-02-28 — Variaveis SGP no fechamento: extrai
                     # `nome_cliente` capturado durante o flow (via SGP

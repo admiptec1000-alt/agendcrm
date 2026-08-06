@@ -23,6 +23,9 @@ const TicketLifecycleSettingsCard = ({ canEdit = true }) => {
   // 2026-05-28 — Flag para enviar a MESMA mensagem no fechamento MANUAL
   // do ticket pelo operador (alem do auto-close por inatividade).
   const [sendOnManual, setSendOnManual] = useState(false);
+  // 2026-07-27 — Cooldown em dias: se ja enviei a msg de encerramento
+  // pro mesmo telefone/empresa nesse periodo, NAO envia de novo, so fecha.
+  const [cooldownDays, setCooldownDays] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,6 +37,7 @@ const TicketLifecycleSettingsCard = ({ canEdit = true }) => {
         setMessage(msg);
         setInitialMessage(msg);
         setSendOnManual(!!r.data?.send_close_message_on_manual);
+        setCooldownDays(Number(r.data?.close_message_cooldown_days || 0));
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -147,6 +151,44 @@ const TicketLifecycleSettingsCard = ({ canEdit = true }) => {
                 {hours === 0 ? 'Ative o fechamento automatico para usar a mensagem.' : `${(message || '').length}/1000`}
               </p>
               {saving && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+            </div>
+
+            {/* 2026-07-27 — Cooldown por dias: nao reenvia a mensagem se
+                ja enviei ao mesmo contato dentro do periodo. */}
+            <div className="mt-4 pt-4 border-t border-slate-100">
+              <p className="font-medium text-sm text-slate-800">Nao reenviar por (dias)</p>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed mb-3">
+                Se ja enviei a mensagem de encerramento a este contato dentro deste periodo,
+                o sistema apenas finaliza o atendimento sem enviar a mensagem novamente.
+                Vale tanto pro fechamento automatico quanto pro manual.
+                <strong> 0 = desativado</strong> (sempre envia).
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  step={1}
+                  value={cooldownDays}
+                  onChange={(e) => setCooldownDays(e.target.value)}
+                  onBlur={async (e) => {
+                    if (!canEdit) return;
+                    const n = Math.max(0, Math.min(365, Math.floor(Number(e.target.value) || 0)));
+                    setCooldownDays(n);
+                    try { await save({ close_message_cooldown_days: n }); } catch (_) {}
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                  disabled={!canEdit || saving}
+                  data-testid="close-message-cooldown-days-input"
+                  className="w-24 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                />
+                <span className="text-sm text-slate-600">dias</span>
+                {cooldownDays > 0 && (
+                  <span className="ml-2 text-[10px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold">
+                    Ativo · nao reenvia por {cooldownDays}d
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 

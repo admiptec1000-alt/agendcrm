@@ -655,7 +655,7 @@ async def update_ticket(
         try:
             comp = await db.companies.find_one(
                 {"id": user["company_id"]},
-                {"_id": 0, "name": 1, "send_close_message_on_manual": 1, "ticket_auto_close_message": 1},
+                {"_id": 0, "name": 1, "send_close_message_on_manual": 1, "ticket_auto_close_message": 1, "close_message_cooldown_days": 1},
             ) or {}
             if bool(comp.get("send_close_message_on_manual")) and (comp.get("ticket_auto_close_message") or "").strip():
                 import httpx, os, logging
@@ -663,7 +663,30 @@ async def update_ticket(
                 phone = ticket.get("customer_phone") or ""
                 connection_id = ticket.get("connection_id") or ticket.get("channel_id")
                 contact_name = ticket.get("customer_name") or ""
-                if phone and connection_id:
+                # 2026-07-27 — Cooldown check: se ja enviei a mensagem pra
+                # esse telefone (em QUALQUER ticket dessa empresa) dentro
+                # do periodo configurado, pula o envio e apenas fecha em
+                # silencio. Cooldown 0 = desativado (comportamento antigo).
+                cooldown_days = int(comp.get("close_message_cooldown_days") or 0)
+                cooldown_hit = False
+                if cooldown_days > 0 and phone:
+                    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=cooldown_days)).isoformat()
+                    prior = await db.tickets.find_one({
+                        "company_id": user["company_id"],
+                        "customer_phone": phone,
+                        "messages": {"$elemMatch": {
+                            "system": True,
+                            "reason": {"$in": ["auto_close", "manual_close"]},
+                            "timestamp": {"$gte": cutoff_iso},
+                        }},
+                    }, {"_id": 0, "id": 1})
+                    if prior:
+                        cooldown_hit = True
+                        _logger.info(
+                            f"[manual-close] cooldown hit ticket={ticket_id} phone={phone} "
+                            f"cooldown_days={cooldown_days} prior_ticket={prior.get('id')} — skip send"
+                        )
+                if phone and connection_id and not cooldown_hit:
                     company_name = comp.get("name") or ""
                     # 2026-02-28 — Mesma logica SGP do scheduler.
                     fvars = ticket.get("flow_vars") or {}
@@ -1681,6 +1704,10 @@ class TicketLifecycleSettingsUpdate(BaseModel):
     ticket_auto_close_message: Optional[str] = None
     # 2026-05-28 — Quando True, fechamento MANUAL tambem envia a mensagem.
     send_close_message_on_manual: Optional[bool] = None
+    # 2026-07-27 — Cooldown em DIAS: se ja enviei a mensagem de encerramento
+    # para o mesmo telefone/empresa nesse periodo, NAO envia de novo, so
+    # finaliza o atendimento em silencio. 0 = desativado (sempre envia).
+    close_message_cooldown_days: Optional[int] = None
 
 
 @router.get("/company/ticket-settings")
@@ -1691,13 +1718,15 @@ async def get_company_ticket_settings(
     comp = await db.companies.find_one(
         {"id": user["company_id"]},
         {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1,
-         "ticket_auto_close_message": 1, "send_close_message_on_manual": 1},
+         "ticket_auto_close_message": 1, "send_close_message_on_manual": 1,
+         "close_message_cooldown_days": 1},
     ) or {}
     return {
         "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
         "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
         "ticket_auto_close_message": comp.get("ticket_auto_close_message") or "",
         "send_close_message_on_manual": bool(comp.get("send_close_message_on_manual", False)),
+        "close_message_cooldown_days": int(comp.get("close_message_cooldown_days") or 0),
     }
 
 
@@ -1723,6 +1752,11 @@ async def update_company_ticket_settings(
         update["ticket_auto_close_message"] = (data.ticket_auto_close_message or "")[:1000]
     if data.send_close_message_on_manual is not None:
         update["send_close_message_on_manual"] = bool(data.send_close_message_on_manual)
+    if data.close_message_cooldown_days is not None:
+        days = int(data.close_message_cooldown_days)
+        if days < 0 or days > 365:
+            raise HTTPException(400, "close_message_cooldown_days fora do intervalo permitido (0-365)")
+        update["close_message_cooldown_days"] = days
     await db.companies.update_one(
         {"id": user["company_id"]},
         {"$set": update},
@@ -1730,13 +1764,15 @@ async def update_company_ticket_settings(
     comp = await db.companies.find_one(
         {"id": user["company_id"]},
         {"_id": 0, "sgp_gateway_auto_close": 1, "ticket_auto_close_hours": 1,
-         "ticket_auto_close_message": 1, "send_close_message_on_manual": 1},
+         "ticket_auto_close_message": 1, "send_close_message_on_manual": 1,
+         "close_message_cooldown_days": 1},
     ) or {}
     return {
         "sgp_gateway_auto_close": bool(comp.get("sgp_gateway_auto_close", False)),
         "ticket_auto_close_hours": int(comp.get("ticket_auto_close_hours") or 0),
         "ticket_auto_close_message": comp.get("ticket_auto_close_message") or "",
         "send_close_message_on_manual": bool(comp.get("send_close_message_on_manual", False)),
+        "close_message_cooldown_days": int(comp.get("close_message_cooldown_days") or 0),
     }
 
 
