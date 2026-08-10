@@ -127,7 +127,11 @@ def test_menu_reply_advances_to_branch_and_ends_flow():
     assert saved["active_flow_node_id"] is None
 
 
-def test_menu_invalid_reply_reprompts_without_advancing():
+def test_menu_invalid_reply_stays_silent_without_advancing():
+    """2026-08-06 rule change: invalid menu reply must NOT re-emit the menu
+    (anti auto-replier loop). Still stays paused on the menu, and increments
+    the reprompt counter until it pauses the bot after 3 consecutive
+    invalid replies (covered in test_iteration_63_menu_no_reemit.py)."""
     db = _FakeDB()
     flow = _flow_with_menu()
     ticket = _ticket()
@@ -138,9 +142,12 @@ def test_menu_invalid_reply_reprompts_without_advancing():
     sent = _run(flow_engine.advance_flow(db, snap, flow, incoming_text="banana", is_initial=False))
     saved = db.tickets.docs["t1"]
 
-    assert len(sent) == 1 and "Escolha" in sent[0]
+    # NO re-emit — stays silent
+    assert sent == []
     # Still pending on the menu
     assert saved["active_flow_node_id"] == "menu"
+    # Reprompt counter bumped
+    assert (saved.get("flow_vars") or {}).get("_reprompt_count__menu") == 1
 
 
 def test_ticket_node_clears_flow_state():

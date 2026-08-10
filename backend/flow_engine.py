@@ -1160,6 +1160,12 @@ async def advance_flow(
                 if choice_idx is None:
                     # 2026-06-27 — Mesma protecao anti loop do menu estatico
                     # (auto-respondedor + invalid input → spam infinito).
+                    # 2026-08-06 — REGRA NOVA: NAO reenviar o menu. Fica em
+                    # silencio ate a proxima resposta do cliente. Isso mata
+                    # o loop de auto-replier na origem (o cliente nunca ve o
+                    # menu repetido). Contador continua, pausa apos 3 buys
+                    # invalidos (protecao contra auto-replier que fica
+                    # respondendo indefinidamente).
                     reprompts = int(vars_.get(f"_reprompt_count__{prev_id}") or 0) + 1
                     vars_[f"_reprompt_count__{prev_id}"] = reprompts
                     if reprompts >= 3:
@@ -1176,6 +1182,7 @@ async def advance_flow(
                                     {"$set": {
                                         "bot_paused": True,
                                         "bot_paused_reason": "auto_replier_loop",
+                                        "bot_paused_at": datetime.now(timezone.utc).isoformat(),
                                         "tags": tags,
                                         "flow_vars": vars_,
                                     }}
@@ -1183,14 +1190,19 @@ async def advance_flow(
                             except Exception:
                                 pass
                         return sent
-                    logger.info(f"[flow_engine] menu {prev_id} (dynamic) got invalid reply {incoming_text!r}; re-prompting (attempt {reprompts}/3)")
-                    txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."
-                    await _emit_and_persist(txt)
+                    logger.info(
+                        f"[flow_engine] menu {prev_id} (dynamic) invalid reply {incoming_text!r}; "
+                        f"staying silent (attempt {reprompts}/3, no re-emit)"
+                    )
                     if not dry_run:
                         await _save_state(db, ticket["id"], flow_id, prev_id, vars_)
                     return sent
                 # Capture the selected item into the variable so downstream
                 # nodes can reference {{contrato_id}}, {{endereco}}, …
+                # 2026-08-06 — Clear reprompt counter on valid selection
+                # (mirror static branch), so future invalid replies on a
+                # different menu get a fresh 3 chances.
+                vars_.pop(f"_reprompt_count__{prev_id}", None)
                 picked = dyn_items[choice_idx]
                 # Always expose the chosen contract's normalised fields
                 vars_["contrato_id"] = str(picked.get("value") or picked.get("id") or "")
@@ -1209,14 +1221,11 @@ async def advance_flow(
                     # Business "Auto-resposta de ausencia" enviam a MESMA
                     # mensagem ("Agradeço sua mensagem...") toda vez que
                     # recebem um inbound — INCLUSIVE em resposta ao nosso
-                    # bot. Resultado: bot manda menu → auto-replier devolve
-                    # "Agradeço" → bot interpreta como opcao invalida → re-
-                    # emite menu → auto-replier devolve "Agradeço" → … →
-                    # 30+ mensagens no chat ao longo da madrugada.
-                    # Solucao: contar quantas vezes este NO especifico ja
-                    # foi re-prompted nesta sessao. Apos 2 tentativas
-                    # (cliente teve 2 chances de digitar 1/2/9 corretamente),
-                    # PAUSAMOS o bot e marcamos o ticket — humano assume.
+                    # bot.
+                    # 2026-08-06 — REGRA NOVA: NAO reenviar o menu. Fica em
+                    # silencio ate proxima resposta valida do cliente.
+                    # Contador continua, pausa apos 3 buys invalidos
+                    # (protecao anti auto-replier).
                     reprompts = int(vars_.get(f"_reprompt_count__{prev_id}") or 0) + 1
                     vars_[f"_reprompt_count__{prev_id}"] = reprompts
                     if reprompts >= 3:
@@ -1243,9 +1252,10 @@ async def advance_flow(
                             except Exception as _e:
                                 logger.warning(f"[flow_engine] reprompt-cap pause failed: {_e}")
                         return sent
-                    logger.info(f"[flow_engine] menu {prev_id} got invalid reply {incoming_text!r}; re-prompting (attempt {reprompts}/3)")
-                    txt = _node_text(prev, vars_) or "Opção inválida. Tente novamente."
-                    await _emit_and_persist(txt)
+                    logger.info(
+                        f"[flow_engine] menu {prev_id} invalid reply {incoming_text!r}; "
+                        f"staying silent (attempt {reprompts}/3, no re-emit)"
+                    )
                     if not dry_run:
                         await _save_state(db, ticket["id"], flow_id, prev_id, vars_)
                     return sent

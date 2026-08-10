@@ -1,0 +1,34 @@
+{
+  "summary": "Iteration 63 — verified new anti-auto-replier rule: WhatsApp bot no longer re-emits the menu on invalid customer replies (static and dynamic menus). Counter still increments, and bot_paused/tag 'auto-resposta-detectada' still trigger after 3 invalid replies. Valid replies still advance normally. capture_format re-prompt path (CPF/CNPJ/etc.) remains unchanged. 7 new tests, all passing. Updated 1 stale assertion in test_flow_engine.py that expected the old re-prompt behavior.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/crm/sgp/config", "issue": "Pre-existing (unrelated to iter-63): response leaks 'token' field — iteration_61 regression test_get_config fails asserting 'token' not in data. Not caused by this iteration's changes."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_63_menu_no_reemit.py",
+    "/app/backend/tests/test_flow_engine.py",
+    "/app/test_reports/pytest/iteration_63.xml"
+  ],
+  "action_items": [
+    "None for iteration 63 fix — behavior verified as spec'd.",
+    "(Pre-existing, out of scope) GET /api/crm/sgp/config still returns 'token' field; iteration_61 regression test_get_config asserts 'token' not in data and fails. Redact/omit token in response."
+  ],
+  "critical_code_review_comments": [
+    "flow_engine.py — the reprompt counter key `_reprompt_count__{prev_id}` is cleared on VALID static-menu selection (line 1260) but NOT on valid dynamic-menu selection (dynamic branch around line 1211 does not pop the counter). Low-severity: if a customer sends 2 invalid replies then a valid one on a dynamic menu, the counter persists and the NEXT invalid reply on the same node will hit reprompts=3 and pause the bot prematurely. Consider mirroring the `vars_.pop(f'_reprompt_count__{prev_id}', None)` line inside the dynamic branch too.",
+    "flow_engine.py dynamic-menu pause branch (line ~1180-1190) does NOT set `bot_paused_at` (static branch does at line 1242). Inconsistent audit trail across the two branches."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_63_menu_no_reemit.py (new)",
+    "/app/backend/tests/test_flow_engine.py (updated one stale assertion for the new 2026-08-06 rule; renamed test_menu_invalid_reply_reprompts_without_advancing -> test_menu_invalid_reply_stays_silent_without_advancing)"
+  ],
+  "success_rate": {"backend": "100% (22/22 flow-engine + iter-63 tests)", "frontend": "N/A (backend-only)"},
+  "seed_data_creation": "None persisted; tests use in-memory _FakeDB per test_flow_engine_ticket_menu.py pattern.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "N/A — direct advance_flow function tests with in-memory fake DB",
+  "context_for_next_testing_agent": "Iteration 63 covered by /app/backend/tests/test_iteration_63_menu_no_reemit.py (7 tests) and 1 updated assertion in test_flow_engine.py. If a future change reintroduces menu re-emit on invalid reply, these tests will catch it. Note two minor consistency issues flagged in critical_code_review_comments (dynamic branch missing counter clear + missing bot_paused_at) — worth a small follow-up but not required.",
+  "rca_of_the_issue": "Auto-away WhatsApp Business replies were treated as invalid customer input, which the menu handler responded to by re-emitting the menu. That formed a self-sustaining loop (bot menu -> auto-reply -> bot menu). The 2026-08-06 fix (advance_flow menu invalid branch, lines ~1160-1198 dynamic and ~1213-1256 static) drops the re-emit while keeping the reprompt counter + 3-strike bot_paused safeguard. Tests confirm: sent list is empty on invalid reply, counter increments, bot pauses after 3, valid replies unaffected, and capture_format re-prompt path is intact."
+}
