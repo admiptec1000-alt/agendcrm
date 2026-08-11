@@ -925,17 +925,48 @@ async function createConnection(instanceId, options = {}) {
       console.log(`[${instanceId}] Disconnected: ${errMsg} (status=${statusCode})`);
 
       if (isConflict) {
+        // 2026-08-11 — Conflict handling melhorado.
         // Another session took over (user opened WhatsApp Web elsewhere, or
         // rapid reconnect caused duplicate socket). Reconnecting immediately
-        // would fight the other session forever — wait longer and only retry
-        // once. User should close other sessions first.
-        recordEvent(instanceId, 'conflict', 'outra sessao assumiu o numero — aguardando 60s antes de tentar de novo');
-        console.log(`[${instanceId}] CONFLICT — waiting 60s before single retry (close other WhatsApp Web sessions!)`);
-        setTimeout(() => {
-          if (connections[instanceId]?.status === 'disconnected') {
-            createConnection(instanceId).catch(e => console.error(`[${instanceId}] retry failed:`, e.message));
-          }
-        }, 60000);
+        // would fight the other session forever — user MUST close the other
+        // session first.
+        //
+        // Estrategia:
+        //   1) Espera 5 MINUTOS antes da 1a retry (era 60s — insuficiente
+        //      quando o outro dispositivo tambem estava tentando).
+        //   2) Conta conflitos consecutivos. Apos 3 em janela de 15min,
+        //      PAUSA auto-reconexao ate intervencao manual do operador
+        //      (`conflict_paused` status). Assim nao ficamos em loop
+        //      QR ↔ conflict ↔ QR gastando o rate-limit do WA.
+        //   3) Marca `conflictCooldownUntil` que o watchdog respeita
+        //      (nao wipa creds.json durante esse periodo — caso contrario
+        //      teriamos silent-stuck → auto-wipe → novo QR toda vez).
+        const now = Date.now();
+        const CONFLICT_WINDOW_MS = 15 * 60 * 1000;
+        instance.conflictHistory = (instance.conflictHistory || []).filter(t => now - t < CONFLICT_WINDOW_MS);
+        instance.conflictHistory.push(now);
+        const consecutiveConflicts = instance.conflictHistory.length;
+        const COOLDOWN_MS = 5 * 60 * 1000;
+        instance.conflictCooldownUntil = now + COOLDOWN_MS;
+        if (consecutiveConflicts >= 3) {
+          // Bail: outro aparelho esta agarrado no mesmo numero. Operador
+          // precisa entrar aqui e agir (fechar WhatsApp Web / desconectar).
+          instance.status = 'conflict_paused';
+          recordEvent(instanceId, 'conflict_paused',
+            `${consecutiveConflicts} conflitos em 15min — auto-reconexao pausada. `
+            + 'Feche o WhatsApp Web/Business em outros dispositivos e clique em Conectar.');
+          console.log(`[${instanceId}] CONFLICT_PAUSED — ${consecutiveConflicts} conflicts in 15min, operator must act`);
+        } else {
+          recordEvent(instanceId, 'conflict',
+            `outra sessao assumiu o numero — aguardando 5min (conflito ${consecutiveConflicts}/3). `
+            + 'Feche o WhatsApp Web em outros dispositivos.');
+          console.log(`[${instanceId}] CONFLICT (${consecutiveConflicts}/3) — waiting 5min before retry`);
+          setTimeout(() => {
+            const inst = connections[instanceId];
+            if (!inst || inst.status === 'connected' || inst.status === 'conflict_paused') return;
+            createConnection(instanceId).catch(e => console.error(`[${instanceId}] conflict retry failed:`, e.message));
+          }, COOLDOWN_MS);
+        }
       } else if (isQrExpired && shouldReconnect) {
         // Fast retry — QR expired, operator just needs a fresh one.
         // Do NOT increment reconnectAttempts (that's for real network
@@ -2319,6 +2350,13 @@ setInterval(() => {
   for (const [id, inst] of Object.entries(connections)) {
     if (!inst) continue;
     if (inst.status === 'connected') continue;
+    // 2026-08-11 — Nao mexer em instancia em cooldown de conflict.
+    // Durante o cooldown, a auth ainda esta VALIDA — se o watchdog wipar,
+    // o operador precisa reescanear QR toda vez. O status
+    // `conflict_paused` significa que o operador precisa agir manualmente
+    // (nunca deve ser resetado sozinho).
+    if (inst.status === 'conflict_paused') continue;
+    if (inst.conflictCooldownUntil && now < inst.conflictCooldownUntil) continue;
     if (inst.qr || inst.qrBase64) continue;   // QR already emitted — operator must scan
     const createdAt = inst.createdAt || inst.connectedAt || inst.lastActivityAt || now;
     const tryingForMs = now - createdAt;

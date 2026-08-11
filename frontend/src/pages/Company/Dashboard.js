@@ -29,6 +29,7 @@ import MetaCloudAPIPage from '../CRM/MetaCloudAPIPage';
 import { ProfessionalsPageFull, ServicesPageFull, SubscriptionsPageFull, PlanosPageFull, CalendarPageFull } from '../Scheduling/SchedulingPages';
 import BotPauseSettingsCard from '../../components/BotPauseSettingsCard';
 import TicketLifecycleSettingsCard from '../../components/TicketLifecycleSettingsCard';
+import SendParamsCard from '../../components/SendParamsCard';
 
 const ICON_MAP = {
   LayoutDashboard, Headphones, Zap, Columns3, Users, Tag, MessageSquare,
@@ -59,6 +60,10 @@ const FEATURE_META = {
   conexoes_templates:     { icon: 'MessageSquare', label: 'Mensagens Modelo', group: 'Config Empresa', order: 12, parent: 'conexoes' },
   conexoes_notificacoes:  { icon: 'Bell',          label: 'Configuracao de Notificacao', group: 'Config Empresa', order: 13, parent: 'conexoes' },
   conexoes_cobranca:      { icon: 'Receipt',       label: 'Notificacoes de Cobranca', group: 'Config Empresa', order: 14, parent: 'conexoes' },
+  // 2026-08-11 — Aba Parametros migrada de Campanhas para Conexoes. Aplica-se
+  // a TODOS os envios automaticos (campanhas, cobrancas, aniversario,
+  // lembretes) — nao afeta o bot nem envio manual do atendente.
+  conexoes_parametros:    { icon: 'Shield',        label: 'Parametros', group: 'Config Empresa', order: 16, parent: 'conexoes' },
   // 2026-02-28 — API Oficial Meta como sub-item de Conexoes.
   meta_cloud_api:         { icon: 'Shield',         label: 'API Oficial Meta', group: 'Config Empresa', order: 15, parent: 'conexoes' },
   agente_ia:          { icon: 'Sparkles',         label: 'Agente IA', group: 'CRM' },
@@ -827,6 +832,7 @@ const PageContentInner = ({ page, hasFeature, setActivePage, menuGroups }) => {
     case 'conexoes_templates': return <ConexoesPage initialTab="templates" hideTabs />;
     case 'conexoes_notificacoes': return <ConexoesPage initialTab="notificacoes" hideTabs />;
     case 'conexoes_cobranca': return <TenantBillingReminderInfoPanel />;
+    case 'conexoes_parametros': return <ConexoesPage initialTab="parametros" hideTabs />;
     case 'filas_chatbot': return <QueuesPage />;
     case 'calendario': return <CalendarPageFull />;
     case 'agenda': return <AgendaPage />;
@@ -3796,6 +3802,7 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
         <button onClick={() => setTab('conexoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='conexoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-conexoes">Canais</button>
         <button onClick={() => setTab('templates')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='templates'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-templates">Mensagens Modelo</button>
         <button onClick={() => setTab('notificacoes')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='notificacoes'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-notificacoes">Configuracao de Notificacao</button>
+        <button onClick={() => setTab('parametros')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${tab==='parametros'?'bg-white text-slate-900 shadow-sm':'text-slate-500'}`} data-testid="tab-parametros">Parametros</button>
       </div>
 
       {tab === 'conexoes' && (
@@ -3868,6 +3875,8 @@ const ConexoesPage = ({ initialTab = 'conexoes', hideTabs = false }) => {
       )}
 
       {tab === 'notificacoes' && <NotificacoesPage embedded />}
+
+      {tab === 'parametros' && <SendParamsCard />}
     </div>
   );
 };

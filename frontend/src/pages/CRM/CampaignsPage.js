@@ -103,7 +103,7 @@ const CampaignsPage = () => {
         <TabBtn active={tab === 'listagem'} onClick={() => setTab('listagem')} label="Listagem" testId="tab-listagem" />
         <TabBtn active={tab === 'listas'} onClick={() => setTab('listas')} label="Listas de Contato" testId="tab-listas" />
         <TabBtn active={tab === 'disparos'} onClick={() => setTab('disparos')} label="Disparos em Massa" testId="tab-disparos" />
-        <TabBtn active={tab === 'params'} onClick={() => setTab('params')} label="Parametros" testId="tab-params-page" />
+        {/* 2026-08-11 — Aba Parametros movida para Conexoes → Parametros. */}
       </div>
 
       {tab === 'listagem' && (
@@ -175,7 +175,7 @@ const CampaignsPage = () => {
 
       {tab === 'listas' && <ContactListsTab />}
       {tab === 'disparos' && <BulkJobsTab />}
-      {tab === 'params' && <AntiBlockSettingsTab />}
+      {/* 2026-08-11 — tab 'params' removida (agora em Conexoes → Parametros) */}
 
       {showCampModal && (
         <CampaignModal

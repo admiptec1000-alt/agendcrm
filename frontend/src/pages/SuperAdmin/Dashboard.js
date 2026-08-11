@@ -138,6 +138,9 @@ const SuperAdminDashboard = () => {
         { key: 'sa-conexoes-templates', label: 'Mensagens Modelo', icon: MessageSquare },
         { key: 'sa-conexoes-notificacoes', label: 'Configuracao de Notificacao', icon: Bell },
         { key: 'sa-conexoes-cobranca', label: 'Notificacoes de Cobranca', icon: Receipt },
+        // 2026-08-11 — Parametros anti-bloqueio (SA tambem controla os
+        // proprios envios automaticos das conexoes da plataforma).
+        { key: 'sa-conexoes-parametros', label: 'Parametros', icon: ShieldCheck },
       ],
     },
     { key: 'indoor', label: 'Indoor', icon: Tv },
@@ -409,6 +412,11 @@ const SuperAdminDashboard = () => {
           {activeTab === 'sa-conexoes-cobranca' && (
             <div data-testid="sa-conexoes-cobranca-panel">
               <BillingReminderPanel />
+            </div>
+          )}
+          {activeTab === 'sa-conexoes-parametros' && (
+            <div data-testid="sa-conexoes-parametros-panel">
+              <ConexoesPage initialTab="parametros" hideTabs />
             </div>
           )}
           {activeTab === 'sgp-repair' && <SgpRepairTab companies={companies} />}

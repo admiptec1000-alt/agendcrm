@@ -33,6 +33,7 @@ async def _settings_for(db, company_id: str) -> dict:
 async def _process_reminders(db, base_url: str):
     """Find appointments needing a reminder and send them."""
     from notifications import notify_appointment_reminder
+    from services.send_gate import acquire_send_slot, record_send
     now = datetime.now(timezone.utc)
     # Group companies that have notifications enabled
     company_ids = await db.companies.distinct("id")
@@ -54,8 +55,14 @@ async def _process_reminders(db, base_url: str):
             "reminder_sent_at": {"$exists": False},
         }, {"_id": 0})
         async for apt in cursor:
+            # 2026-08-11 — Cadenciador anti-bloqueio (Conexoes → Parametros).
+            can_send, why = await acquire_send_slot(db, cid, "whatsapp")
+            if not can_send:
+                logger.info(f"[scheduler] reminder gated apt={apt.get('id')} company={cid}: {why}")
+                break  # next tick tries again — o proximo apt teria o mesmo bloqueio
             try:
                 await notify_appointment_reminder(db, cid, apt, base_url)
+                await record_send(db, cid, "whatsapp")
             except Exception as e:
                 logger.warning(f"[scheduler] reminder failed for {apt.get('id')}: {e}")
 
@@ -63,6 +70,7 @@ async def _process_reminders(db, base_url: str):
 async def _process_surveys(db, base_url: str):
     """Send satisfaction survey X minutes after appointment was concluded."""
     from notifications import notify_satisfaction_survey
+    from services.send_gate import acquire_send_slot, record_send
     now = datetime.now(timezone.utc)
     company_ids = await db.companies.distinct("id")
     for cid in company_ids:
@@ -81,8 +89,14 @@ async def _process_surveys(db, base_url: str):
             "survey_sent_at": {"$exists": False},
         }, {"_id": 0})
         async for apt in cursor:
+            # 2026-08-11 — Cadenciador anti-bloqueio.
+            can_send, why = await acquire_send_slot(db, cid, "whatsapp")
+            if not can_send:
+                logger.info(f"[scheduler] survey gated apt={apt.get('id')} company={cid}: {why}")
+                break
             try:
                 await notify_satisfaction_survey(db, cid, apt, base_url)
+                await record_send(db, cid, "whatsapp")
             except Exception as e:
                 logger.warning(f"[scheduler] survey failed for {apt.get('id')}: {e}")
 
@@ -798,9 +812,22 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                 sent_ok = False
                 error = None
                 if wants_whatsapp and sa_conn_id and phone and text:
+                    # 2026-08-11 — Cadenciador anti-bloqueio (Conexoes → Parametros
+                    # da EMPRESA que sera notificada, nao do SA). Se o gate
+                    # bloquear, pula esta parcela nesta rodada — o proximo
+                    # tick (60s depois) tenta de novo.
+                    from services.send_gate import acquire_send_slot, record_send
+                    can_send, why = await acquire_send_slot(db, c["id"], "whatsapp")
+                    if not can_send:
+                        logger.info(
+                            f"[scheduler] billing-reminder gated company={c['id']} "
+                            f"parcela={i+1}/{installments}: {why}"
+                        )
+                        continue
                     try:
                         sent_ok, error = await _send_billing_reminder(sa_conn_id, phone, text)
                         if sent_ok:
+                            await record_send(db, c["id"], "whatsapp")
                             await _record_billing_reminder_in_ticket(
                                 db,
                                 phone=phone,

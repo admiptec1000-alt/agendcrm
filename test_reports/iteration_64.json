@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 64 — Backend-only tests for anti-block send-gate covering ALL automatic non-bot sends. 12/12 tests passed. Validated services.send_gate.acquire_send_slot / record_send semantics (disabled bypass, hourly/daily limits, cadence, burst pause, escalation, hour-boundary reset) and integration with scheduler._process_billing_reminders / _process_reminders / _process_surveys (each correctly aborts remaining sends when the gate returns False). Regression on GET/PUT /api/crm/campaign-settings passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_64_send_gate.py",
+    "/app/test_reports/pytest/iteration_64.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "scheduler._process_reminders uses `break` on gate-blocked to stop iterating the cursor — correct behavior (avoids retrying same limit for every appointment) but could starve later companies within same tick if a single company has many pending appointments; iteration across companies still proceeds because the break is inside the async-for on appointments, not on companies. Verified OK.",
+    "services.send_gate._DEFAULTS.enabled=True whereas routes/crm_routes.py GET default also enabled=True — consistent. However campaign_settings default hourly_limit differs between the two (send_gate defaults hourly_limit=50, GET default also 50). Good.",
+    "The burst_pause branch only triggers when day_count % burst_size == 0 AND day_count>0 — meaning after exactly burst_size messages, the (burst_size+1)th send is blocked until burst_pause_seconds elapse. Correct, but note escalation factor is applied to interval_min but NOT to burst_pause; consider documenting."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_64_send_gate.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested (user validates visually)"},
+  "seed_data_creation": "All test data prefixed with 'TEST_iter64_' and cleaned up in fixture teardown across campaign_settings, send_gate_stats, companies, super_admin_transactions, billing_reminder_history, channel_connections, appointments, notification_settings, tickets. system_settings 'billing_reminder' is upserted but not cleaned (shared global config, restored between runs by the developer).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "crm@test.com / crm123 (used for /api/crm/campaign-settings regression)",
+  "context_for_next_testing_agent": "test_iteration_64_send_gate.py monkeypatches scheduler._send_billing_reminder, notifications.notify_appointment_reminder, notifications.notify_satisfaction_survey. Note: system_settings key='billing_reminder' is upserted (not deleted) to avoid stomping any prod-like defaults. WhatsApp-service conflict-401 handling is JS and was intentionally skipped per user instructions.",
+  "rca_of_the_issue": "N/A — all tests green. Gate wiring across billing_reminders, appointment_reminders and satisfaction_surveys verified end-to-end at the scheduler level."
+}
