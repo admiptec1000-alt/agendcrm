@@ -287,6 +287,7 @@ export const channelsAPI = {
   disconnectChannel: (id) => api.post(`/channels/connections/${id}/disconnect`),
   syncConnection: (id) => api.post(`/channels/connections/${id}/sync`),
   fullResetConnection: (id) => api.post(`/channels/connections/${id}/full-reset`),
+  resyncHistory: (id) => api.post(`/channels/connections/${id}/resync-history`),
   sendWhatsAppMessage: (connId, data) => api.post(`/channels/connections/${connId}/send`, data),
   deleteConnection: (id) => api.delete(`/channels/connections/${id}`),
   getTemplates: () => api.get('/channels/templates'),

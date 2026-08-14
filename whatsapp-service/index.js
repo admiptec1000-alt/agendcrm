@@ -1789,6 +1789,45 @@ app.post('/instances/:id/reset-session/:jid', async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// 2026-08-14 — Force resync of message history without wiping auth.
+// ──────────────────────────────────────────────────────────────────────
+// Use case: operador respondeu clientes pelo APP do celular durante
+// uma janela de instabilidade da conexao com o CRM. Quando o CRM volta,
+// o Baileys, em teoria, emite `messages.upsert type='append'` para os
+// backlog messages — mas na pratica dessa versao (7.0.0-rc13), quando
+// o socket ja esta 'connected' ha algum tempo, esse replay nao vem.
+// Este endpoint fecha o socket EXISTENTE e recria a partir do mesmo
+// authDir (NAO apaga creds — nao pede QR de novo). No re-handshake
+// Baileys re-emite `messaging-history.set` que o handler la em cima
+// filtra em 7d e empurra pro backend. Resultado: sincroniza automatico.
+app.post('/instances/:id/resync-history', async (req, res) => {
+  const { id } = req.params;
+  const inst = connections[id];
+  if (!inst) {
+    return res.status(404).json({ ok: false, error: 'instance_not_found' });
+  }
+  const authDir = path.join(AUTH_DIR, id);
+  if (!fs.existsSync(path.join(authDir, 'creds.json'))) {
+    return res.status(400).json({ ok: false, error: 'no_auth_state', hint: 'Escaneie o QR primeiro' });
+  }
+  try {
+    recordEvent(id, 'resync_history_requested', 'manual sync via /resync-history');
+    // Fire-and-forget: createConnection() ja cuida de encerrar o socket
+    // antigo (linhas 810-821) e sobe um novo a partir do authDir intacto.
+    // Cloudflare/proxies matam requests >100s entao NAO fazemos await.
+    createConnection(id, { syncHistory: false }).catch(e => {
+      console.error(`[${id}] resync-history createConnection failed: ${e.message}`);
+    });
+    return res.json({ ok: true, message: 'resync in progress' });
+  } catch (e) {
+    console.error(`[${id}] resync-history error:`, e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
 
 
 // ──────────────────────────────────────────────────────────────────────

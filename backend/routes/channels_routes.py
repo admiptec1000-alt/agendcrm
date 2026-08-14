@@ -677,6 +677,48 @@ async def full_reset_channel(
 
 
 
+@router.post("/connections/{conn_id}/resync-history")
+async def resync_history(
+    conn_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """2026-08-14 — Forca ressincronizacao das mensagens dos ultimos 7
+    dias sem precisar re-escanear QR. Util quando o operador respondeu
+    clientes pelo APP do celular durante instabilidade da conexao e a
+    plataforma ficou desatualizada. O microservico fecha o socket,
+    reabre a partir do authDir intacto, e Baileys re-emite
+    `messaging-history.set` que ja tem cutoff de 7d no handler.
+    """
+    conn = await db.channel_connections.find_one({"id": conn_id, "company_id": user["company_id"]})
+    if not conn:
+        raise HTTPException(status_code=404, detail="Conexao nao encontrada")
+    if conn.get("type") != "whatsapp":
+        raise HTTPException(status_code=400, detail="Resync so suportado em conexoes WhatsApp")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(f"{WA_SERVICE_URL}/instances/{conn_id}/resync-history")
+        if r.status_code >= 400:
+            body = r.json() if r.content else {}
+            hint = body.get("hint") or ""
+            raise HTTPException(
+                status_code=502,
+                detail=f"Baileys retornou {r.status_code}: {body.get('error') or r.text[:200]}. {hint}",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"resync-history error: {e}")
+        raise HTTPException(500, f"Falha ao sincronizar: {str(e)[:200]}")
+    await db.channel_connections.update_one(
+        {"id": conn_id},
+        {"$set": {"last_resync_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"ok": True, "message": "Sincronizacao em andamento. As mensagens dos ultimos 7 dias serao importadas em segundos."}
+
+
+
+
 @router.post("/connections/{conn_id}/reset-signal-session")
 async def reset_signal_session(
     conn_id: str,
@@ -1078,15 +1120,25 @@ async def webhook_connected(request: Request, db: AsyncIOMotorDatabase = Depends
     phone = data.get("phone", "")
     name = data.get("name", "")
     now_iso = datetime.now(timezone.utc).isoformat()
+    # 2026-08-14 — `connected_at` era sobrescrito a cada reconexao,
+    # deslocando a janela de filtro `older_than_connected_at` toda vez.
+    # Agora e imutavel (first-connect-only) via `$setOnInsert`-like
+    # padrao. `last_connected` cobre o timestamp da ultima reconexao
+    # para observabilidade.
+    existing = await db.channel_connections.find_one(
+        {"id": instance_id}, {"_id": 0, "connected_at": 1}
+    )
+    set_fields = {
+        "status": "connected",
+        "phone": phone,
+        "connected_name": name,
+        "last_connected": now_iso,
+    }
+    if not existing or not existing.get("connected_at"):
+        set_fields["connected_at"] = now_iso
     await db.channel_connections.update_one(
         {"id": instance_id},
-        {"$set": {
-            "status": "connected",
-            "phone": phone,
-            "connected_name": name,
-            "last_connected": now_iso,
-            "connected_at": now_iso,  # timestamp used to filter older WA messages
-        }}
+        {"$set": set_fields}
     )
     return {"ok": True}
 
@@ -1128,28 +1180,33 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
     media_b64 = data.get("media_base64")
     logger.info(f"[webhook/message] {company_id[:8]} phone={phone} mid={msg_id} text='{text[:40]}'")
 
-    # Filter out messages older than the moment this channel was connected.
-    # The WA microservice forwards messageTimestamp in seconds.
+    # 2026-08-14 — Antes: dropava msgs mais antigas que `connected_at - 1h`.
+    # Problema em prod (reportado 14/08): `connected_at` era atualizado a
+    # CADA reconexao pelo /webhook/connected. Toda vez que a conexao caia
+    # e voltava, mensagens que o operador enviou pelo celular no meio (ou
+    # que o cliente mandou enquanto offline) tinham `msg_ts <
+    # new_connected_at - 3600` -> silenciosamente descartadas -> ticket
+    # ficava "parado" numa hora aleatoria enquanto o celular continuava
+    # com a conversa em dia.
+    #
+    # Fix: janela de 7 dias fixa (`SYNC_WINDOW_DAYS`) — coerente com o
+    # cutoff que o proprio microservico usa em `messaging-history.set`.
+    # Ou seja: aceitamos qualquer mensagem dentro dos ultimos 7 dias,
+    # independente de quando a conexao foi (re)estabelecida. `connected_at`
+    # deixa de agir como filtro (continua salvo pra observabilidade).
     try:
         msg_ts = int(ts_raw) if ts_raw is not None else None
     except (TypeError, ValueError):
         msg_ts = None
-    connected_at_iso = conn.get("connected_at")
-    if msg_ts and connected_at_iso:
-        try:
-            connected_at_dt = datetime.fromisoformat(connected_at_iso.replace("Z", "+00:00"))
-            connected_at_ts = int(connected_at_dt.timestamp())
-            # Drop only messages that are clearly historical (older than 1h
-            # before the connection moment). 1h grace absorbs any clock skew
-            # between the Node.js microservice host and the backend.
-            if msg_ts < connected_at_ts - 3600:
-                logger.info(
-                    f"[webhook] ignoring old WA msg (msg_ts={msg_ts} < conn_ts={connected_at_ts}) "
-                    f"phone={phone} mid={msg_id}"
-                )
-                return {"ok": True, "ignored": "older_than_connected_at"}
-        except Exception:
-            pass
+    if msg_ts:
+        SYNC_WINDOW_DAYS = 7
+        oldest_acceptable_ts = int((datetime.now(timezone.utc) - timedelta(days=SYNC_WINDOW_DAYS)).timestamp())
+        if msg_ts < oldest_acceptable_ts:
+            logger.info(
+                f"[webhook] ignoring pre-window WA msg (msg_ts={msg_ts} < window={oldest_acceptable_ts}) "
+                f"phone={phone} mid={msg_id}"
+            )
+            return {"ok": True, "ignored": "older_than_sync_window"}
 
     # Log incoming message (raw)
     await db.message_log.insert_one({
@@ -1218,7 +1275,6 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         # ticket via recent outgoing or push_name. For outgoing messages
         # from the operator's phone, `phone` is the destination — already
         # canonical — so we just look up the ticket by phone directly.
-        from datetime import timedelta
         # Strategy 1: most recent outgoing within 5 minutes ANYWHERE in the
         # tenant — extremely reliable. If the operator just sent something
         # and now an LID-tagged reply arrives within minutes, it's the same

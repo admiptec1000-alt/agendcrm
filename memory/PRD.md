@@ -1,3 +1,95 @@
+## 2026-08-14 — Sync 7d bidirecional (mensagens do celular chegando ao CRM) ✅
+
+### Bug reportado (producao)
+Screenshots do cliente Centroeste mostraram: CRM parou de receber
+mensagens da conversa da Kalita apos 06/08 11:39, mas no celular do
+atendente a conversa continuou (17:56, 18:05, 07/08 15:47 etc). O
+atendente estava respondendo pelo APP durante uma janela de
+instabilidade da conexao — quando o CRM reconectou, as mensagens que
+sairam do celular no meio simplesmente sumiram do ticket.
+
+### Root cause
+`connected_at` era sobrescrito pelo `/webhook/connected` a CADA
+reconexao. O filtro em `/webhook/message` dropava qualquer mensagem
+com `msg_ts < connected_at - 1h`. Ou seja: toda vez que a conexao
+caia e voltava as 15:00, mensagens com timestamp entre 11:39 e ~14:00
+tinham `msg_ts < novo_connected_at - 3600` e eram DESCARTADAS
+silenciosamente com `{"ok": True, "ignored": "older_than_connected_at"}`.
+
+Alem disso, mesmo com o filtro relaxado, `messaging-history.set` do
+Baileys 7 nao re-emite historico apos reconexao "simples" — so na
+primeira handshake com `syncFullHistory: true`. Precisavamos de uma
+forma manual de forcar o resync sem apagar o auth.
+
+### Fix (3 partes)
+
+**1) Backend `webhook/message` — janela de 7 dias fixa** (`channels_routes.py`)
+Substituido o filtro `older_than_connected_at` (movel, quebrava em
+reconexao) por `older_than_sync_window` — cutoff fixo de 7 dias
+independente de quando a conexao foi (re)estabelecida. Coerente com
+o cutoff que o microservico ja aplica em `messaging-history.set`.
+
+**2) Backend `webhook/connected` — `connected_at` imutavel** (`channels_routes.py`)
+`connected_at` agora e set APENAS no primeiro connect (idempotente).
+Reconexoes atualizam so `last_connected` (observabilidade). Mesmo que
+alguem re-adicione o filtro no futuro, ele nao vai se deslocar toa.
+
+**3) Microservico `POST /instances/:id/resync-history`** (`whatsapp-service/index.js`)
+Novo endpoint que fecha o socket EXISTENTE e recria a partir do
+authDir intacto (sem apagar creds — nao pede QR de novo). No
+re-handshake Baileys re-emite `messaging-history.set` que o handler
+filtra em 7d e empurra pro backend em batches. Fire-and-forget para
+respeitar timeout de proxy (100s Cloudflare).
+
+**4) Backend proxy `POST /api/channels/connections/{id}/resync-history`**
+Rota autenticada que proxia para o microservico + registra
+`last_resync_at` para telemetria.
+
+**5) Frontend — botao "Sincronizar historico"** (`Dashboard.js`)
+Novo botao indigo no card da conexao (`data-testid=resync-history-{id}`)
+so aparece quando `status === 'connected' && type === 'whatsapp'`.
+Confirma com `window.confirm`, chama o endpoint, mostra toast +
+agenda `onRefresh()` em 8s pra pegar os batches importados.
+
+### Comportamento agora
+- Cliente responde algo pelo APP -> mensagem chega no celular do
+  atendente -> Baileys emite `messages.upsert type='notify'` no CRM
+  em tempo real (ja funcionava, so nao passava pelo filtro apertado).
+- Conexao cai por 30min-3h -> volta -> Baileys emite offline queue
+  como `messages.upsert type='append'` -> filtro de 7d aceita -> vai
+  pro ticket automaticamente (agora com msg_ts < connected_at OK).
+- Atendente respondeu pelo APP durante instabilidade -> operador ve o
+  ticket desatualizado no CRM -> clica "Sincronizar historico" -> o
+  microservico reabre o socket + Baileys re-emite `messaging-history.set`
+  -> mensagens dos 7d viram um append no ticket via
+  `/webhook/history-import` (dedup por `wa_message_id`).
+
+### Deploy necessario
+- Backend: SIM (novo endpoint + filtro fixo)
+- Frontend: SIM (novo botao)
+- WhatsApp-service: SIM (novo endpoint `/resync-history`)
+
+### Validacao
+- `curl -X POST localhost:3002/instances/nonexistent/resync-history`
+  -> `{ok: false, error: 'instance_not_found'}` (rota carregada)
+- Backend restart limpo, lint verde.
+- Screenshot: pagina Conexoes carrega, botao aparece quando conexao
+  em status connected (nao testavel no preview porque ninguem tem
+  celular pareado aqui — validacao final via producao).
+
+### Arquivos tocados
+- `/app/backend/routes/channels_routes.py` (filtro fixo 7d,
+  connected_at imutavel, novo endpoint resync-history)
+- `/app/whatsapp-service/index.js` (novo endpoint
+  `POST /instances/:id/resync-history`)
+- `/app/frontend/src/services/api.js` (`channelsAPI.resyncHistory`)
+- `/app/frontend/src/pages/Company/Dashboard.js` (botao
+  "Sincronizar historico" no ConnectionCard)
+
+---
+
+
+
 ## 2026-08-14 — Fix duplicidade de mensagem manual + historico em branco pos-transferencia ✅
 
 ### Bug 1 — Mensagem manual chegava duplicada ao cliente

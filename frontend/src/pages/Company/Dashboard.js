@@ -4243,6 +4243,30 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
     }
   };
 
+  // 2026-08-14 — Ressincroniza mensagens dos ultimos 7 dias sem apagar
+  // creds. Usado quando o operador respondeu clientes pelo APP do
+  // celular durante instabilidade e o CRM ficou desatualizado.
+  const [resyncingHistory, setResyncingHistory] = useState(false);
+  const handleResyncHistory = async () => {
+    if (!window.confirm(
+      'Isso vai reabrir a conexao WhatsApp para importar as mensagens dos ultimos 7 dias ' +
+      'que estao no seu celular mas ainda nao chegaram na plataforma. NAO precisa escanear ' +
+      'QR de novo. Continuar?'
+    )) return;
+    setResyncingHistory(true);
+    try {
+      const r = await channelsAPI.resyncHistory(conn.id);
+      toast.success(r.data?.message || 'Sincronizacao iniciada. Aguarde alguns segundos.');
+      // Da um tempinho pro Baileys re-abrir + Baileys emitir history-set
+      // + backend receber batches. Depois de 8s, refresca a lista.
+      setTimeout(() => onRefresh?.(), 8000);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Falha ao sincronizar historico');
+    } finally {
+      setResyncingHistory(false);
+    }
+  };
+
   const [showImport, setShowImport] = useState(false);
   const [importMode, setImportMode] = useState('all');
   const [importing, setImporting] = useState(false);
@@ -4304,6 +4328,17 @@ const ConnectionCard = ({ conn, health, onConnect, onDisconnect, onRemove, onRef
               title="Importar contatos do WhatsApp"
             >
               Importar contatos
+            </button>
+          )}
+          {conn.status === 'connected' && conn.type === 'whatsapp' && (
+            <button
+              onClick={handleResyncHistory}
+              disabled={resyncingHistory}
+              className="text-xs text-indigo-700 hover:text-indigo-800 font-semibold px-2 py-1 rounded-md hover:bg-indigo-50 disabled:opacity-50"
+              data-testid={`resync-history-${conn.id}`}
+              title="Reimporta as mensagens dos ultimos 7 dias do celular (sem apagar sessao, sem QR novo)"
+            >
+              {resyncingHistory ? 'Sincronizando...' : 'Sincronizar historico'}
             </button>
           )}
           {(conn.status !== 'connected') && (
