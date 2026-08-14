@@ -671,14 +671,23 @@ async def update_ticket(
                 cooldown_hit = False
                 if cooldown_days > 0 and phone:
                     cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=cooldown_days)).isoformat()
+                    # 2026-08-14 — Suporta AMBOS os schemas (legado
+                    # {reason, timestamp} + novo {source, created_at}).
                     prior = await db.tickets.find_one({
                         "company_id": user["company_id"],
                         "customer_phone": phone,
-                        "messages": {"$elemMatch": {
-                            "system": True,
-                            "reason": {"$in": ["auto_close", "manual_close"]},
-                            "timestamp": {"$gte": cutoff_iso},
-                        }},
+                        "$or": [
+                            {"messages": {"$elemMatch": {
+                                "system": True,
+                                "reason": {"$in": ["auto_close", "manual_close"]},
+                                "timestamp": {"$gte": cutoff_iso},
+                            }}},
+                            {"messages": {"$elemMatch": {
+                                "system": True,
+                                "source": {"$in": ["auto_close", "manual_close"]},
+                                "created_at": {"$gte": cutoff_iso},
+                            }}},
+                        ],
                     }, {"_id": 0, "id": 1})
                     if prior:
                         cooldown_hit = True
@@ -714,15 +723,32 @@ async def update_ticket(
                             _logger.info(
                                 f"[manual-close] msg sent ticket={ticket_id} status={r.status_code}"
                             )
+                        # 2026-08-14 — Schema padronizado (id/content/sender_type/
+                        # created_at). Mesmo motivo dos fixes em flow_engine
+                        # (transfer_message) e scheduler (auto_close): antes
+                        # usava {from,text,timestamp} — bolha vazia no CRM,
+                        # varias mensagens sem key React (todas undefined)
+                        # empilhavam e o historico do ticket transferido
+                        # parecia "em branco" pro atendente destino.
+                        import uuid as _uu_mc
+                        _mc_wa_mid = None
+                        try:
+                            _mc_wa_mid = (r.json() or {}).get("message_id")
+                        except Exception:
+                            pass
                         await db.tickets.update_one(
                             {"id": ticket_id},
                             {"$push": {"messages": {
-                                "from": "bot",
-                                "text": msg,
-                                "type": "text",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "id": str(_uu_mc.uuid4()),
+                                "content": msg,
+                                "sender_type": "agent",
+                                "sender_id": user.get("id"),
+                                "sender_name": user.get("name") or "Sistema",
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                                "wa_message_id": _mc_wa_mid,
+                                "delivery_status": "sent",
+                                "source": "manual_close",
                                 "system": True,
-                                "reason": "manual_close",
                             }}},
                         )
                     except Exception as se:
@@ -1127,8 +1153,22 @@ async def add_message_to_ticket(
         "delivery_status": "pending",
     }
 
+    # 2026-08-14 — Persistir a mensagem ANTES de disparar o Baileys. Sem
+    # isso havia uma janela de race entre a chamada bloqueante ao
+    # microservico WA (ate 30s) e o webhook `messages.upsert` (from_me=true)
+    # que o proprio Baileys emite em paralelo. Quando o echo chegava antes
+    # do $push, o self-echo dedup do /webhook/message nao encontrava a
+    # mensagem no ticket e acabava DUPLICANDO o registro (e potencialmente
+    # disparando um retry manual que enviava a mensagem uma segunda vez ao
+    # cliente). Espelha o padrao ja usado por send_media_to_ticket.
+    await db.tickets.update_one(
+        {"id": ticket_id},
+        {"$push": {"messages": message}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
     # If agent and channel is whatsapp, actually send via Baileys
     delivery_error = None
+    conn_id = None
     if data.sender_type == "agent" and ticket.get("channel") == "whatsapp" and ticket.get("customer_phone"):
         try:
             import httpx
@@ -1175,7 +1215,14 @@ async def add_message_to_ticket(
                         res = {}
                     if resp.status_code == 200 and res.get("success"):
                         message["delivery_status"] = "sent"
-                        message["wa_message_id"] = res.get("jid")
+                        # 2026-08-14 — Baileys retorna {success, jid, message_id}. Antes
+                        # armazenavamos `jid` aqui por engano; isso quebrava (a) o dedup
+                        # estrito por wa_message_id no /webhook/message quando o echo
+                        # `messages.upsert` chegava e (b) a atualizacao de status via
+                        # /webhook/message-status (nunca casava o id). Resultado
+                        # observado em prod: mensagens do atendente duplicando na conversa
+                        # do cliente + ticks de entrega/leitura sempre presos.
+                        message["wa_message_id"] = res.get("message_id") or res.get("jid")
                     else:
                         message["delivery_status"] = "failed"
                         delivery_error = res.get("error") or f"HTTP {resp.status_code}: {resp.text[:80]}"
@@ -1208,9 +1255,21 @@ async def add_message_to_ticket(
         if not ticket.get("connection_id") and conn_id:
             update_set["connection_id"] = conn_id
 
+    # 2026-08-14 — Mensagem ja foi persistida no inicio. Agora so
+    # atualizamos os campos que dependem do resultado do envio ($set
+    # posicional pelo message.id).
+    message_set = {
+        f"messages.$.delivery_status": message.get("delivery_status", "pending"),
+    }
+    if message.get("wa_message_id"):
+        message_set["messages.$.wa_message_id"] = message["wa_message_id"]
+    if message.get("delivery_error"):
+        message_set["messages.$.delivery_error"] = message["delivery_error"]
+    for k, v in update_set.items():
+        message_set[k] = v
     await db.tickets.update_one(
-        {"id": ticket_id},
-        {"$push": {"messages": message}, "$set": update_set}
+        {"id": ticket_id, "messages.id": message["id"]},
+        {"$set": message_set}
     )
 
     # Pause the bot for this ticket if the company opted-in. Only relevant

@@ -1183,13 +1183,30 @@ const AtendimentosPage = () => {
               <span className="text-[10px] bg-white/90 text-slate-500 px-3 py-1 rounded-lg shadow-sm">CONVERSA</span>
             </div>
 
-            {selectedTicket.messages?.map((msg) => {
+            {selectedTicket.messages?.map((rawMsg, msgIdx) => {
+              // 2026-08-14 — Compat com schema legado das mensagens de
+              // sistema (auto_close, manual_close, transfer_message do bot)
+              // que antes vinham como {from, text, timestamp, system, reason}.
+              // Sem essa normalizacao, msg.content vira undefined -> bolha
+              // vazia; msg.id vira undefined -> React usa a mesma key
+              // "undefined" para varias mensagens e o historico do ticket
+              // transferido para outro atendente aparecia em branco.
+              const msg = (rawMsg && (rawMsg.content == null && rawMsg.text != null)) ? {
+                ...rawMsg,
+                id: rawMsg.id || `legacy-${msgIdx}-${(rawMsg.timestamp || '').slice(0, 24)}`,
+                content: rawMsg.text,
+                created_at: rawMsg.created_at || rawMsg.timestamp,
+                sender_type: rawMsg.sender_type || (rawMsg.from === 'bot' || rawMsg.from === 'agent' ? 'agent' : 'user'),
+                sender_name: rawMsg.sender_name || (rawMsg.system ? 'Sistema' : (rawMsg.from === 'bot' ? 'Bot' : 'Admin')),
+                system: rawMsg.system || !!rawMsg.reason,
+                source: rawMsg.source || rawMsg.reason,
+              } : rawMsg;
               const isDeleted = !!msg.deleted_for_customer;
               const isEdited = !!msg.edited_at;
               const isMine = msg.sender_type === 'agent';
-              const showActions = isMine && msg.wa_message_id && !isDeleted;
+              const showActions = isMine && msg.wa_message_id && !isDeleted && !msg.system;
               return (
-              <div key={msg.id} className={`flex mb-3 group ${isMine ? 'justify-end' : 'justify-start'}`}>
+              <div key={msg.id || `msg-${msgIdx}`} className={`flex mb-3 group ${isMine ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[75%] rounded-xl px-4 py-2.5 shadow-sm relative ${
                   isDeleted
                     ? 'bg-slate-100 border border-dashed border-slate-300 text-slate-400 italic rounded-tr-sm'

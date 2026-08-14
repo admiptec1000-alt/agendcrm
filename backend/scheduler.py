@@ -276,14 +276,25 @@ async def _process_ticket_auto_close(db):
                         continue
                     # Cooldown check per company/phone.
                     if cooldown_cutoff_iso:
+                        # 2026-08-14 — Suporta AMBOS os schemas: legado
+                        # {reason, timestamp} (tickets anteriores ao fix) e
+                        # novo {source, created_at}. Sem esse $or, o cooldown
+                        # falharia quando o schema muda entre reinicios de deploy.
                         prior = await db.tickets.find_one({
                             "company_id": c["id"],
                             "customer_phone": phone,
-                            "messages": {"$elemMatch": {
-                                "system": True,
-                                "reason": {"$in": ["auto_close", "manual_close"]},
-                                "timestamp": {"$gte": cooldown_cutoff_iso},
-                            }},
+                            "$or": [
+                                {"messages": {"$elemMatch": {
+                                    "system": True,
+                                    "reason": {"$in": ["auto_close", "manual_close"]},
+                                    "timestamp": {"$gte": cooldown_cutoff_iso},
+                                }}},
+                                {"messages": {"$elemMatch": {
+                                    "system": True,
+                                    "source": {"$in": ["auto_close", "manual_close"]},
+                                    "created_at": {"$gte": cooldown_cutoff_iso},
+                                }}},
+                            ],
                         }, {"_id": 0, "id": 1})
                         if prior:
                             logger.info(
@@ -322,15 +333,32 @@ async def _process_ticket_auto_close(db):
                             f"status={r.status_code}"
                         )
                     # Persist in ticket message history.
+                    # 2026-08-14 — Schema padronizado (id/content/sender_type/
+                    # created_at). Antes usava {from,text,timestamp} — sem id,
+                    # bolha vazia no CRM. Ver mesma correcao em flow_engine
+                    # (transfer_message) e crm_routes (manual_close).
+                    import uuid as _uu
+                    # Extrai o message_id do Baileys quando disponivel para
+                    # que dedup por wa_message_id no /webhook/message pegue
+                    # o proprio echo `from_me=true` desse envio.
+                    _sched_wa_mid = None
+                    try:
+                        _sched_wa_mid = (r.json() or {}).get("message_id")
+                    except Exception:
+                        pass
                     await db.tickets.update_one(
                         {"id": t["id"]},
                         {"$push": {"messages": {
-                            "from": "bot",
-                            "text": msg,
-                            "type": "text",
-                            "timestamp": now.isoformat(),
+                            "id": str(_uu.uuid4()),
+                            "content": msg,
+                            "sender_type": "agent",
+                            "sender_id": None,
+                            "sender_name": "Sistema",
+                            "created_at": now.isoformat(),
+                            "wa_message_id": _sched_wa_mid,
+                            "delivery_status": "sent",
+                            "source": "auto_close",
                             "system": True,
-                            "reason": "auto_close",
                         }}},
                     )
                 except Exception as e:

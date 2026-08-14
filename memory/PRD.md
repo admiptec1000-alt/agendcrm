@@ -1,3 +1,111 @@
+## 2026-08-14 — Fix duplicidade de mensagem manual + historico em branco pos-transferencia ✅
+
+### Bug 1 — Mensagem manual chegava duplicada ao cliente
+Reportado pelo usuario: atendente digita e envia UMA vez pelo painel, o
+cliente recebe DUAS mensagens iguais no WhatsApp. Bot ja estava OK
+desde o fix anterior, so a partir de "Sender Message" manual.
+
+**Root cause (multipla)** em `crm_routes.add_message_to_ticket`:
+1. `message["wa_message_id"] = res.get("jid")` — armazenava o JID de
+   destino (ex: `5562999...@s.whatsapp.net`) em vez do REAL
+   `message_id` retornado por Baileys. Quebrava:
+   - o dedup estrito por `wa_message_id` no `/webhook/message` quando
+     o echo `messages.upsert` (fromMe=true) chegava (msg_id "3EB0..." nao
+     casava com JID armazenado);
+   - o `/webhook/message-status` que jamais casava a mensagem entao os
+     ticks entrega/leitura ficavam presos e o atendente via botao
+     "Reenviar" mesmo com a mensagem entregue — cada clique enviava de
+     novo.
+2. `$push` da mensagem acontecia DEPOIS do `await httpx.post` para o
+   microservico (bloqueante ate 30s). O Baileys emitia `messages.upsert`
+   em paralelo → webhook chegava ANTES do push → self-echo dedup (linha
+   1509) nao achava a mensagem no ticket → APPEND duplicado.
+
+**Fix (crm_routes.add_message_to_ticket)**:
+- `wa_message_id = res.get("message_id") or res.get("jid")` (fallback
+  preserva compat com respostas antigas).
+- Persistir a mensagem com status `pending` ANTES do send, depois
+  `$set` posicional (`messages.$.delivery_status`,
+  `messages.$.wa_message_id`, `messages.$.delivery_error`) apos a
+  resposta do Baileys. Espelha o padrao ja usado por
+  `send_media_to_ticket` que nunca duplicou.
+
+### Bug 2 — Historico "em branco" apos transferencia usuario→usuario
+Reportado pelo usuario: quando o ticket ia de atendente A para
+atendente B, B abria o ticket e via bolhas VAZIAS ou toda a conversa
+sumia. Transferencia via `PUT /tickets/{id}` `{assigned_to, status}`.
+
+**Root cause**: Tres caminhos gravavam mensagens de sistema usando um
+schema legado incompativel com o frontend:
+- `flow_engine.py` (transfer_message do node Ticket com multi-analista)
+- `scheduler.py` (auto_close goodbye)
+- `crm_routes.update_ticket` (manual_close goodbye)
+
+Todos empurravam `{from: 'bot', text: msg, type: 'text',
+timestamp: ..., system: true, reason: 'transfer|auto_close|manual_close'}`
+— SEM `id`, SEM `content`, SEM `sender_type`, SEM `created_at`. O
+frontend `AtendimentosPage.js` linha 1186 fazia
+`selectedTicket.messages?.map(msg => <div key={msg.id}>...` — com
+`msg.id === undefined` para varias mensagens, React usava a mesma key
+"undefined" em multiplas entradas → warning + comportamento indefinido
+que, com o Chrome PT-BR + Translate, chegava a apagar o historico
+inteiro na renderizacao pos-transferencia.
+
+**Fix triplo (backend)**: schema padronizado
+`{id: uuid, content: str, sender_type: 'agent', sender_id, sender_name,
+created_at: iso, wa_message_id: <do baileys>, delivery_status: 'sent',
+source: 'transfer|auto_close|manual_close', system: True}`. Aplicado
+em flow_engine.py, scheduler.py e crm_routes.py.
+
+**Fix (frontend AtendimentosPage.js)**: normaliza no map — se a mensagem
+antiga (`content == null && text != null`), constroi objeto derivado com
+`id: 'legacy-<idx>-<ts>'`, `content: msg.text`, `created_at:
+msg.timestamp`, `sender_type: msg.from==='bot'|'agent' ? 'agent' :
+'user'`. Assim TODOS os tickets historicos continuam renderizando
+mesmo antes do redeploy do backend chegar em prod.
+
+**Fix compat (scheduler + crm_routes cooldown)**: a query de cooldown
+das mensagens de encerramento agora usa `$or` para bater tanto no
+schema legado (`reason` + `timestamp`) quanto no novo (`source` +
+`created_at`) — sem isso o cooldown falharia pos-deploy ate que os
+tickets novos existissem em quantidade.
+
+### Testes
+- `test_manual_message_dedup_and_transfer.py` (novo) — 2/2 pytest PASS:
+  1. `test_flow_engine_transfer_message_uses_standard_schema` — mocka
+     `_send_whatsapp` e valida que a transfer_message vem com id,
+     content, sender_type=agent, created_at, wa_message_id,
+     source='transfer', system=True.
+  2. `test_cooldown_query_supports_both_schemas` — semeia 2 tickets
+     (um legado, um novo) e verifica que o `$or` acha ambos.
+- Smoke screenshot: `/crmtest/login` carrega sem crash.
+- Curl `/api/auth/login` retorna access_token → backend reiniciou
+  limpo sem regressao.
+
+### Arquivos tocados
+- `/app/backend/routes/crm_routes.py` (fix duplicidade + manual_close schema + cooldown $or)
+- `/app/backend/scheduler.py` (auto_close schema + cooldown $or)
+- `/app/backend/flow_engine.py` (transfer_message schema)
+- `/app/frontend/src/pages/CRM/AtendimentosPage.js` (normalizacao de mensagens legadas no render)
+- `/app/backend/tests/test_manual_message_dedup_and_transfer.py` (novo)
+
+### Deploy necessario
+- Backend: SIM (schema novo + fix wa_message_id)
+- Frontend: SIM (compat com mensagens legadas)
+- WhatsApp-service: NAO
+
+### Ao aplicar
+- Mensagens ANTIGAS armazenadas com o schema legado continuam
+  aparecendo pela normalizacao no frontend.
+- Mensagens NOVAS gravadas com o schema padronizado ficam consistentes
+  para dedup, retry, edit, delete.
+- Cooldown de encerramento cobre AMBOS os formatos ate os tickets
+  legados sairem naturalmente do sistema.
+
+---
+
+
+
 ## 2026-07-17 — Fix definitivo: tela branca em Conexoes (Chrome Translate) ✅
 
 ### Root cause identificado (agora com evidencia)

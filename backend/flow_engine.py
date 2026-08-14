@@ -1054,15 +1054,29 @@ async def advance_flow(
                     sent_msg_id = await _send_whatsapp(ticket, rendered, db=db)
                     if sent_msg_id:
                         sent.append(sent_msg_id)
+                        # 2026-08-14 — Padroniza schema (id/content/sender_type/
+                        # created_at) igual ao usado pelo /webhook/message e
+                        # _persist_outgoing. Antes usavamos {from, text,
+                        # timestamp, system, reason} — sem id, sem content
+                        # e sem sender_type. Resultado: no CRM a bolha
+                        # aparecia vazia e sem key React (todas com key
+                        # undefined). O historial no atendente que recebia
+                        # o ticket transferido parecia "faltando" quando
+                        # varias mensagens de sistema empilhavam.
+                        import uuid as _u
                         await db.tickets.update_one(
                             {"id": ticket["id"]},
                             {"$push": {"messages": {
-                                "from": "bot",
-                                "text": rendered,
-                                "type": "text",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "id": str(_u.uuid4()),
+                                "content": rendered,
+                                "sender_type": "agent",
+                                "sender_id": None,
+                                "sender_name": "Sistema",
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                                "wa_message_id": sent_msg_id,
+                                "delivery_status": "sent",
+                                "source": "transfer",
                                 "system": True,
-                                "reason": "transfer",
                             }}},
                         )
                 except Exception as _te:
