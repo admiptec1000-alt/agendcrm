@@ -1,3 +1,94 @@
+## 2026-08-19 — Fix mensagens do celular sumindo + historico importado com balao vazio ✅
+
+### Sintomas reportados em producao
+1. Todo ticket reaberto/desarquivado com tag `historico-importado` mostrava
+   varios balocs BRANCOS VAZIOS do lado do cliente, e o lado do atendente
+   nao renderizava nada.
+2. Mensagens que o operador responde pelo APP do celular do WhatsApp
+   NAO aparecem no CRM em tempo real (nao adianta esperar reconexao,
+   e response ao vivo mesmo).
+
+### Root cause (2 bugs distintos, mesmo sintoma visual)
+
+**Bug A — `deviceSentMessage` nao era desembrulhado (Baileys 7)**
+Baileys v7 embrulha mensagens que chegam por linked devices dentro de
+`msg.message.deviceSentMessage.message` (ver
+https://github.com/WhiskeySockets/Baileys/pull/2566). Nosso unwrap loop
+tratava ephemeralMessage, viewOnceMessage(V1/V2/V2Extension),
+documentWithCaptionMessage, editedMessage e protocolMessage.editedMessage
+— mas NAO deviceSentMessage. Resultado: quando o operador respondia
+pelo celular, `m.conversation` no top-level ficava undefined, `text`
+saia como string vazia, e caia no `if (!text) continue` do handler
+(index.js:1416) → mensagem SILENCIOSAMENTE DROPADA. Nem chegava no
+`/webhook/message`. Sintoma classico: "conexao conectada mas msg do
+celular nao vem". Mesma coisa no handler de historico
+(`messaging-history.set`) — historico de mensagens outbound do celular
+vinha com `text=""` e o backend salvava `content=""` no ticket -> balao
+branco vazio no CRM.
+
+**Bug B — `/webhook/history-import` gravava schema legado**
+`{from: 'agent'|'customer', text, timestamp, historical}` — sem `id`,
+sem `content`, sem `sender_type`, sem `created_at`. O frontend
+`AtendimentosPage` fazia `key={msg.id}` — todas com key `undefined`
+-> React usava a mesma key para varias mensagens -> renderizacao
+imprevisivel (as vezes mostrava tudo, as vezes sumia o lado direito
+inteiro dependendo da ordem/quantidade). Alem disso `content` era
+undefined -> balao vazio.
+
+### Fixes aplicados
+
+**1) `whatsapp-service/index.js` — unwrap deviceSentMessage**
+Adicionada linha `if (rawMsg.deviceSentMessage?.message) { rawMsg =
+rawMsg.deviceSentMessage.message; continue; }` no loop de unwrap DE
+DOIS handlers:
+- `messages.upsert` (real-time — bug A crítico) — corrige o "resposta
+  pelo celular nao aparece no CRM"
+- `messaging-history.set` (historico) — corrige o "balao vazio no
+  historico importado" para mensagens outbound antigas.
+
+**2) `whatsapp-service/index.js` — placeholders para media no historico**
+Antes: mensagens de midia no historico vinham com text="" e caiam
+como balao vazio. Agora, se o texto extraido estiver vazio E for uma
+media, gera placeholder ("[Imagem]", "[Audio]", "[Documento] nome.pdf",
+etc). Se ainda vazio (revoke, reaction pura, protocol msg) — PULA a
+mensagem, nao gera balao branco.
+
+**3) `/webhook/history-import` — schema padronizado**
+Agora escreve mensagens com `{id (uuid), wa_message_id, content,
+sender_type ('agent'|'user'), sender_name, created_at (iso), type,
+media_kind, historical: True, source: 'history_import'}`. Ignora
+mensagens com content vazio. Isso alinha com o formato usado pelo
+`/webhook/message` e `_persist_outgoing`, evitando keys duplicadas no
+React e balao vazio.
+
+**4) Frontend `AtendimentosPage.js` — filtro final**
+Adicionado `if (!hasContent && !hasMedia) return null;` no map de
+mensagens. Isso lida com o ESTOQUE LEGADO ja em prod (tickets antigos
+que foram importados com content="" ou msgs de sistema com text=null).
+Balao vazio nao aparece mais, mesmo antes de reimport.
+
+### Validacao
+- `curl POST /api/channels/webhook/history-import` com 4 msgs
+  (uma vazia + uma from_me + uma normal + uma image placeholder)
+  → 3 salvas (M3 vazia dropada), todas com id/content/sender_type/
+  created_at, M2 (from_me=true) sender_type=agent, M4 content="[Imagem]".
+- Backend + microservico reiniciaram limpos.
+- Frontend smoke OK.
+
+### Deploy necessario
+- Backend: SIM (schema history-import + drop de content vazio)
+- Frontend: SIM (filtro de balao vazio na render)
+- WhatsApp-service: SIM (deviceSentMessage unwrap — este e o mais critico)
+
+### Arquivos tocados
+- `/app/whatsapp-service/index.js` (unwrap + placeholders no history)
+- `/app/backend/routes/channels_routes.py` (schema history-import padronizado)
+- `/app/frontend/src/pages/CRM/AtendimentosPage.js` (filtro balao vazio)
+
+---
+
+
+
 ## 2026-08-14 — Sync 7d bidirecional (mensagens do celular chegando ao CRM) ✅
 
 ### Bug reportado (producao)

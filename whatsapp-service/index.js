@@ -1168,6 +1168,11 @@ async function createConnection(instanceId, options = {}) {
             if (m.viewOnceMessageV2Extension?.message) { m = m.viewOnceMessageV2Extension.message; continue; }
             if (m.documentWithCaptionMessage?.message) { m = m.documentWithCaptionMessage.message; continue; }
             if (m.editedMessage?.message) { m = m.editedMessage.message; continue; }
+            // 2026-08-14 — Ver comentario no messages.upsert. Mensagens
+            // historicas vindas do celular do operador vem embrulhadas em
+            // deviceSentMessage. Sem unwrap, a preview ficava "" e a
+            // conversa importada renderizava balao vazio.
+            if (m.deviceSentMessage?.message) { m = m.deviceSentMessage.message; continue; }
             break;
           }
           const text = m.conversation
@@ -1176,6 +1181,29 @@ async function createConnection(instanceId, options = {}) {
             || m.videoMessage?.caption
             || m.documentMessage?.caption
             || '';
+          // 2026-08-14 — Placeholder para mensagens de midia sem legenda
+          // no historico. Antes: text = "" -> backend salvava content=""
+          // -> bolha vazia no CRM. Agora: pelo menos aparece "[Imagem]",
+          // "[Audio]", "[Documento]" etc pra dar contexto minimo. Fora
+          // isso, mensagens de protocolo (leitura, entrega) sao pulados
+          // como no handler ao vivo.
+          let finalText = text;
+          let mediaKindHist = null;
+          if (!finalText) {
+            if (m.imageMessage) { finalText = '[Imagem]'; mediaKindHist = 'image'; }
+            else if (m.videoMessage) { finalText = '[Video]'; mediaKindHist = 'video'; }
+            else if (m.audioMessage) { finalText = '[Audio]'; mediaKindHist = 'audio'; }
+            else if (m.stickerMessage) { finalText = '[Figurinha]'; mediaKindHist = 'sticker'; }
+            else if (m.documentMessage) {
+              finalText = `[Documento] ${m.documentMessage.fileName || ''}`.trim();
+              mediaKindHist = 'document';
+            }
+            else if (m.locationMessage) finalText = '[Localizacao]';
+            else if (m.contactMessage) finalText = `[Contato] ${m.contactMessage.displayName || ''}`.trim();
+          }
+          // Se ainda vazio, e uma mensagem de protocolo (revoke, reaction
+          // pura, receipt) — pula. Nao polui o historico com balao vazio.
+          if (!finalText) continue;
           _historyBuffer.push({
             id: msg.key.id,
             jid: remoteJid,
@@ -1187,7 +1215,8 @@ async function createConnection(instanceId, options = {}) {
                   : m.videoMessage ? 'video'
                   : m.documentMessage ? 'document'
                   : 'other',
-            text: text.slice(0, 4000),
+            text: finalText.slice(0, 4000),
+            media_kind: mediaKindHist,
             push_name: msg.pushName || null,
           });
         }
@@ -1359,6 +1388,16 @@ async function createConnection(instanceId, options = {}) {
         if (rawMsg.documentWithCaptionMessage?.message) { rawMsg = rawMsg.documentWithCaptionMessage.message; continue; }
         if (rawMsg.editedMessage?.message) { rawMsg = rawMsg.editedMessage.message; continue; }
         if (rawMsg.protocolMessage?.editedMessage) { rawMsg = rawMsg.protocolMessage.editedMessage; continue; }
+        // 2026-08-14 — Baileys 7 empacota mensagens vindas de aparelhos
+        // linkados (celular do operador, WhatsApp Web em outra maquina)
+        // dentro de `deviceSentMessage.message`. Sem esse unwrap, quando o
+        // operador responde pelo APP do celular, o webhook chega com
+        // m.conversation === undefined -> text vazio -> caia no
+        // `if (!text) continue` -> mensagem DROPADA silenciosamente.
+        // Sintoma reportado em prod: "mensagens que respondo pelo celular
+        // nao aparecem na plataforma em tempo real".
+        // Ref: https://github.com/WhiskeySockets/Baileys/pull/2566
+        if (rawMsg.deviceSentMessage?.message) { rawMsg = rawMsg.deviceSentMessage.message; continue; }
         break;
       }
       const m = rawMsg;

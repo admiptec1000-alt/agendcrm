@@ -1005,18 +1005,37 @@ async def webhook_history_import(request: Request, db: AsyncIOMotorDatabase = De
             mid = m.get("id")
             if not mid or mid in existing_ids:
                 continue
+            # 2026-08-14 — Se veio sem texto (mensagem de protocolo, revoke,
+            # reaction pura, etc), pula. Antes salvava com content="" e
+            # gerava balao vazio no CRM. Media messages ja vem com
+            # placeholder "[Imagem]"/"[Audio]"/... do microservico.
+            _text = (m.get("text") or "").strip()
+            if not _text:
+                continue
             ts = m.get("timestamp")
             try:
                 iso_ts = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
             except Exception:
                 iso_ts = datetime.now(timezone.utc).isoformat()
+            is_from_agent = bool(m.get("from_me"))
+            # 2026-08-14 — Schema padronizado. Antes: {from, text, timestamp}
+            # -> frontend renderizava balao vazio (content ausente) e id
+            # ausente causava keys duplicadas no React. Agora bate com o
+            # schema usado pelo /webhook/message + _persist_outgoing.
             new_msgs.append({
+                "id": str(uuid.uuid4()),
                 "wa_message_id": mid,
-                "from": "agent" if m.get("from_me") else "customer",
-                "text": m.get("text") or "",
+                "content": _text,
+                "sender_type": "agent" if is_from_agent else "user",
+                "sender_name": (
+                    (conn.get("connected_name") or "Voce (celular)")
+                    if is_from_agent else (push_name or customer_name)
+                ),
+                "created_at": iso_ts,
                 "type": m.get("type") or "text",
-                "timestamp": iso_ts,
+                "media_kind": m.get("media_kind"),
                 "historical": True,  # marcador para a UI poder estilizar
+                "source": "history_import",
             })
             existing_ids.add(mid)
 

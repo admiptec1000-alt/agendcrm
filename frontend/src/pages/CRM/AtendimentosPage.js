@@ -1201,6 +1201,14 @@ const AtendimentosPage = () => {
                 system: rawMsg.system || !!rawMsg.reason,
                 source: rawMsg.source || rawMsg.reason,
               } : rawMsg;
+              // 2026-08-14 — Pula mensagens sem conteudo textual e sem
+              // midia. Isso limpa a UI de balao branco vazio (reactions
+              // puras, revokes, protocol messages, imports antigos com
+              // text="" do Baileys). Media messages tem content = "[Imagem]"
+              // etc, entao passam.
+              const _hasContent = !!(msg && (msg.content || '').toString().trim());
+              const _hasMedia = !!(msg && msg.media_url);
+              if (!_hasContent && !_hasMedia) return null;
               const isDeleted = !!msg.deleted_for_customer;
               const isEdited = !!msg.edited_at;
               const isMine = msg.sender_type === 'agent';
