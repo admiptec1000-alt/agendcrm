@@ -187,6 +187,13 @@ const SgpRepairTab = ({ companies }) => {
           if prod still reports v2.1.8 or older, the user needs to redeploy. */}
       <WhatsAppHealthCard />
 
+      {/* SGP Debug — 2026-08-26. Testa a consulta cliente numa empresa
+          especifica, com overrides opcionais de app/token/base_url. Util
+          quando uma empresa nova nao acha contratos e queremos ver o JSON
+          bruto que o SGP esta retornando + testar variacoes do campo
+          `app` sem precisar salvar a config. */}
+      <SgpDebugCard companies={companies} />
+
       {/* Header card */}
       <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-indigo-50 to-white p-5 flex items-start gap-4">
         <div className="p-3 rounded-xl bg-indigo-600 text-white shrink-0">
@@ -604,6 +611,197 @@ const SgpRepairTab = ({ companies }) => {
 };
 
 export default SgpRepairTab;
+
+
+// ── SGP Debug Consulta Cliente ─────────────────────────────────────────
+// 2026-08-26 — Painel para depurar o "Nao localizei contratos" em prod.
+// Chama POST /api/sgp/super-admin/debug-consultacliente/{company_id}
+// com o CPF e overrides opcionais (_app, _token, _base_url). Retorna
+// o JSON bruto do SGP + um `diagnostic_hint` no topo. Aparece o
+// `contratos_count` mesmo quando 0 pra distinguir "SGP respondeu vazio"
+// de "SGP nao respondeu" (erro HTTP).
+export const SgpDebugCard = ({ companies }) => {
+  const [companyId, setCompanyId] = useState('');
+  const [cpfcnpj, setCpfcnpj] = useState('');
+  const [appOverride, setAppOverride] = useState('');
+  const [tokenOverride, setTokenOverride] = useState('');
+  const [baseUrlOverride, setBaseUrlOverride] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const run = async () => {
+    if (!companyId || !cpfcnpj) {
+      toast.error('Selecione a empresa e informe o CPF/CNPJ');
+      return;
+    }
+    setLoading(true);
+    setResult(null);
+    try {
+      const params = { cpfcnpj };
+      if (appOverride.trim()) params._app = appOverride.trim();
+      if (tokenOverride.trim()) params._token = tokenOverride.trim();
+      if (baseUrlOverride.trim()) params._base_url = baseUrlOverride.trim();
+      const { data } = await api.post(
+        `/sgp/super-admin/debug-consultacliente/${companyId}`,
+        { params }
+      );
+      setResult(data);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Falha ao consultar');
+      setResult({ error: e?.response?.data?.detail || e.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const contratosCount = Array.isArray(result?.data?.contratos)
+    ? result.data.contratos.length : 0;
+  const hasError = result?.status && result.status >= 400;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 mt-4" data-testid="sgp-debug-card">
+      <div className="flex items-start gap-3 mb-3">
+        <div className="p-3 rounded-xl bg-indigo-100 text-indigo-700 shrink-0">
+          <Bug className="w-5 h-5" />
+        </div>
+        <div className="flex-1">
+          <h3 className="text-base font-bold text-slate-900">Debug SGP consultacliente</h3>
+          <p className="text-xs text-slate-600 mt-0.5">
+            Testa o que o SGP retorna para um CPF numa empresa. Use os overrides
+            para descobrir se o campo `app` esta correto sem precisar salvar.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="text-[11px] font-semibold text-slate-500 uppercase">Empresa</label>
+          <select
+            value={companyId}
+            onChange={e => setCompanyId(e.target.value)}
+            className="w-full mt-1 px-3 py-2 text-sm border border-slate-300 rounded-lg"
+            data-testid="sgp-debug-company-select"
+          >
+            <option value="">Selecione...</option>
+            {(companies || []).map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-[11px] font-semibold text-slate-500 uppercase">CPF ou CNPJ</label>
+          <input
+            type="text"
+            value={cpfcnpj}
+            onChange={e => setCpfcnpj(e.target.value)}
+            placeholder="034.590.825-26"
+            className="w-full mt-1 px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono"
+            data-testid="sgp-debug-cpf-input"
+          />
+        </div>
+      </div>
+
+      <details className="mt-3">
+        <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700 font-medium">
+          Overrides opcionais (nao salva a config, so testa nesta chamada)
+        </summary>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2 p-3 bg-slate-50 rounded-lg">
+          <div>
+            <label className="text-[10px] font-semibold text-slate-500 uppercase">app override</label>
+            <input
+              type="text"
+              value={appOverride}
+              onChange={e => setAppOverride(e.target.value)}
+              placeholder="ex: nexonet"
+              className="w-full mt-1 px-2 py-1.5 text-xs border border-slate-300 rounded font-mono"
+              data-testid="sgp-debug-app-override"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold text-slate-500 uppercase">token override</label>
+            <input
+              type="text"
+              value={tokenOverride}
+              onChange={e => setTokenOverride(e.target.value)}
+              placeholder="deixe vazio pra usar o salvo"
+              className="w-full mt-1 px-2 py-1.5 text-xs border border-slate-300 rounded font-mono"
+              data-testid="sgp-debug-token-override"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold text-slate-500 uppercase">base_url override</label>
+            <input
+              type="text"
+              value={baseUrlOverride}
+              onChange={e => setBaseUrlOverride(e.target.value)}
+              placeholder="https://outro.sgp.net.br"
+              className="w-full mt-1 px-2 py-1.5 text-xs border border-slate-300 rounded font-mono"
+              data-testid="sgp-debug-baseurl-override"
+            />
+          </div>
+        </div>
+      </details>
+
+      <button
+        onClick={run}
+        disabled={loading || !companyId || !cpfcnpj}
+        className="mt-4 px-4 py-2 text-sm font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+        data-testid="sgp-debug-run-btn"
+      >
+        {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+        {loading ? 'Consultando...' : 'Consultar SGP'}
+      </button>
+
+      {result && !result.error && (
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <span className={`px-2 py-1 rounded font-mono ${hasError ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+              HTTP {result.status}
+            </span>
+            <span className={`px-2 py-1 rounded font-mono ${contratosCount > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              contratos: {contratosCount}
+            </span>
+            {result.cfg_snapshot && (
+              <span className="px-2 py-1 rounded bg-slate-100 text-slate-700 font-mono">
+                app_usado: <b>{result.cfg_snapshot.app_used}</b>
+              </span>
+            )}
+          </div>
+
+          {result.diagnostic_hint && (
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <b>Diagnostico:</b> {result.diagnostic_hint}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase mb-1">Request enviado</p>
+            <pre className="p-3 rounded-lg bg-slate-900 text-slate-100 text-[11px] font-mono overflow-x-auto">
+              {JSON.stringify(result.debug_request, null, 2)}
+            </pre>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-semibold text-slate-500 uppercase mb-1">Resposta SGP (raw)</p>
+            <pre className="p-3 rounded-lg bg-slate-900 text-slate-100 text-[11px] font-mono max-h-96 overflow-auto">
+              {JSON.stringify(result.data, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
+      {result?.error && (
+        <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-900" data-testid="sgp-debug-error">
+          <b>Erro:</b> {result.error}
+        </div>
+      )}
+    </div>
+  );
+};
 
 
 // ── WhatsApp Service Health Card ──────────────────────────────────────────

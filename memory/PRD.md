@@ -1,3 +1,73 @@
+## 2026-08-26 — Debug SGP consultacliente no Super-Admin (fix "Nao localizei contratos" NEXONET) ✅
+
+### Contexto
+Cliente NEXONET (2a empresa configurada apos a WEB, que funciona OK) sempre
+recebe "Nao localizei contratos vinculados ao CPF/CNPJ informado" mesmo com
+CPF valido no SGP deles. A msg vem de `flow_engine.py:1399` quando o menu
+tem `dynamic_source=contratos_lista` mas a lista veio vazia — o que
+acontece em 4 cenarios possiveis (ordem de probabilidade):
+
+1. **Campo `app` errado**: cada instalacao de SGP tem um identificador de
+   app (`8ip`, `nexonet`, `webfibra`...). Se copiou "8ip" da WEB pro
+   cadastro da NEXONET, o SGP responde 200 vazio.
+2. **Token de outra empresa**: token colado veio de outro tenant SGP.
+3. **CPF nao e TITULAR no SGP** (so responsavel financeiro): a URA nao
+   retorna contratos nesse caso.
+4. **URA nao ativada no painel SGP da NEXONET**: recurso pago no SGP.
+
+### O que ja existia
+`POST /api/sgp/super-admin/debug-consultacliente/{company_id}` retorna o
+JSON bruto do SGP + `diagnostic_hint` + snapshot da config. Aceita
+overrides via `params._app`, `_token`, `_base_url` — pro operador A/B
+testar sem precisar salvar. Mas NAO tinha UI. Operador precisaria usar
+curl/Postman.
+
+### Fix aplicado
+Adicionado card **"Debug SGP consultacliente"** no super-admin
+(`/admin-login` → "Reparo SGP") com:
+- Seletor de empresa (todas listadas).
+- Campo CPF/CNPJ (sanitiza para digitos automaticamente no backend).
+- Overrides opcionais colapsados (`app`, `token`, `base_url`).
+- Chama o endpoint existente e exibe:
+  - HTTP status + `contratos_count` (badge verde/amarelo).
+  - `diagnostic_hint` (amarelo) quando SGP retorna vazio.
+  - Request enviado (com token mascarado) para colar no suporte.
+  - Resposta bruta do SGP com scroll.
+  - Snapshot da config (`app_stored`, `app_used`).
+
+### Como o usuario resolve o caso NEXONET com este painel
+1. Login super-admin em prod → Reparo SGP.
+2. Card "Debug SGP consultacliente" → seleciona NEXONET.
+3. CPF do cliente (034.590.825-26) → Consultar.
+4. **Se contratos_count > 0**: config estava OK, o bug era outro (flow),
+   dai diagnostica no flowbuilder.
+5. **Se contratos_count = 0** e `diagnostic_hint` sugere `app`: abre
+   overrides, testa `_app: nexonet` (ou nome dado pelo SGP), roda de
+   novo. Se voltar contratos, salvar na config permanente (`app`).
+6. Se nada resolver: verifica se URA esta ativada no painel do SGP da
+   NEXONET, se o token tem permissao URA, e se o CPF esta cadastrado
+   como TITULAR (nao apenas responsavel financeiro).
+
+### Validacao preview
+- Frontend restartou limpo.
+- Screenshot: pagina Reparo SGP renderiza o novo card com todos os inputs
+  e o botao "Consultar SGP" ao lado do card WhatsApp Health e antes do
+  card "Auditar / Reparar Fluxo SGP".
+- `data-testid="sgp-debug-card"` presente pro testing agent.
+
+### Deploy necessario
+- **Frontend**: SIM (novo card no super-admin)
+- **Backend**: NAO (endpoint ja existia)
+- **WhatsApp-service**: NAO
+
+### Arquivos tocados
+- `/app/frontend/src/pages/SuperAdmin/SgpRepairTab.js` (novo componente
+  `SgpDebugCard` exportado + montado no topo do SgpRepairTab)
+
+---
+
+
+
 ## 2026-08-26 — Fix HTTP 520 em massa + lentidao intermitente + badge "Problema" fantasma ✅
 
 ### Sintomas em producao
