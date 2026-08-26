@@ -619,11 +619,80 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to start WA keepalive: {e}")
     # Start notifications scheduler (reminders, surveys, bulk messages)
+    # 2026-08-26 — Guard contra multiplos workers do Uvicorn/Gunicorn. Se
+    # o backend rodar com --workers > 1, cada processo Python subiria seu
+    # proprio scheduler, resultando em campanhas/reminders/auto_close
+    # duplicados. Usa lock atomico em Mongo com TTL de 5min: apenas o
+    # primeiro worker vira leader. Se o leader morrer, TTL expira e outro
+    # assume automaticamente. Sem esse lock, o fix do Procfile
+    # (--workers 2 pra aliviar starvation) dispararia TUDO em dobro.
     try:
         from scheduler import start_scheduler_loop
         import asyncio
-        asyncio.create_task(start_scheduler_loop())
-        logger.info("Notification scheduler started")
+        import os as _os
+        import socket as _sock
+        _worker_id = f"{_sock.gethostname()}:{_os.getpid()}"
+
+        async def _try_become_scheduler_leader():
+            from database import get_database as _gdb
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _db = await _gdb()
+            # TTL index (idempotente — safe pra rodar em toda subida)
+            try:
+                await _db.system_locks.create_index("expires_at", expireAfterSeconds=0)
+            except Exception:
+                pass
+            while True:
+                now = _dt.now(_tz.utc)
+                expires_at = now + _td(minutes=5)
+                # Tenta virar leader: upsert atomico se o lock nao existe
+                # OU se o lock ja expirou (heartbeat parou).
+                try:
+                    result = await _db.system_locks.find_one_and_update(
+                        {"_id": "scheduler_leader", "$or": [
+                            {"holder": _worker_id},
+                            {"expires_at": {"$lt": now}},
+                        ]},
+                        {"$set": {
+                            "holder": _worker_id,
+                            "acquired_at": now,
+                            "expires_at": expires_at,
+                        }},
+                        upsert=True,
+                        return_document=True,
+                    )
+                    if result and result.get("holder") == _worker_id:
+                        return True
+                except Exception as _lex:
+                    # Duplicate key = outro worker ja pegou (race no upsert).
+                    logger.debug(f"[scheduler] leader-lock race: {_lex}")
+                # Alguem tem o lock e ainda esta vivo -> desiste dessa vez,
+                # tenta de novo em 60s (pega se o lider morrer).
+                await asyncio.sleep(60)
+
+        async def _scheduler_with_leader_lock():
+            became_leader = await _try_become_scheduler_leader()
+            if became_leader:
+                logger.info(f"[startup] scheduler leader = {_worker_id}")
+                # Heartbeat + scheduler em paralelo.
+                async def _renew_lease():
+                    from database import get_database as _gdb2
+                    from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+                    _db2 = await _gdb2()
+                    while True:
+                        try:
+                            await _db2.system_locks.update_one(
+                                {"_id": "scheduler_leader", "holder": _worker_id},
+                                {"$set": {"expires_at": _dt2.now(_tz2.utc) + _td2(minutes=5)}},
+                            )
+                        except Exception:
+                            pass
+                        await asyncio.sleep(60)
+                asyncio.create_task(_renew_lease())
+                await start_scheduler_loop()
+
+        asyncio.create_task(_scheduler_with_leader_lock())
+        logger.info(f"Notification scheduler started (worker={_worker_id})")
     except Exception as e:
         logger.warning(f"Failed to start scheduler: {e}")
     logger.info("Startup complete!")

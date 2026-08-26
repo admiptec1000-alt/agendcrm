@@ -17,7 +17,7 @@ import httpx
 from database import get_database
 
 logger = logging.getLogger(__name__)
-SCHEDULER_INTERVAL = int(os.environ.get("SCHEDULER_INTERVAL_SECONDS", "60"))
+SCHEDULER_INTERVAL = int(os.environ.get("SCHEDULER_INTERVAL_SECONDS", "120"))
 WA_SERVICE_URL = os.environ.get("WA_SERVICE_URL", "http://localhost:3002")
 
 
@@ -246,125 +246,141 @@ async def _process_ticket_auto_close(db):
             },
             {"_id": 0, "id": 1, "contact_id": 1, "channel_id": 1, "customer_phone": 1, "connection_id": 1, "customer_name": 1, "flow_vars": 1},
         )
-        tickets_to_close = await to_close_cursor.to_list(500)
+        tickets_to_close = await to_close_cursor.to_list(50)
         if not tickets_to_close:
             continue
         # Send the goodbye message (best-effort) BEFORE closing the
         # ticket — message_history append depends on the ticket still
         # being open. Failures here are logged but never abort the close.
+        # 2026-08-26 — Antes: loop sequencial com `for t in tickets: await
+        # httpx.post` (10s timeout cada). Em pior caso 500 tickets = 5000s
+        # = 83min BLOQUEANDO o event loop -> Uvicorn (1 worker) enfileirava
+        # todos os requests HTTP -> Cloudflare desistia em 100s -> HTTP 520
+        # em massa em prod. Fix: (a) limita batch a 50 por tick e
+        # (b) processa em paralelo com semaforo de 10 -> 50 tickets caem
+        # de 500s para 50s no pior caso. Ver troubleshoot_agent iteracao
+        # 66 do dia 2026-08-26.
         if message_template.strip():
-            for t in tickets_to_close:
-                try:
-                    # 2026-05-28 — Suporta TANTO o schema antigo (contact_id/
-                    # channel_id, tabelas separadas) quanto o atual onde o
-                    # ticket guarda `customer_phone` / `connection_id` direto.
-                    phone = t.get("customer_phone") or ""
-                    contact_name = t.get("customer_name") or ""
-                    connection_id = t.get("connection_id") or t.get("channel_id")
-                    if not phone:
-                        contact = await db.contacts.find_one(
-                            {"id": t.get("contact_id")},
-                            {"_id": 0, "phone": 1, "name": 1},
-                        )
-                        if contact:
-                            phone = contact.get("phone") or ""
-                            contact_name = contact_name or contact.get("name") or ""
-                    if not (phone and connection_id):
-                        logger.warning(
-                            f"[scheduler] auto-close skipped ticket={t.get('id')}: missing phone/connection"
-                        )
-                        continue
-                    # Cooldown check per company/phone.
-                    if cooldown_cutoff_iso:
-                        # 2026-08-14 — Suporta AMBOS os schemas: legado
-                        # {reason, timestamp} (tickets anteriores ao fix) e
-                        # novo {source, created_at}. Sem esse $or, o cooldown
-                        # falharia quando o schema muda entre reinicios de deploy.
-                        prior = await db.tickets.find_one({
-                            "company_id": c["id"],
-                            "customer_phone": phone,
-                            "$or": [
-                                {"messages": {"$elemMatch": {
-                                    "system": True,
-                                    "reason": {"$in": ["auto_close", "manual_close"]},
-                                    "timestamp": {"$gte": cooldown_cutoff_iso},
-                                }}},
-                                {"messages": {"$elemMatch": {
-                                    "system": True,
-                                    "source": {"$in": ["auto_close", "manual_close"]},
-                                    "created_at": {"$gte": cooldown_cutoff_iso},
-                                }}},
-                            ],
-                        }, {"_id": 0, "id": 1})
-                        if prior:
-                            logger.info(
-                                f"[scheduler] auto-close cooldown hit ticket={t.get('id')} "
-                                f"phone={phone} cooldown_days={cooldown_days} "
-                                f"prior_ticket={prior.get('id')} — skip send"
-                            )
-                            continue
-                    company_name = c.get("name") or ""
-                    # 2026-02-28 — Variaveis SGP no fechamento: extrai
-                    # `nome_cliente` capturado durante o flow (via SGP
-                    # /consultacliente) e expoe como {{nome_sgp}} (completo)
-                    # e {{primeiro_nome_sgp}} (1a palavra). Cai pra "" se
-                    # o flow nao consultou SGP nesse ticket.
-                    fvars = t.get("flow_vars") or {}
-                    nome_sgp = (fvars.get("nome_cliente") or "").strip()
-                    primeiro_nome_sgp = nome_sgp.split()[0] if nome_sgp else ""
-                    msg = (
-                        message_template
-                        .replace("{{nome}}", contact_name)
-                        .replace("{nome}", contact_name)
-                        .replace("{{empresa}}", company_name)
-                        .replace("{empresa}", company_name)
-                        .replace("{{nome_sgp}}", nome_sgp)
-                        .replace("{nome_sgp}", nome_sgp)
-                        .replace("{{primeiro_nome_sgp}}", primeiro_nome_sgp)
-                        .replace("{primeiro_nome_sgp}", primeiro_nome_sgp)
-                    )
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        r = await client.post(
-                            f"{wa_service_url}/instances/{connection_id}/send",
-                            json={"phone": phone, "message": msg},
-                        )
-                        logger.info(
-                            f"[scheduler] auto-close msg sent ticket={t.get('id')} "
-                            f"status={r.status_code}"
-                        )
-                    # Persist in ticket message history.
-                    # 2026-08-14 — Schema padronizado (id/content/sender_type/
-                    # created_at). Antes usava {from,text,timestamp} — sem id,
-                    # bolha vazia no CRM. Ver mesma correcao em flow_engine
-                    # (transfer_message) e crm_routes (manual_close).
-                    import uuid as _uu
-                    # Extrai o message_id do Baileys quando disponivel para
-                    # que dedup por wa_message_id no /webhook/message pegue
-                    # o proprio echo `from_me=true` desse envio.
-                    _sched_wa_mid = None
+            _sem_close = asyncio.Semaphore(10)
+
+            async def _do_close_send(t):
+                async with _sem_close:
                     try:
-                        _sched_wa_mid = (r.json() or {}).get("message_id")
-                    except Exception:
-                        pass
-                    await db.tickets.update_one(
-                        {"id": t["id"]},
-                        {"$push": {"messages": {
-                            "id": str(_uu.uuid4()),
-                            "content": msg,
-                            "sender_type": "agent",
-                            "sender_id": None,
-                            "sender_name": "Sistema",
-                            "created_at": now.isoformat(),
-                            "wa_message_id": _sched_wa_mid,
-                            "delivery_status": "sent",
-                            "source": "auto_close",
-                            "system": True,
-                        }}},
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"[scheduler] auto-close goodbye failed ticket={t.get('id')}: {e}"
-                    )
+                        # 2026-05-28 — Suporta TANTO o schema antigo (contact_id/
+                        # channel_id, tabelas separadas) quanto o atual onde o
+                        # ticket guarda `customer_phone` / `connection_id` direto.
+                        phone = t.get("customer_phone") or ""
+                        contact_name = t.get("customer_name") or ""
+                        connection_id = t.get("connection_id") or t.get("channel_id")
+                        if not phone:
+                            contact = await db.contacts.find_one(
+                                {"id": t.get("contact_id")},
+                                {"_id": 0, "phone": 1, "name": 1},
+                            )
+                            if contact:
+                                phone = contact.get("phone") or ""
+                                contact_name = contact_name or contact.get("name") or ""
+                        if not (phone and connection_id):
+                            logger.warning(
+                                f"[scheduler] auto-close skipped ticket={t.get('id')}: missing phone/connection"
+                            )
+                            return
+                        # Cooldown check per company/phone.
+                        if cooldown_cutoff_iso:
+                            # 2026-08-14 — Suporta AMBOS os schemas: legado
+                            # {reason, timestamp} (tickets anteriores ao fix) e
+                            # novo {source, created_at}. Sem esse $or, o cooldown
+                            # falharia quando o schema muda entre reinicios de deploy.
+                            prior = await db.tickets.find_one({
+                                "company_id": c["id"],
+                                "customer_phone": phone,
+                                "$or": [
+                                    {"messages": {"$elemMatch": {
+                                        "system": True,
+                                        "reason": {"$in": ["auto_close", "manual_close"]},
+                                        "timestamp": {"$gte": cooldown_cutoff_iso},
+                                    }}},
+                                    {"messages": {"$elemMatch": {
+                                        "system": True,
+                                        "source": {"$in": ["auto_close", "manual_close"]},
+                                        "created_at": {"$gte": cooldown_cutoff_iso},
+                                    }}},
+                                ],
+                            }, {"_id": 0, "id": 1})
+                            if prior:
+                                logger.info(
+                                    f"[scheduler] auto-close cooldown hit ticket={t.get('id')} "
+                                    f"phone={phone} cooldown_days={cooldown_days} "
+                                    f"prior_ticket={prior.get('id')} — skip send"
+                                )
+                                return
+                        company_name = c.get("name") or ""
+                        # 2026-02-28 — Variaveis SGP no fechamento: extrai
+                        # `nome_cliente` capturado durante o flow (via SGP
+                        # /consultacliente) e expoe como {{nome_sgp}} (completo)
+                        # e {{primeiro_nome_sgp}} (1a palavra). Cai pra "" se
+                        # o flow nao consultou SGP nesse ticket.
+                        fvars = t.get("flow_vars") or {}
+                        nome_sgp = (fvars.get("nome_cliente") or "").strip()
+                        primeiro_nome_sgp = nome_sgp.split()[0] if nome_sgp else ""
+                        msg = (
+                            message_template
+                            .replace("{{nome}}", contact_name)
+                            .replace("{nome}", contact_name)
+                            .replace("{{empresa}}", company_name)
+                            .replace("{empresa}", company_name)
+                            .replace("{{nome_sgp}}", nome_sgp)
+                            .replace("{nome_sgp}", nome_sgp)
+                            .replace("{{primeiro_nome_sgp}}", primeiro_nome_sgp)
+                            .replace("{primeiro_nome_sgp}", primeiro_nome_sgp)
+                        )
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            r = await client.post(
+                                f"{wa_service_url}/instances/{connection_id}/send",
+                                json={"phone": phone, "message": msg},
+                            )
+                            logger.info(
+                                f"[scheduler] auto-close msg sent ticket={t.get('id')} "
+                                f"status={r.status_code}"
+                            )
+                        # Persist in ticket message history.
+                        # 2026-08-14 — Schema padronizado (id/content/sender_type/
+                        # created_at). Antes usava {from,text,timestamp} — sem id,
+                        # bolha vazia no CRM. Ver mesma correcao em flow_engine
+                        # (transfer_message) e crm_routes (manual_close).
+                        import uuid as _uu
+                        # Extrai o message_id do Baileys quando disponivel para
+                        # que dedup por wa_message_id no /webhook/message pegue
+                        # o proprio echo `from_me=true` desse envio.
+                        _sched_wa_mid = None
+                        try:
+                            _sched_wa_mid = (r.json() or {}).get("message_id")
+                        except Exception:
+                            pass
+                        await db.tickets.update_one(
+                            {"id": t["id"]},
+                            {"$push": {"messages": {
+                                "id": str(_uu.uuid4()),
+                                "content": msg,
+                                "sender_type": "agent",
+                                "sender_id": None,
+                                "sender_name": "Sistema",
+                                "created_at": now.isoformat(),
+                                "wa_message_id": _sched_wa_mid,
+                                "delivery_status": "sent",
+                                "source": "auto_close",
+                                "system": True,
+                            }}},
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[scheduler] auto-close goodbye failed ticket={t.get('id')}: {e}"
+                        )
+
+            await asyncio.gather(
+                *[_do_close_send(t) for t in tickets_to_close],
+                return_exceptions=True,
+            )
         # Now mark them all closed in one shot.
         result = await db.tickets.update_many(
             {

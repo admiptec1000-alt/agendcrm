@@ -1,3 +1,69 @@
+## 2026-08-26 — Fix HTTP 520 em massa + lentidao intermitente + badge "Problema" fantasma ✅
+
+### Sintomas em producao
+- Cloudflare retornando HTTP 520 ("origin sent malformed response, Retry-After: 60") em massa em varios endpoints simultaneos (`/api/me`, `/api/channels/service-health`, `/api/auth/super-admin/login`).
+- Login demora, sistema cai por breves janelas.
+- Mensagens do celular nao sincronizam em tempo real (webhook do microservico timeouta chegando no backend).
+- Conexoes "Conectado" apareciam com badge vermelho "Problema" mesmo funcionando.
+
+### Root cause (autonomous investigation com troubleshoot_agent, 10/10 steps)
+**Event loop starvation no scheduler.**
+`_process_ticket_auto_close` fazia `.to_list(500)` + `for t in tickets: async with httpx (10s timeout): ...` sequencial. Em pior caso 500 tickets × 10s = **5000s (83min) de I/O BLOQUEANTE** por company. Como Render sobia com 1 worker Uvicorn padrao e o scheduler compartilhava esse mesmo event loop, TODOS os requests HTTP ficavam enfileirados. Depois de 100s a Cloudflare desistia -> 520.
+
+Sintomas laterais:
+- Multiplos companies com tickets antigos amplificavam (3-5 companies * 500 tickets = horas).
+- Ticks de scheduler se sobrepunham (interval=60s mas tick durava minutos).
+- Health polling do frontend (30s) piorava a starvation.
+- Badge "Problema": endpoint `/connections/health` marcava `red` quando microservico nao respondeu com a instancia (deploy do microservico zerou memoria); nao distinguia "zumbi de verdade" de "so reiniciando".
+
+### Fix aplicado (4 mudancas cirurgicas)
+
+**1) Concorrencia + limite no auto-close** (`scheduler.py`)
+- `.to_list(500)` → `.to_list(50)` (pagina por tick, spread ao longo do tempo).
+- `for t in tickets: await httpx.post(...)` sequencial → `asyncio.gather` com `asyncio.Semaphore(10)`. Reduz 50 tickets de 500s pra ~50s no pior caso.
+- Interval do scheduler de 60s → 120s por default (reduz overlap).
+
+**2) Procfile com 2 workers Uvicorn** (`/app/backend/Procfile`)
+```
+web: uvicorn server:app --host 0.0.0.0 --port $PORT --workers 2 --timeout-keep-alive 75 --limit-concurrency 200
+```
+2 workers = 2x capacidade. Um pode servir requests enquanto o outro executa scheduler.
+**⚠️ Attention Render**: se o start command estiver configurado no dashboard do Render (nao Procfile), atualizar la manualmente.
+
+**3) Leader lock pro scheduler** (`server.py`)
+Com 2 workers, cada processo tentaria subir o scheduler → campanhas/reminders/auto-close DUPLICADOS. Adicionado lock atomico em `db.system_locks` com TTL de 5min e heartbeat a cada 60s. Apenas 1 worker vira leader; se o leader morrer o TTL expira e outro assume automaticamente. **Testado**: `worker A` pega o lock, `worker B` espera. Validado via curl direto.
+
+**4) Badge "Problema" mais honesto** (`channels_routes.py`)
+Quando o microservico nao reporta telemetria de uma instancia MAS o DB diz `connected`, agora mostra `yellow` "Atencao" com hint "Microservico pode estar reiniciando a sessao — aguarde ate 60s" em vez de `red` "Problema". Reduz falso alarme apos deploys do microservico.
+
+### Validacao
+- Backend restartou limpo. Log: `[startup] scheduler leader = agent-env-...:3243`.
+- Lock persistido no DB: `db.system_locks._id=scheduler_leader` com `expires_at` 5min a frente.
+- Curl `/api/auth/login` retorna access_token em <500ms.
+- Lint verde (backend + microservico).
+
+### Deploy necessario
+- **Backend**: SIM (schedular concorrente + leader lock + badge fix)
+- **Frontend**: NAO (backend agora manda `yellow` em vez de `red`; o card usa o que o backend manda)
+- **WhatsApp-service**: NAO
+- **Render config**: verificar se o start command do backend precisa ser atualizado manualmente para usar `--workers 2 --timeout-keep-alive 75 --limit-concurrency 200`. Se estava vazio, o Procfile deve ser lido automaticamente.
+
+### Impacto esperado apos deploy
+- HTTP 520 em massa desaparece (Cloudflare para de timeout-ar em 100s porque o worker nao trava mais).
+- Login volta pra sub-2s.
+- Mensagens do celular chegam em tempo real (webhook nao empilha mais).
+- Badge "Problema" so aparece quando ha real problema (nao apos reboot do microservico).
+
+### Arquivos tocados
+- `/app/backend/scheduler.py` (concorrencia + interval)
+- `/app/backend/server.py` (leader lock com heartbeat)
+- `/app/backend/routes/channels_routes.py` (badge "Atencao" em vez de "Problema")
+- `/app/backend/Procfile` (novo — Render start command)
+
+---
+
+
+
 ## 2026-08-19 — Fix mensagens do celular sumindo + historico importado com balao vazio ✅
 
 ### Sintomas reportados em producao

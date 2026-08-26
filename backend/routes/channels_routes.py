@@ -275,14 +275,32 @@ async def connections_health(
         h = raw.get(c["id"])
         if not h:
             # Microservico nao conhece essa instancia (nunca conectou ou
-            # redeploy zerou a memoria). Se o DB acha que esta conectada,
-            # eh um zumbi — vermelho.
-            out[c["id"]] = {
-                "level": "red" if c.get("status") == "connected" else "gray",
-                "status": "not_found",
-                "events": [],
-                "reconnects_24h": 0,
-            }
+            # redeploy zerou a memoria).
+            # 2026-08-26 — Antes marcava direto como 'red' (Problema) sempre
+            # que status='connected' + microservico nao respondeu com essa
+            # instancia. Isso gerava falso positivo em prod: toda conexao
+            # que voltava depois de um deploy do microservico aparecia como
+            # "Problema" mesmo estando conectada e recebendo msgs normal.
+            # Agora: se DB diz connected E o microservico esta online, a
+            # instancia possivelmente esta so re-iniciando as sessoes ->
+            # mostra 'yellow' (Atencao) com hint "reconectando", mais
+            # honesto e menos alarmista. Se o servico esta offline mesmo,
+            # cai em 'gray'.
+            if c.get("status") == "connected":
+                out[c["id"]] = {
+                    "level": "yellow",
+                    "status": "reconnecting",
+                    "events": [],
+                    "reconnects_24h": 0,
+                    "hint": "Microservico nao reportou telemetria desta instancia. Pode estar reiniciando a sessao — aguarde ate 60s.",
+                }
+            else:
+                out[c["id"]] = {
+                    "level": "gray",
+                    "status": "not_found",
+                    "events": [],
+                    "reconnects_24h": 0,
+                }
             continue
         if h.get("status") == "connected":
             idle = h.get("last_inbound_ago_ms")
