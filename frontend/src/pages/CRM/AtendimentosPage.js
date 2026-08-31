@@ -13,7 +13,7 @@ import {
 import { quotesAPI } from '../../services/api';
 import QuoteAttachModal from './QuoteAttachModal';
 import { QuoteEditor } from './OrcamentosPage';
-import { BotPausedBadge, BotPausedDot } from '../../components/BotPausedBadge';
+import { BotPausedBadge, BotPausedDot, BotToggleButton } from '../../components/BotPausedBadge';
 
 const STATUS_COLORS = {
   aberto: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Aberto' },
@@ -889,11 +889,27 @@ const AtendimentosPage = () => {
                 <p className="font-semibold text-sm text-slate-900 truncate flex items-center gap-1.5">
                   <span>{selectedTicket.client_registered_name || selectedTicket.customer_name}</span>
                   <span className="text-slate-400 font-normal">#{selectedTicket.ticket_number || selectedTicket.id.substring(0, 4)}</span>
-                  {selectedTicket.bot_paused && (
-                    <BotPausedBadge
+                  {/* 2026-08-31 — Toggle bot manual sempre visivel em tickets
+                      abertos com WhatsApp. Substitui a UX antiga (badge so
+                      aparecia se ja estava pausado). Permite ao atendente
+                      pausar preemptivamente antes de responder manualmente
+                      pra evitar bot responder por cima. */}
+                  {selectedTicket.channel === 'whatsapp' && selectedTicket.status !== 'fechado' && selectedTicket.status !== 'cancelado' && (
+                    <BotToggleButton
                       ticketId={selectedTicket.id}
+                      isPaused={!!selectedTicket.bot_paused}
                       reason={selectedTicket.bot_paused_reason}
-                      onResumed={() => loadData()}
+                      onChanged={async () => {
+                        // 2026-08-31 — Refetch imediato do ticket em vez
+                        // de esperar o poll de 4s. Antes chamavamos
+                        // loadData() que so atualiza a LISTA, fazendo o
+                        // header piscar ate o poll rodar.
+                        try {
+                          const r = await crmAPI.getTicket(selectedTicket.id);
+                          setSelectedTicket(r.data);
+                        } catch {}
+                        loadData();
+                      }}
                     />
                   )}
                 </p>

@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 66: validated Point 4 (manual bot pause/resume toggle in ticket header + POST /crm/tickets/{id}/bot-pause) and Point 2 (transient-error retry in add_message_to_ticket). Backend: 8/8 new tests pass (tests/test_iteration_66.py) covering pause/resume persistence, refetch, 404, auth, and the retry loop (transient retry -> success on attempt 2, 3-attempt exhaustion, non-transient fail-fast, healthy first-attempt, httpx ConnectError retry) with httpx.AsyncClient monkeypatched in-process. Regression suites test_bot_pause_api.py + test_manual_message_dedup_and_transfer.py: 12/12 pass. Frontend E2E on preview: login /crmtest/login -> ticket header shows green 'Pausar bot', window.confirm text correct, POST succeeds, toast 'Bot pausado.', header flips to amber 'Reativar bot' in ~1.2s, toggles back to 'Pausar bot', and button is absent (count 0) on a closed whatsapp ticket. No duplicate messages observed in retry paths (exactly 1 message doc, delivery_status=sent, wa_message_id from res.message_id).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Bot toggle state refresh", "issue": "BotToggleButton onChanged calls loadData() which only refreshes the ticket LIST, not selectedTicket. The header pill only flips because of the 4s ticket polling (observed ~1.2s in practice). Cleaner: onChanged should call crmAPI.getTicket(selectedTicket.id) and setSelectedTicket(r.data) for instant feedback.", "affected_selectors": ["[data-testid=\"bot-toggle-button\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "/crmtest/login", "issues": ["Toast 'Empresa nao encontrada' fires on the tenant login page for company CRM Test (doc has subdomain=crmtest but no slug field) even though login itself works — public company lookup likely queries only `slug`. Pre-existing, unrelated to this iteration, but visible to users."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_66.py",
+    "/app/backend/tests/test_bot_pause_api.py",
+    "/app/backend/tests/test_manual_message_dedup_and_transfer.py"
+  ],
+  "action_items": [
+    "Optional polish: make BotToggleButton onChanged refetch the selected ticket instead of relying on the 4s poll.",
+    "Optional: tenant login lookup should match `subdomain` as well as `slug` to avoid the 'Empresa nao encontrada' toast on /crmtest/login."
+  ],
+  "critical_code_review_comments": [
+    "routes/crm_routes.py add_message_to_ticket is very long and now embeds the retry loop inline; extract the WA send+retry into a helper (e.g. wa_dispatcher.send_with_retry) shared with send_media_to_ticket to avoid drift.",
+    "TRANSIENT_HINTS includes the broad token 'timeout'; a permanent upstream error message containing 'timeout' will consume 3 attempts (~3s added latency) on a blocking request. Acceptable, but consider capping total wall time.",
+    "Retry loop sleeps 1.5s inside a synchronous HTTP request handler; worst case the POST /messages call takes ~63s (3x30s httpx timeout + 3s sleep). Consider lowering per-attempt timeout for retries."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_66.py"],
+  "success_rate": {"backend": "100% (8/8 new, 12/12 regression)", "frontend": "100% (toggle pause/resume/absent-on-closed all pass)"},
+  "seed_data_creation": "Temporarily seeded whatsapp tickets named TEST_it66* (open + closed) and TEST_it66_conn_* channel_connections in company CRM Test; all deleted after the run (verified 0 leftovers).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "crm@test.com / crm123 at /crmtest/login (works)",
+  "context_for_next_testing_agent": "Points 2 and 4 verified end-to-end. Retry loop cannot be exercised via public HTTP (real WA service), so it is tested by calling routes.crm_routes.add_message_to_ticket directly with httpx.AsyncClient monkeypatched (see _FakeClient in test_iteration_66.py) — reuse this pattern. Points 3 and 5 of the user report are still pending implementation. company_users is the users collection; CRM Test company_id = c477e72c-5633-4b2f-a252-8068d167ad5a.",
+  "rca_of_the_issue": "N/A - no new defects found. Only nit: header state relies on the 4s selected-ticket poll because onChanged triggers loadData() (list only)."
+}

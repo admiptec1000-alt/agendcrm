@@ -533,6 +533,7 @@ async def sync_connection_with_remote(
     if not conn:
         raise HTTPException(status_code=404, detail="Conexao nao encontrada")
     if conn.get("type") != "whatsapp":
+        conn.pop("_id", None)
         return conn
 
     try:

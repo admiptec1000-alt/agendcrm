@@ -283,8 +283,10 @@ async def backfill_feature_keys(db):
     # relatorio_atendimentos feature.
     await db.business_types.update_many(
         {**SUPER_ADMIN_EXCLUSION,
-         "features.feature_key": "atendimentos",
-         "features.feature_key": {"$ne": "relatorio_atendimentos"}},
+         "$and": [
+             {"features.feature_key": "atendimentos"},
+             {"features.feature_key": {"$ne": "relatorio_atendimentos"}},
+         ]},
         {"$addToSet": {"features": {"feature_key": "relatorio_atendimentos", "enabled": True}}}
     )
     # Same for companies
@@ -296,8 +298,10 @@ async def backfill_feature_keys(db):
     # Quotes (orcamentos) for the same set
     await db.business_types.update_many(
         {**SUPER_ADMIN_EXCLUSION,
-         "features.feature_key": "atendimentos",
-         "features.feature_key": {"$ne": "orcamentos"}},
+         "$and": [
+             {"features.feature_key": "atendimentos"},
+             {"features.feature_key": {"$ne": "orcamentos"}},
+         ]},
         {"$addToSet": {"features": {"feature_key": "orcamentos", "enabled": True}}}
     )
     await db.companies.update_many(
@@ -358,8 +362,10 @@ async def backfill_feature_keys(db):
     # legacy "agenda" feature enabled. Default ENABLED=False so admins must opt-in.
     await db.business_types.update_many(
         {
-            "features.feature_key": "agenda",
-            "features.feature_key": {"$ne": "agenda_pro"},
+            "$and": [
+                {"features.feature_key": "agenda"},
+                {"features.feature_key": {"$ne": "agenda_pro"}},
+            ],
         },
         {
             "$addToSet": {
@@ -369,8 +375,10 @@ async def backfill_feature_keys(db):
     )
     await db.companies.update_many(
         {
-            "features.feature_key": "agenda",
-            "features.feature_key": {"$ne": "agenda_pro"},
+            "$and": [
+                {"features.feature_key": "agenda"},
+                {"features.feature_key": {"$ne": "agenda_pro"}},
+            ],
         },
         {
             "$addToSet": {

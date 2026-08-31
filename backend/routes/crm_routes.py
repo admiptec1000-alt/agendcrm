@@ -163,7 +163,7 @@ async def _ensure_user_can_use_connection(
 async def list_tickets(
     user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
-    status: str = None,
+    status: str = None,  # noqa: F811 — kwarg pra filtro; nao usa `fastapi.status`
     assigned_to: str = None,
     channel: str = None,
     search: str = None,
@@ -1204,29 +1204,76 @@ async def add_message_to_ticket(
             if ticket.get("pending_lid_resolution") and ticket.get("lid_jid"):
                 target_phone = ticket["lid_jid"]
             if conn_id:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(
-                        f"{wa_url}/instances/{conn_id}/send",
-                        json={"phone": target_phone, "message": outbound_content}
-                    )
+                # 2026-08-31 — Retry cirurgico p/ erros transientes do
+                # Baileys ("Not connected", "socket closed", timeouts).
+                # Cliente reporta em prod: envia mensagem manual e cai em
+                # "Not connected" mesmo com badge de conexao verde. Isso
+                # acontece quando o socket acabou de rotacionar (ex:
+                # reconexao silenciosa por rede instavel) e o Baileys ainda
+                # nao terminou o handshake. Uma segunda tentativa 1.5s
+                # depois pega quase sempre — sem retry, cai como failed e
+                # o operador precisa clicar "Reenviar" manual.
+                TRANSIENT_HINTS = (
+                    "not connected", "socket closed", "connection closed",
+                    "connection lost", "eof", "econnreset", "etimedout",
+                    "timeout", "closing", "not authenticated",
+                )
+                res = {}
+                resp = None
+                last_err = None
+                for _attempt in range(3):
                     try:
-                        res = resp.json()
-                    except Exception:
-                        res = {}
-                    if resp.status_code == 200 and res.get("success"):
-                        message["delivery_status"] = "sent"
-                        # 2026-08-14 — Baileys retorna {success, jid, message_id}. Antes
-                        # armazenavamos `jid` aqui por engano; isso quebrava (a) o dedup
-                        # estrito por wa_message_id no /webhook/message quando o echo
-                        # `messages.upsert` chegava e (b) a atualizacao de status via
-                        # /webhook/message-status (nunca casava o id). Resultado
-                        # observado em prod: mensagens do atendente duplicando na conversa
-                        # do cliente + ticks de entrega/leitura sempre presos.
-                        message["wa_message_id"] = res.get("message_id") or res.get("jid")
-                    else:
-                        message["delivery_status"] = "failed"
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            resp = await client.post(
+                                f"{wa_url}/instances/{conn_id}/send",
+                                json={"phone": target_phone, "message": outbound_content},
+                            )
+                        try:
+                            res = resp.json()
+                        except Exception:
+                            res = {}
+                        if resp.status_code == 200 and res.get("success"):
+                            break
+                        # Nao sucesso. Verifica se e transiente pra retry.
+                        _err_str = str(res.get("error") or resp.text or "").lower()
+                        is_transient = any(h in _err_str for h in TRANSIENT_HINTS)
+                        if not is_transient or _attempt == 2:
+                            break
+                        _log.info(
+                            f"[send] transient error ticket={ticket_id} "
+                            f"attempt={_attempt+1}/3 err={_err_str[:80]!r} — retrying in 1.5s"
+                        )
+                        import asyncio as _aio
+                        await _aio.sleep(1.5)
+                    except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as _tex:
+                        last_err = str(_tex)[:120]
+                        if _attempt == 2:
+                            break
+                        _log.info(
+                            f"[send] httpx {type(_tex).__name__} ticket={ticket_id} "
+                            f"attempt={_attempt+1}/3 — retrying in 1.5s"
+                        )
+                        import asyncio as _aio
+                        await _aio.sleep(1.5)
+                if resp is not None and resp.status_code == 200 and res.get("success"):
+                    message["delivery_status"] = "sent"
+                    # 2026-08-14 — Baileys retorna {success, jid, message_id}. Antes
+                    # armazenavamos `jid` aqui por engano; isso quebrava (a) o dedup
+                    # estrito por wa_message_id no /webhook/message quando o echo
+                    # `messages.upsert` chegava e (b) a atualizacao de status via
+                    # /webhook/message-status (nunca casava o id). Resultado
+                    # observado em prod: mensagens do atendente duplicando na conversa
+                    # do cliente + ticks de entrega/leitura sempre presos.
+                    message["wa_message_id"] = res.get("message_id") or res.get("jid")
+                else:
+                    message["delivery_status"] = "failed"
+                    if last_err:
+                        delivery_error = last_err
+                    elif resp is not None:
                         delivery_error = res.get("error") or f"HTTP {resp.status_code}: {resp.text[:80]}"
-                        _log.warning(f"WA send failed for ticket {ticket_id}: {delivery_error}")
+                    else:
+                        delivery_error = "sem resposta do microservico apos 3 tentativas"
+                    _log.warning(f"WA send failed for ticket {ticket_id}: {delivery_error}")
             else:
                 message["delivery_status"] = "failed"
                 delivery_error = "Nenhuma conexao WhatsApp ativa"
@@ -1479,7 +1526,7 @@ async def get_kanban(
     }
     
     for ticket in tickets:
-        status = ticket.get("status", TicketStatus.ABERTO)
+        status = ticket.get("status", TicketStatus.ABERTO)  # noqa: F811
         if status in kanban:
             kanban[status].append(ticket)
     
@@ -3338,7 +3385,7 @@ async def normalize_birth_dates(
 
     company_id = user["company_id"]
     cursor = db.clients.find(
-        {"company_id": company_id, "birth_date": {"$exists": True, "$ne": None, "$ne": ""}},
+        {"company_id": company_id, "birth_date": {"$exists": True, "$nin": [None, ""]}},
         {"_id": 0, "id": 1, "birth_date": 1},
     )
     converted = 0

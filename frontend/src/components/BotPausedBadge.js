@@ -54,6 +54,59 @@ export const BotPausedBadge = ({ ticketId, reason, onResumed }) => {
 };
 
 /**
+ * BotToggleButton — 2026-08-31. Botao explicito no header do ticket que
+ * permite ao atendente PAUSAR ou REATIVAR o bot manualmente a qualquer
+ * momento, independente do estado atual. Substitui a UX antiga onde so
+ * aparecia o badge quando o bot ja estava pausado — atendente precisava
+ * de um jeito de pausar preemptivamente pra evitar o bot responder por
+ * cima da conversa manual em curso. Reutiliza o endpoint /bot-pause.
+ */
+export const BotToggleButton = ({ ticketId, isPaused, reason, onChanged }) => {
+  const [busy, setBusy] = useState(false);
+  const toggle = async (e) => {
+    e?.stopPropagation?.();
+    if (busy) return;
+    const wantPaused = !isPaused;
+    const confirmMsg = wantPaused
+      ? 'Pausar o bot neste atendimento? Ele para de responder ate voce reativar.'
+      : 'Reativar o bot neste atendimento? O fluxo voltara a responder o cliente.';
+    if (!window.confirm(confirmMsg)) return;
+    setBusy(true);
+    try {
+      await api.post(`/crm/tickets/${ticketId}/bot-pause`, { paused: wantPaused });
+      toast.success(wantPaused ? 'Bot pausado.' : 'Bot reativado.');
+      onChanged?.(wantPaused);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Erro ao alternar bot.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const tooltip = isPaused
+    ? `Bot pausado (motivo: ${reason || 'manual'}). Clique para reativar.`
+    : 'Bot ativo. Clique para pausar e responder manualmente sem interferencia.';
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={busy}
+      title={tooltip}
+      data-testid="bot-toggle-button"
+      className={[
+        'inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold border transition-colors',
+        isPaused
+          ? 'bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-200'
+          : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100',
+        busy ? 'opacity-50 cursor-wait' : 'cursor-pointer',
+      ].join(' ')}
+    >
+      {isPaused ? <BotOff className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
+      <span>{isPaused ? 'Reativar bot' : 'Pausar bot'}</span>
+    </button>
+  );
+};
+
+/**
  * BotPausedDot — compact version used on the ticket card in the
  * conversation list. Just a small icon with tooltip; no click action.
  */

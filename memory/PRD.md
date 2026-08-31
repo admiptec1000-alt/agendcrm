@@ -1,3 +1,83 @@
+## 2026-08-31 — Retry cirurgico no envio + botao manual pausar/despausar bot ✅
+
+### Contexto
+5 inconsistencias reportadas em prod. Ponto 1 (msg auto apos encerramento)
+arquivado — o usuario confirmou que ticket fecha + nova conversa =
+comportamento correto. Nesta iteracao atacamos pontos 2 e 4. Pontos 3 e 5
+ficam pra proximas rodadas (3 precisa log de prod, 5 pede migracao).
+
+### Ponto 2 — Retry cirurgico p/ erros transientes no envio manual
+**Sintoma**: atendente clica enviar, badge da conexao esta verde, mas
+Baileys retorna "Not connected" e a mensagem cai como failed. Operador
+precisa clicar "Reenviar" manual. Acontece quando o socket acabou de
+rotacionar (reconexao silenciosa por rede instavel) e o handshake ainda
+nao estabilizou.
+
+**Fix (`crm_routes.add_message_to_ticket`)**: substituido o `await
+httpx.post` unico por um loop de ate 3 tentativas com pausa de 1.5s
+entre elas. Retry SO acontece se o erro parece transiente:
+- Match case-insensitive em `res.error` ou `resp.text` contra:
+  `"not connected"`, `"socket closed"`, `"connection closed"`,
+  `"connection lost"`, `"eof"`, `"econnreset"`, `"etimedout"`,
+  `"timeout"`, `"closing"`, `"not authenticated"`.
+- Erros nao transientes (ex: telefone invalido, mensagem malformada)
+  falham na primeira tentativa — fail fast.
+- httpx.TimeoutException / ConnectError / RemoteProtocolError tambem
+  disparam retry.
+
+Logs de retry incluem `[send] transient error ticket=... attempt=N/3
+err=...`. Sucesso na retry persiste normal com `wa_message_id` e
+`delivery_status="sent"` — sem duplicacao (message ja foi $push'ed
+antes do send, so o $set posicional muda o status).
+
+### Ponto 4 — Botao manual pausar/despausar bot no header do ticket
+**Contexto**: hoje o `bot_paused` so era setado automaticamente
+(deteccao de humano). Atendente que quer pausar preemptivamente pra
+responder manualmente sem interferencia nao tinha como. O
+`BotPausedBadge` so aparecia DEPOIS que o bot ja estava pausado.
+
+**Fix (frontend)**: novo componente `BotToggleButton` em
+`BotPausedBadge.js`. Sempre visivel no header do ticket para tickets
+whatsapp abertos:
+- Verde "Pausar bot" (icone Bot) quando `bot_paused=false`.
+- Amber "Reativar bot" (icone BotOff) quando `bot_paused=true`.
+- Confirm dialog antes de trocar.
+- Chama `POST /crm/tickets/{id}/bot-pause` (endpoint ja existia).
+- Refetch imediato do ticket apos toggle p/ header atualizar na hora.
+
+### Validacao
+- **testing_agent iteracao 66**: backend 8/8 novos testes (retry loop,
+  transient patterns, fail-fast, 3-attempt exhaustion, ConnectError
+  retry, pause/resume 200/404/auth) + 12/12 regressao pass. Frontend
+  E2E preview pass (toggle verde→amber→verde, ausente em ticket
+  fechado, sem duplicacao).
+- Backend restartou limpo, curl login OK.
+
+### Arquivos tocados
+- `/app/backend/routes/crm_routes.py` (retry loop no `add_message_to_ticket`)
+- `/app/frontend/src/components/BotPausedBadge.js` (novo `BotToggleButton`)
+- `/app/frontend/src/pages/CRM/AtendimentosPage.js` (header + refetch
+  imediato apos toggle)
+
+### Deploy necessario
+- **Backend**: SIM (retry no send)
+- **Frontend**: SIM (novo botao no header)
+- **WhatsApp-service**: NAO
+
+### Pendencias dos 5 pontos
+- **3** — Msg cliente sumindo *(precisa investigar log Baileys em prod)*
+- **5** — Multi-conexao por cliente *(opcao B: 2 tickets por conexao — mudanca de modelo + migracao)*
+
+### Observacoes do testing_agent
+- Extraia futuramente o send+retry como helper (`wa_dispatcher.send_with_retry`)
+  compartilhado com `send_media_to_ticket` — evita drift.
+- Pior caso do retry: ~63s (3×30s timeout + 2×1.5s sleep) por request.
+  Aceitavel dado o baixo throughput manual (1 msg/click), mas monitorar.
+
+---
+
+
+
 ## 2026-08-26 — Debug SGP consultacliente no Super-Admin (fix "Nao localizei contratos" NEXONET) ✅
 
 ### Contexto
