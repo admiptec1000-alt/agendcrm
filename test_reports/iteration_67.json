@@ -1,0 +1,34 @@
+{
+  "summary": "Backend-only retest of Ponto 5 (per-(company, phone, connection) ticket uniqueness) after the LID fallback fix. Created /app/backend/tests/test_iteration_67.py (9 tests) covering webhook per-connection isolation, from_me paused ticket, LID fallback both branches, group ticket keying, and the connection-aware duplicate guard on POST /api/crm/tickets. All 9 pass. Regression suites (test_manual_message_dedup_and_transfer, test_bot_pause_api, test_flow_engine_ticket_menu, test_iteration_66 = 28 tests) all pass. No blocking defects found; 2 consistency gaps flagged for review.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/crm/tickets/open-or-create (crm_routes.py ~398)", "issue": "Open-ticket lookup is NOT connection-scoped (matches by client_id/phone only). With Ponto 5 semantics, an operator working on connection B who opens a chat for a client that already has an open ticket on connection A will be dropped into A's ticket, mixing history — inconsistent with the webhook and POST /tickets behaviour."},
+      {"endpoint": "SGP gateway (sgp_gateway_routes.py ~362)", "issue": "Comment says 'Find an OPEN ticket for this number (same connection)' but the query has no connection_id filter; the gateway message can be appended to a ticket owned by a different connection while outbound is sent via gw['connection_id'] → mismatch between ticket owner and sending instance."},
+      {"endpoint": "POST /api/channels/webhook/message (LID fallback, channels_routes.py ~1327)", "issue": "By-design trade-off, verified empirically: the $or clause lets ANY open ticket in the tenant that has no connection_id and an outgoing in the last 5 min absorb an @lid inbound arriving on ANY connection. Reproduced (a manual no-connection ticket stole a LID inbound sent on a different connection). Acceptable for backward-compat but worth narrowing (e.g. also require matching push_name, or stamp connection_id on manual tickets at creation)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_67.py",
+    "/app/test_reports/pytest/pytest_results_it67.xml"
+  ],
+  "action_items": [
+    "Decide/align connection scoping for POST /api/crm/tickets/open-or-create (crm_routes ~398) — currently cross-connection.",
+    "Add connection_id filter to the SGP gateway open-ticket lookup (sgp_gateway_routes ~362) to match its own comment.",
+    "Optional: tighten LID fallback strategy 1 (no-connection tickets are matched tenant-wide)."
+  ],
+  "critical_code_review_comments": [
+    "channels_routes.py is 2293 lines — webhook_message alone spans ~300 lines; split webhook handling into a dedicated module for maintainability.",
+    "Verified duplicate-guard ordering in POST /api/crm/tickets: the 409 check runs BEFORE _ensure_user_can_use_connection, so a duplicate on a disconnected connection returns 409 (not 400). Consistent and intentional, but note in API docs.",
+    "Ticket responses correctly exclude Mongo _id (asserted in test)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_67.py"],
+  "success_rate": {"backend": "100% (37/37: 9 new + 28 regression)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "3 connected WhatsApp connections (TEST_it67_conn_A/B/C) inserted directly into channel_connections for the crmtest tenant, plus webhook/CRM-created tickets and clients. All TEST_it67_* records deleted in module teardown — verified 0 leftovers in tickets/channel_connections/clients/message_log.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "crm@test.com / crm123 (slug crmtest) — login OK, returns access_token",
+  "context_for_next_testing_agent": "test_iteration_67.py is self-cleaning and re-runnable. Note: the LID strategy-1 branch matches ANY tenant ticket without connection_id having a recent last_outgoing_at, so tests that seed such tickets must delete them before testing cross-connection isolation (already handled inside the file). Webhook payload keys: instance_id, phone, name, message, message_id, from_me, timestamp, is_group, group_jid, group_subject, lid_jid, is_lid.",
+  "rca_of_the_issue": "No product defect reproduced this iteration. Initial test failure was self-inflicted contamination: the previous test's manual (no connection_id) ticket with a recent outgoing absorbed the LID inbound via the intentionally broad $or clause — which itself confirms the documented backward-compat trade-off of the fix."
+}

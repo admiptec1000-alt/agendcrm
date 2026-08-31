@@ -1319,9 +1319,18 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         # conversation. We DROP the connection_id filter so this works even
         # for tickets created manually (which start without connection_id)
         # and only later receive their first outgoing message.
+        # 2026-08-31 (Ponto 5) — LID fallback tambem deve respeitar a
+        # conexao. Mas manualmente-criados comecam SEM connection_id ate
+        # o primeiro outgoing, entao aceitamos tanto ticket na mesma
+        # conexao QUANTO ticket sem conexao gravada ainda.
         win_5m = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
         fallback_ticket = await db.tickets.find_one({
             "company_id": company_id,
+            "$or": [
+                {"connection_id": instance_id},
+                {"connection_id": {"$in": [None, ""]}},
+                {"connection_id": {"$exists": False}},
+            ],
             "status": {"$nin": ["fechado"]},
             "last_outgoing_at": {"$gte": win_5m},
             "customer_phone": {"$ne": phone},
@@ -1382,9 +1391,22 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             )
             return {"ok": True, "ignored": "group_owned_by_other_connection"}
     else:
+        # 2026-08-31 (Ponto 5) — Cliente pode ter tickets ABERTOS em varias
+        # conexoes diferentes ao mesmo tempo (ex: mesmo numero conversando
+        # com comercial E financeiro). Antes, o filtro batia so por
+        # customer_phone e retornava QUALQUER ticket aberto do cliente na
+        # empresa, ainda que na conexao ERRADA — a mensagem do cliente pra
+        # conexao B acabava caindo no ticket da conexao A, misturando
+        # historico e disparando o bot da A quando o cliente falou com B.
+        # Fix: filtro agora exige connection_id = instance_id. Se nao
+        # existe ticket aberto NESSA conexao, cai no fluxo de criacao de
+        # novo ticket la em baixo — resulta em 1 ticket por (empresa,
+        # telefone, conexao). Fluxo do fallback_ticket (LID) continua
+        # ok porque ele ja carrega o instance_id correto da resolucao.
         ticket = fallback_ticket or await db.tickets.find_one({
             "company_id": company_id,
             "customer_phone": phone,
+            "connection_id": instance_id,
             "channel": {"$ne": "whatsapp_group"},
             "status": {"$nin": ["fechado"]}
         })

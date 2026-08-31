@@ -391,6 +391,10 @@ async def open_ticket_for_client(
     digits_only = re.sub(r"\D", "", phone) if phone else ""
 
     # Find an open ticket by client_id OR by phone (digits-only OR raw).
+    # 2026-08-31 (Ponto 5) — Se o payload trouxer connection_id, escopa a
+    # busca pra mesma conexao. Mesmo cliente em conexao diferente vira
+    # ticket novo (comportamento coerente com POST /tickets e webhook).
+    conn_id_payload = (payload.get("connection_id") or "").strip() or None
     candidates_or = []
     if client_id:
         candidates_or.append({"client_id": client_id})
@@ -400,15 +404,15 @@ async def open_ticket_for_client(
         candidates_or.append({"customer_phone": phone})
     ticket = None
     if candidates_or:
-        ticket = await db.tickets.find_one(
-            {
-                "company_id": company_id,
-                "status": {"$nin": ["fechado", "cancelado"]},
-                "channel": {"$ne": "whatsapp_group"},
-                "$or": candidates_or,
-            },
-            {"_id": 0},
-        )
+        _find_query = {
+            "company_id": company_id,
+            "status": {"$nin": ["fechado", "cancelado"]},
+            "channel": {"$ne": "whatsapp_group"},
+            "$or": candidates_or,
+        }
+        if conn_id_payload:
+            _find_query["connection_id"] = conn_id_payload
+        ticket = await db.tickets.find_one(_find_query, {"_id": 0})
 
     if not ticket:
         # Pick first connected WhatsApp connection (or first one if none
@@ -532,21 +536,32 @@ async def create_ticket(
     # The match is digits-only so "5511999..." and "(55) 11 999..." are
     # treated as the same person. Group tickets are excluded — they're
     # keyed by group_jid, not by individual phone.
+    # 2026-08-31 (Ponto 5) — Duplicidade agora e apurada por (tenant,
+    # telefone, connection_id). Mesmo cliente pode ter ticket aberto na
+    # conexao "Comercial" E "Financeiro" ao mesmo tempo — 2 tickets
+    # independentes com atendentes/bots/historicos separados. Antes so
+    # cortavamos por (tenant, telefone) e o segundo setor recebia 409.
     digits_phone = re.sub(r"\D", "", data.customer_phone or "")
     if digits_phone and not data.force_create:
         candidates_or = [{"customer_phone": digits_phone}]
         if data.customer_phone and data.customer_phone != digits_phone:
             candidates_or.append({"customer_phone": data.customer_phone})
+        dup_query = {
+            "company_id": user["company_id"],
+            "status": {"$nin": ["fechado", "cancelado"]},
+            "channel": {"$ne": "whatsapp_group"},
+            "$or": candidates_or,
+        }
+        # So considera duplicata se for na MESMA conexao. Sem
+        # connection_id na criacao, mantem o comportamento antigo (corta
+        # em qualquer conexao) — protege tickets manuais sem canal.
+        if data.connection_id:
+            dup_query["connection_id"] = data.connection_id
         existing = await db.tickets.find_one(
-            {
-                "company_id": user["company_id"],
-                "status": {"$nin": ["fechado", "cancelado"]},
-                "channel": {"$ne": "whatsapp_group"},
-                "$or": candidates_or,
-            },
+            dup_query,
             {"_id": 0, "id": 1, "ticket_number": 1, "customer_name": 1,
              "customer_phone": 1, "status": 1, "assigned_to": 1,
-             "updated_at": 1},
+             "connection_id": 1, "updated_at": 1},
         )
         if existing:
             # 409 Conflict — frontend reads `detail.existing_ticket` to offer
@@ -555,7 +570,7 @@ async def create_ticket(
                 status_code=409,
                 detail={
                     "code": "duplicate_open_ticket",
-                    "message": f"Já existe um atendimento aberto (#{existing.get('ticket_number')}) para o telefone {data.customer_phone}.",
+                    "message": f"Já existe um atendimento aberto (#{existing.get('ticket_number')}) para o telefone {data.customer_phone} nesta conexão.",
                     "existing_ticket": existing,
                 },
             )

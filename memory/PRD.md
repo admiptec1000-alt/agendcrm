@@ -1,3 +1,76 @@
+## 2026-08-31 (b) — Ponto 5: multi-conexao por cliente ✅
+
+### Sintoma que motivou
+Cliente reportou que mesmo numero conversando com 2 conexoes diferentes
+(comercial + financeiro) caia no MESMO ticket, misturando historicos e
+disparando bot cruzado. Tambem apontou o Ponto 1 REFORMULADO: bot
+mandava mensagem sem cliente ter contatado — cenario provavel de mistura
+via mesmo telefone entre conexoes.
+
+### Fix (Ponto 5 = opcao B do usuario)
+Chave de dedupacao de ticket agora e **(company_id, customer_phone,
+connection_id)**. 4 pontos alinhados:
+
+**1) Webhook `POST /api/channels/webhook/message`** (`channels_routes.py`
+~1400): busca de ticket existente adiciona `connection_id: instance_id`.
+Cliente falando em conexao B cria ticket B separado, mesmo tendo ticket
+A aberto.
+
+**2) LID fallback strategy 1** (`channels_routes.py` ~1323): filtro por
+conexao com `$or` que aceita: (a) mesma conexao, (b) ticket manual sem
+connection_id ainda. Sem o `$or`, tickets criados manualmente (que so
+recebem connection_id apos 1o outgoing) quebrariam pra LID.
+
+**3) `POST /api/crm/tickets`** (`crm_routes.py` ~535): `dup_query`
+inclui `connection_id` quando payload traz. 3 tickets pra mesmo cliente
+em 3 conexoes = 201/201/201. Mesma conexao 2x = 409. Payload sem
+connection_id mantem checagem cross-connection (backcompat).
+
+**4) `POST /crm/tickets/open-or-create`** (`crm_routes.py` ~398):
+mesma logica — se payload traz `connection_id`, escopa a busca.
+
+**5) SGP gateway** (`sgp_gateway_routes.py` ~362): comentario ja dizia
+"same connection" mas query nao filtrava. Corrigido — mensagens do
+gateway agora respeitam a conexao do proprio gateway.
+
+### Testes
+`test_iteration_67.py` (novo, criado pelo testing_agent) — 9 testes:
+- Webhook per-conexao isolation (2 tickets)
+- 2o inbound reusa mesma conexao
+- from_me=true cria paused sem cruzar conexao
+- LID fallback pega manual sem connection_id
+- LID nao cruza conexoes
+- Group ticket ainda usa group_jid
+- Duplicate guard connection-scoped
+- Unknown connection 404
+- Auth obrigatoria
+
+**Resultado**: 37/37 pass (9 novos + 28 regressao =
+test_manual_message_dedup_and_transfer, test_bot_pause_api,
+test_flow_engine_ticket_menu, test_iteration_66). Backend restart
+limpo, curl login OK.
+
+### Ponto 1 (reformulado) — investigacao
+Sem log de prod nao consigo cravar. Mas o fix do Ponto 5 elimina o
+cenario mais provavel: msg do cliente em conexao B entrando no
+ticket A e disparando o bot da A. Se apos deploy o sintoma persistir,
+preciso de trecho do log Baileys.
+
+### Deploy necessario
+- **Backend**: SIM
+- **Frontend**: NAO (comportamento server-side)
+- **WhatsApp-service**: NAO
+
+### Arquivos tocados
+- `/app/backend/routes/channels_routes.py` (webhook + LID fallback)
+- `/app/backend/routes/crm_routes.py` (POST /tickets + open-or-create)
+- `/app/backend/routes/sgp_gateway_routes.py` (gateway lookup)
+- `/app/backend/tests/test_iteration_67.py` (novo, 9 testes)
+
+---
+
+
+
 ## 2026-08-31 — Retry cirurgico no envio + botao manual pausar/despausar bot ✅
 
 ### Contexto

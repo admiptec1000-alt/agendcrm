@@ -360,10 +360,14 @@ async def _handle_send(
 
     # Find an OPEN ticket for this number (same connection). Reuse to keep
     # a single conversation thread per contact.
+    # 2026-08-31 (Ponto 5) — Alinhado ao webhook + POST /tickets: filtra
+    # por connection_id do gateway pra nao mesclar historicos entre
+    # conexoes diferentes do mesmo tenant.
     ticket = await db.tickets.find_one(
         {
             "company_id": company_id,
             "customer_phone": phone,
+            "connection_id": gw["connection_id"],
             "status": {"$nin": ["fechado", "cancelado"]},
             "channel": {"$ne": "whatsapp_group"},
         },
