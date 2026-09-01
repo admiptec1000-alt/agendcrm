@@ -159,7 +159,10 @@ def _get_ticket(db, event_loop, tid):
 def _manual_close_msgs(ticket):
     return [
         m for m in (ticket.get("messages") or [])
-        if m.get("system") is True and m.get("reason") == "manual_close"
+        # 2026-09-01 — schema padronizado em 2026-08-14 usa `source`;
+        # aceita ambos pra nao dar falso negativo no legado.
+        if m.get("system") is True
+        and "manual_close" in (m.get("reason"), m.get("source"))
     ]
 
 

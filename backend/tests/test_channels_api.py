@@ -8,7 +8,8 @@ import requests
 import os
 from datetime import datetime, timedelta
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
+from dotenv import dotenv_values as _dv
+BASE_URL = (os.environ.get('REACT_APP_BACKEND_URL') or _dv('/app/frontend/.env').get('REACT_APP_BACKEND_URL', '')).rstrip('/')
 
 # Test credentials for Boss company
 BOSS_EMAIL = "admin@boss.com.br"

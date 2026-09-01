@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 68 — backend-only validation of webhook idempotence (unique index (connection_id, message_id) on message_log + insert-first lock in POST /api/channels/webhook/message). Created /app/backend/tests/test_iteration_68.py (6 tests): 3x sequential same msg_id, 5x TRULY parallel (httpx.gather) same msg_id, distinct msg_ids appending to same ticket, same msg_id/different phones, payload without message_id, and index presence/shape. CRITICAL FINDING on first run: ALL 6 tests failed because the unique index did NOT exist in the DB — db.message_log.create_index() raises DuplicateKeyError ('Index build failed ... dup key: {connection_id: ..., message_id: WAMID-T1}') due to PRE-EXISTING duplicate rows in message_log, and the code swallows it with `except Exception: pass`. So the anti-duplication fix was silently INACTIVE: 5 parallel webhooks wrote 5 message_log rows and the only dedup happening was the older existing-ids check inside the ticket-append branch (returns {'ok':true,'duplicate':true} WITHOUT reason='message_id_seen'), which does NOT protect the ticket-creation + flow-trigger path (exactly the prod bug). After I removed the 7 stale duplicate rows (leftovers from April/May test runs on connection 12717d59) the index built and all 6 tests pass: 3 identical webhooks -> exactly 1 ticket, 1 inbound msg, 1 message_log row, 1 flow_send_log entry (flow triggered once), calls 2&3 return {'ok':true,'duplicate':true,'reason':'message_id_seen'}; 5 parallel -> 4 duplicates, 1 ticket, 1 log row, 1 flow trigger. Regression: iteration_67 (9) + iteration_66 (8) + iteration_62 (13) + channels_api (20) = all pass (33 in the combined it68 run).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/channels/webhook/message (channels_routes.py ~1262-1286)",
+        "issue": "The dedup fix is silently disabled on ANY database that already contains duplicate (connection_id, message_id) rows in message_log — create_index() raises DuplicateKeyError and is swallowed by `except Exception: pass`, so no unique index exists and every subsequent insert succeeds => webhook remains NON-idempotent (N tickets / N flow triggers possible). Production is exactly such a DB (the reported bug means dup rows already exist there), so deploying as-is will NOT fix the '5-7x Bem vindo' bug. Needs: (1) one-time migration that dedupes existing (connection_id, message_id) rows, (2) create the index at STARTUP with the failure LOGGED (not swallowed), (3) ideally a dedicated dedup collection (e.g. `_id = connection_id + ':' + message_id`, TTL 7d) so it can never be blocked by legacy data, plus a defensive find_one pre-check as fallback.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/channels/webhook/message (channels_routes.py ~1264)",
+        "issue": "create_index() is executed on EVERY inbound webhook (extra round-trip per message; on a DB with dup rows it throws an exception per request). Should run once at app startup / cached module-level flag."
+      },
+      {
+        "endpoint": "PATCH /api/crm/tickets/{id} manual-close (crm_routes.py ~730-770)",
+        "issue": "The ticket message persist is INSIDE the same try as the httpx send; if the WA microservice raises, the outbound close message is never recorded on the ticket (flow_engine persists regardless). Also the message is persisted even when the microservice answers HTTP 400 (observed status=400 in logs, delivery_status hardcoded 'sent')."
+      },
+      {
+        "endpoint": "message_log collection",
+        "issue": "No TTL / retention on message_log; it will grow unbounded and now carries a unique index whose build can be blocked by legacy dup data."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_68.py",
+    "/app/test_reports/pytest/iteration_68_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: add a startup migration that removes duplicate (connection_id, message_id) documents from message_log and then creates 'uniq_conn_msgid' once, logging any failure — otherwise the idempotence fix stays inactive in production.",
+    "Move create_index out of the per-request webhook path (startup event or module-level once flag) and stop swallowing the exception silently.",
+    "Consider a dedicated dedup store (webhook_dedup with _id=connection_id:message_id + TTL) instead of relying on a unique index over the historical message_log.",
+    "Optional: persist the manual-close message even when the WA send fails, and set delivery_status based on the microservice response."
+  ],
+  "critical_code_review_comments": [
+    "`except Exception: pass` around create_index hides the exact failure that makes the whole idempotence fix a no-op — this is the difference between 'bug fixed' and 'bug still in prod'.",
+    "Dedup semantics verified: index is (connection_id, message_id), so the same msg_id arriving for a DIFFERENT phone on the SAME connection is dropped as duplicate. Impossible in real WhatsApp traffic, but should be documented/monitored (the drop happens before any ticket work and returns 200)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_68.py",
+    "/app/backend/tests/test_iteration_62_close_cooldown.py",
+    "/app/backend/tests/test_channels_api.py"
+  ],
+  "success_rate": {"backend": "100% (6/6 it68 + 27/27 regression) AFTER manually removing 7 legacy duplicate message_log rows; 33% (2/6) before, with the fix inactive", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "TEST_it68_conn_* channel_connections + TEST_it68_flow_* flow_builders + tickets/clients/message_log/flow_send_log for TEST_it68_* — all removed by the module fixture teardown. Also deleted 7 stale duplicate message_log rows (April/May artifacts on connection 12717d59) that were blocking the unique index build.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "crm@test.com / crm123 (tenant crmtest, company_id c477e72c-5633-4b2f-a252-8068d167ad5a)",
+  "context_for_next_testing_agent": "test_iteration_68.py is self-cleaning and re-runnable; it asserts index presence (TestIndexPresence) which is the canary for 'is the fix actually active'. If it fails, run the aggregation on message_log grouping by (connection_id, message_id) with n>1 — legacy dups block the index build. Two other suites were repaired (test_channels_api.py BASE_URL fallback to /app/frontend/.env; test_iteration_62 helper now accepts both `reason` and `source` == manual_close). Fixed test fixtures were pre-existing stale assertions, not product regressions. WA microservice is up but returns 400 for fake connection ids, which is fine for these tests (flow_send_log pre_send rows are written before the send).",
+  "rca_of_the_issue": "Prod symptom (bot greeting sent 5-7x) is caused by N webhooks for the same message_id all reaching the ticket-creation branch and each firing default_flow. The implemented fix (unique index on message_log(connection_id, message_id) + insert-as-lock) is correct in principle and verified working once the index exists, but create_index is invoked per-request and wrapped in a bare `except Exception: pass`; on any DB already containing duplicate rows (i.e. production, and this preview DB before my cleanup) the build fails with E11000 and the index never gets created, so DuplicateKeyError never fires and the webhook stays non-idempotent. Mitigation: dedupe legacy rows via migration then create the index at startup with error logging, or move dedup to a fresh dedicated collection."
+}

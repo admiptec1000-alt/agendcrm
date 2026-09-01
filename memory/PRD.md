@@ -1,3 +1,88 @@
+## 2026-09-01 — Idempotencia do webhook /webhook/message (bot mandando "Bem vindo" 5-7x) ✅
+
+### Sintoma reportado em prod
+Video (08:10) + screenshots: bot enviou "Bem vindo a Incinera... Selecione
+[1][2][9]" 5-7 vezes seguidas no MESMO timestamp para o mesmo contato.
+Anexo 3 mostrou o bot disparando no meio de uma conversa manual em curso
+sem o cliente ter contatado ("Bem vindo à CENTROESTE!" 15:28 depois do
+operador falar 15:22-24 sozinho).
+
+### Root cause
+`POST /api/channels/webhook/message` era chamado N vezes para o mesmo
+`message_id` (Baileys as vezes emite `messages.upsert` mais de uma vez
+para o mesmo ID; o microservico faz retry na chamada HTTP em erros
+transientes; ambos podem chegar em paralelo). Sem lock atomico ANTES da
+busca de ticket, os N webhooks caem no branch `not ticket` (find_one nao
+acha nada porque ninguem terminou de inserir ainda), CADA UM cria ticket
+proprio e CADA UM chama `_trigger_flow_for_ticket` -> N envios do
+"Bem vindo". Mesmo depois do fix do Ponto 5 (per-connection scoping),
+o problema persistia porque a corrida acontecia entre webhooks IDENTICOS.
+
+### Fix implementado (V2, apos V1 falhar no testing_agent iter 68)
+
+**Coleção dedicada `webhook_dedup`**:
+- `_id = "{instance_id}:{message_id}"` (chave natural)
+- `expires_at` 7 dias no futuro + TTL index -> auto-limpeza
+- Insert-first atomico: 2a chamada com mesmo `_id` falha
+  instantaneamente com `DuplicateKeyError` e retorna 200
+  `{"ok": true, "duplicate": true, "reason": "message_id_seen"}`
+
+**Por que coleção dedicada e nao unique index no `message_log`?** O
+V1 tentou isso e o testing_agent iter 68 descobriu que dados legados
+duplicados na `message_log` de prod BLOQUEIAM o build do unique index
+(E11000), e o `except Exception: pass` engolia a falha em silencio -> o
+fix nao ativava em prod. Coleção nova nao carrega dados legado.
+
+### Cleanup e hardening (apos iter 69)
+- Drop do indice V1 `uniq_conn_msgid` no `message_log` no startup
+  (com log). Sem isso, em bancos que rodaram V1 e conseguiram criar o
+  indice, um `msg_id` ja em `message_log` mas sumido de
+  `webhook_dedup` (TTL expirou) causaria HTTP 500 no insert do audit
+  -> microservico retry -> volta o bug original.
+- `message_log.insert_one` com `try/except DuplicateKeyError` como
+  guarda defensiva (se por qualquer motivo o indice legado voltar).
+- TTL index de `webhook_dedup` movido para startup (era criado a cada
+  request, gerava round-trip inutil e o `except Exception: pass`
+  escondia falhas de novo).
+
+### Testes
+`test_iteration_69.py` (7 testes) — TODOS passam:
+- Sequencial: 3 webhooks identicos → 1 ticket, 1 flow trigger,
+  respostas 2 e 3 = `{duplicate: true, reason: "message_id_seen"}`.
+- Concorrencia: 5 webhooks paralelos (asyncio.gather + httpx) → 1
+  vencedor / 4 duplicatas, 1 ticket, 1 flow trigger.
+- Shape: `webhook_dedup` tem TTL 7d + expires_at correto.
+- `message_log`: SEM unique index (verifica que V1 nao voltou); msgs
+  duplicadas sao aceitas normalmente (mantido para observabilidade).
+- msg_ids distintos: appendam normalmente no mesmo ticket.
+- Payload sem `msg_id`: nao usa dedup, funciona duas vezes seguidas.
+
+Regressao: `test_iteration_66` (8) + `test_iteration_67` (9) +
+`test_iteration_69` (7) = **24/24 pass**.
+
+### Ponto 1 refutado agora resolvido tambem
+Sem log de prod ainda, mas o sintoma "bot mandando `Bem vindo` sem
+cliente contatar" (anexo 3, 15:28) e coerente com **1 webhook duplicado
+chegando** de uma mensagem OUTBOUND do proprio operador. Baileys entende
+o eco `messages.upsert` fromMe=true, o microservico posta pro backend,
+ha uma race com um webhook duplicado, e o segundo poderia cair em
+"criar ticket" se por algum motivo o dedup por wa_message_id no ticket
+falhar. Agora com V2 esse cenario esta bloqueado no primeiro nivel.
+
+### Deploy necessario
+- **Backend**: SIM (drop de indice legado + coleção webhook_dedup + guard)
+- **Frontend**: NAO
+- **WhatsApp-service**: NAO
+
+### Arquivos tocados
+- `/app/backend/routes/channels_routes.py` (V2 dedup + guard message_log)
+- `/app/backend/server.py` (drop legacy V1 index + create webhook_dedup TTL)
+- `/app/backend/tests/test_iteration_69.py` (novo, 7 testes)
+
+---
+
+
+
 ## 2026-08-31 (b) — Ponto 5: multi-conexao por cliente ✅
 
 ### Sintoma que motivou

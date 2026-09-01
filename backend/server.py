@@ -616,6 +616,24 @@ async def startup_event():
         # Histograma de mensagens raramente eh necessario na listagem; o
         # projection `messages: 0` ja basta. Index extra nao ajuda.
         logger.info("[startup] tickets indexes ensured")
+
+        # 2026-09-01 — Cleanup do indice legado V1 no message_log +
+        # setup do TTL index no webhook_dedup (V2 de dedup). Feito 1x
+        # no startup ao inves de por-request pra nao gerar round-trip.
+        try:
+            existing_msg_log_ix = await db.message_log.index_information()
+            if "uniq_conn_msgid" in existing_msg_log_ix:
+                await db.message_log.drop_index("uniq_conn_msgid")
+                logger.info("[startup] dropped legacy V1 unique index 'uniq_conn_msgid' on message_log")
+        except Exception as e:
+            logger.warning(f"[startup] could not drop legacy uniq_conn_msgid: {e}")
+        try:
+            await db.webhook_dedup.create_index(
+                "expires_at", expireAfterSeconds=0, name="ttl_expires_at"
+            )
+            logger.info("[startup] webhook_dedup TTL index ensured")
+        except Exception as e:
+            logger.warning(f"[startup] failed to ensure webhook_dedup TTL index: {e}")
     except Exception as e:
         logger.warning(f"[startup] failed to ensure tickets indexes: {e}")
     # Start WhatsApp keep-alive background loop (Render free tier wake-up)

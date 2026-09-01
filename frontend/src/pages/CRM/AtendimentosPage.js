@@ -404,7 +404,7 @@ const AtendimentosPage = () => {
         } else {
           toast.success('Arquivo enviado');
         }
-        loadMessages(selectedTicket.id);
+        loadData();
       } catch (err) {
         toast.error(err.response?.data?.detail || 'Erro ao enviar arquivo');
       }
@@ -441,7 +441,7 @@ const AtendimentosPage = () => {
             } else {
               toast.success('Audio enviado');
             }
-            loadMessages(selectedTicket.id);
+            loadData();
           } catch {
             toast.error('Erro ao enviar audio');
           }
@@ -1248,7 +1248,7 @@ const AtendimentosPage = () => {
                     <MessageActionsMenu
                       msg={msg}
                       ticketId={selectedTicket.id}
-                      onChanged={() => loadMessages(selectedTicket.id)}
+                      onChanged={() => loadData()}
                     />
                   )}
                   {msg.type === 'document' && msg.attachment_kind === 'quote_pdf' && (

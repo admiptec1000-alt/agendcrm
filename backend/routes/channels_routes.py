@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 from database import get_database
 from auth import get_current_user
 from pydantic import BaseModel
@@ -1246,15 +1247,70 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             )
             return {"ok": True, "ignored": "older_than_sync_window"}
 
-    # Log incoming message (raw)
-    await db.message_log.insert_one({
-        "id": str(uuid.uuid4()), "company_id": company_id, "connection_id": instance_id,
-        "direction": "outgoing" if from_me else "incoming",
-        "phone": phone, "sender_name": data.get("name"),
-        "message": text, "message_id": msg_id,
-        "from_me": from_me,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    })
+    # 2026-09-01 — Dedup atomico por (instance_id, message_id) ANTES de
+    # criar ticket / trigger flow. Sintoma reportado em prod (video
+    # 08:10): "Bem vindo... Selecione [1][2][9]" mandado 5-7x em rajada
+    # no MESMO timestamp. Causa raiz: webhook chegando N vezes pro mesmo
+    # msg_id (Baileys emitindo message.upsert em duplicidade, ou o
+    # microservico fazendo retry no POST), sem ticket ainda existente ->
+    # cada request cai no "criar ticket + trigger flow", resultando em
+    # N envios do bot.
+    #
+    # V2 (2026-09-01, apos testing_agent iter 68 achar que a v1 estava
+    # inativa em prod por causa de rows duplicadas legadas na
+    # message_log bloqueando o create_index): coleção dedicada
+    # `webhook_dedup` com `_id = "conn:msgid"` — inserção com upsert=False
+    # falha instantaneamente na segunda tentativa via DuplicateKeyError.
+    # Não depende de nada existente no banco, TTL de 7d por
+    # `expires_at` garante que a collection não cresça sem limite.
+    # Índice unique já vem "de graça" no _id.
+    if msg_id:
+        dedup_id = f"{instance_id}:{msg_id}"
+        now_utc = datetime.now(timezone.utc)
+        # NOTA: o TTL index de webhook_dedup e criado no startup (server.py),
+        # nao aqui — remove um round-trip por webhook e nao esconde falhas.
+        try:
+            await db.webhook_dedup.insert_one({
+                "_id": dedup_id,
+                "connection_id": instance_id,
+                "message_id": msg_id,
+                "phone": phone,
+                "from_me": from_me,
+                "seen_at": now_utc,
+                "expires_at": now_utc + timedelta(days=7),
+            })
+        except DuplicateKeyError:
+            logger.info(
+                f"[webhook] duplicate msg_id={msg_id} instance={instance_id[:8]} — "
+                f"dropping (already seen; dedup key={dedup_id})"
+            )
+            return {"ok": True, "duplicate": True, "reason": "message_id_seen"}
+
+    # Log incoming message (raw). Sem unique index — mantido para
+    # observabilidade/auditoria; o dedup verdadeiro está na coleção
+    # webhook_dedup acima.
+    # 2026-09-01 (V2.1) — Guard try/except DuplicateKeyError: em bancos
+    # onde a V1 chegou a criar o índice `uniq_conn_msgid` (unique), um
+    # msg_id que já existe na message_log MAS não está mais no
+    # webhook_dedup (TTL expirou, ou banco pre-deploy) causaria HTTP 500,
+    # levando o microservice a retry e amplificando o bug original.
+    # A msg já foi contabilizada no webhook_dedup — audit fica sem essa
+    # entrada, ok.
+    try:
+        await db.message_log.insert_one({
+            "id": str(uuid.uuid4()), "company_id": company_id, "connection_id": instance_id,
+            "direction": "outgoing" if from_me else "incoming",
+            "phone": phone, "sender_name": data.get("name"),
+            "message": text, "message_id": msg_id,
+            "from_me": from_me,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+    except DuplicateKeyError:
+        logger.warning(
+            f"[webhook] message_log has stale unique index; audit insert skipped "
+            f"for msg_id={msg_id} instance={instance_id[:8]}. "
+            f"Startup should drop index 'uniq_conn_msgid'."
+        )
 
     # 2026-02-28 — Bulk opt-out detection: scope LIGHTWEIGHT pra nao
     # impactar latencia do inbound. Roda com timeout curto e isolado;
