@@ -477,6 +477,14 @@ const AtendimentosPage = () => {
       setMessageInput(text);
     } finally {
       setSending(false);
+      // 2026-09-02 — Retorna o foco pro input apos envio. Agora o input
+      // NAO usa mais `disabled={sending}` (removido em cima), entao
+      // focus() nunca cai em elemento disabled. Ainda usamos rAF pra
+      // esperar o React repintar caso o loadData disparado abaixo
+      // provoque reconciliation.
+      requestAnimationFrame(() => {
+        try { messageInputRef.current?.focus(); } catch {}
+      });
     }
   };
 
@@ -1540,8 +1548,14 @@ const AtendimentosPage = () => {
                   placeholder={withSignature ? "Digite uma mensagem (use / para respostas rapidas)" : "Digite uma mensagem (use / para respostas rapidas)"}
                   className="w-full px-4 py-2.5 bg-slate-50 rounded-full border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                   data-testid="message-input"
-                  disabled={sending}
                 />
+                {/* 2026-09-02 — REMOVIDO `disabled={sending}` do input. A
+                    protecao contra doubleclick ja esta no guarda
+                    `if (sending) return` dentro de handleSendMessage.
+                    Manter disabled durante o request perdia o foco
+                    porque focus() em elemento disabled e no-op no
+                    browser. Sem esse disabled o cursor fica piscando
+                    normalmente enquanto a msg viaja. */}
                 {/* 2026-02-28 — Popover de Respostas Rapidas (aparece quando
                     o input comeca com `/`). Posiciona logo acima do input. */}
                 {quickMenuOpen && filteredQuick.length > 0 && (
@@ -1611,8 +1625,21 @@ const AtendimentosPage = () => {
                   </div>
                 )}
               </div>
-              {messageInput.trim() ? (
-                <button onClick={handleSendMessage} disabled={sending} className="p-2.5 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50" data-testid="send-message-btn">
+              {/* 2026-09-02 — Mantem o botao SEND montado tambem quando
+                  `sending=true`. Antes, apos disparar o send, `setMessageInput('')`
+                  esvaziava o input imediatamente e o botao send unmount →
+                  entrava mic no lugar → clique acidental durante o in-flight
+                  poderia INICIAR gravacao de audio. Agora, enquanto o
+                  request esta em voo, o botao send fica visivel com
+                  opacity-50 (disabled) e nao ha swap com o mic. */}
+              {(messageInput.trim() || sending) ? (
+                <button
+                  onClick={handleSendMessage}
+                  onMouseDown={(e) => e.preventDefault()}
+                  disabled={sending}
+                  className="p-2.5 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50"
+                  data-testid="send-message-btn"
+                >
                   <Send className="w-5 h-5" />
                 </button>
               ) : (

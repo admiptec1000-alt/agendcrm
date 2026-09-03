@@ -1,3 +1,68 @@
+## 2026-09-02 — Fix foco perdido no input apos envio + polida do mic-swap ✅
+
+### Sintoma
+Operador digita mensagem, envia (Enter ou botao), e o cursor SOME do input.
+Precisa clicar de novo no campo pra continuar digitando. Reportado em prod.
+
+### Root cause
+`handleSendMessage` deixava o input com `disabled={sending}` durante o
+request (30s de janela em pior caso). No finally, um unico
+`requestAnimationFrame(() => input.focus())` tentava restaurar o foco —
+MAS o browser silenciosamente ignora `focus()` em elemento disabled,
+sem retry. React 18 tambem faz flush assincrono da state update
+`setSending(false)`, entao o rAF podia rodar ANTES do disabled virar
+false. Plus: o botao Send capturava foco no mousedown natural do
+click. Resultado (medido pelo testing_agent iter 70): 75% falha sob
+throttle 6x, 15% falha em maquina rapida.
+
+### Fix (3 mudancas cirurgicas, apos recomendacao do testing_agent iter 70)
+1. **Removido `disabled={sending}` do input.** A protecao contra
+   double-send ja esta no `if (sending) return` dentro de
+   `handleSendMessage`. Input agora fica sempre editavel — operador
+   pode continuar escrevendo a proxima mensagem enquanto a anterior
+   viaja.
+2. **`onMouseDown={e => e.preventDefault()}` no botao Send.** Impede
+   o click de roubar foco do input. Mesmo assim o `onClick` roda
+   normal.
+3. **Mantido `requestAnimationFrame` refocus no finally** — agora
+   funciona como safety net porque foco ja nao sai mais do input.
+
+### Polida extra (iter 71 apontou design nit)
+`setMessageInput('')` roda antes do request → antes o botao Send
+unmount → mic btn renderizava no lugar → clique acidental durante
+in-flight iniciava gravacao de audio. Fix: renderiza Send tambem
+quando `sending=true` (`(messageInput.trim() || sending)`). Enquanto
+a msg viaja o botao fica visivel com opacity-50 disabled.
+
+### Testes
+- **iter 71**: 100% deterministic (24/24 trials sob 6x CPU throttle).
+  10x Enter + 10x button + 4x forced-500 error path → todos com
+  `document.activeElement === [data-testid=message-input]`.
+- **Regressao**: test_iteration_66 (8) + 67 (9) + 69 (7) = 24/24 pass.
+
+### Deploy necessario
+- **Frontend**: SIM
+- **Backend**: NAO
+- **WhatsApp-service**: NAO
+
+### Arquivos tocados
+- `/app/frontend/src/pages/CRM/AtendimentosPage.js` linhas ~485 (rAF
+  no finally simplificado), ~1548 (removido disabled do input),
+  ~1628 (botao Send visivel tambem em in-flight)
+
+### Pendencia relatada pelo usuario mas NAO atacada nesta iter
+**Sync incompleto**: CRM ticket renderizando historico praticamente
+vazio (so ultima msg) enquanto WhatsApp mobile mostra conversa
+completa. Precisa de log/reproducao em prod para investigar. Hipoteses
+sobrando: (a) o filtro `!hasContent && !hasMedia return null` do
+frontend filtrando msgs legitimas com content="" no banco;
+(b) fallout do Ponto 5 (tickets antigos sem connection_id perderam
+vinculo com novas msgs). Deferido — aguarda dados do usuario.
+
+---
+
+
+
 ## 2026-09-01 — Idempotencia do webhook /webhook/message (bot mandando "Bem vindo" 5-7x) ✅
 
 ### Sintoma reportado em prod

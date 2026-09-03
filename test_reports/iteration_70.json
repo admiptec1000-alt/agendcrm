@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 70 (frontend-only focus-retention fix in CRM AtendimentosPage). Verified login crm@test.com/crm123 on /crmtest, opened WhatsApp tickets (tab-encerrados, ticket #1567 with WA Test connection and #1566 without connection) and measured document.activeElement after each send using focusin/focusout instrumentation. Result: the requestAnimationFrame refocus WORKS most of the time but is FLAKY. Unthrottled: Enter path 7/8 sends kept focus, send-button path 6/7 (success) and 2/4 (forced 500 error). With 6x CPU throttling (slower machine simulation, realistic for operators): Enter 3/4, send-button 1/4. On failure the focus is left on [data-testid=send-message-btn], [data-testid=record-audio-btn] (the send button node is reconciled into the mic button when the input empties) or on BODY, so the operator still has to click the field again. Backend regression executed as safety check: tests/test_iteration_66.py + 67 + 69 = 24/24 passed (no backend change).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AtendimentosPage handleSendMessage (finally block, line ~478-487)",
+        "issue": "Focus retention after send is FLAKY. A single requestAnimationFrame is not guaranteed to run after React commits disabled={false} on the input (line 1550 disabled={sending}); focus() on a still-disabled input is a silent no-op and there is no retry. Measured failures: send-button path 3/4 FAIL under 6x CPU throttle, 2/4 FAIL on the forced-error path unthrottled, 1/4 FAIL on Enter path under throttle. On failure activeElement ends on send-message-btn / record-audio-btn / BODY.",
+        "selector": "[data-testid=\"message-input\"], [data-testid=\"send-message-btn\"]",
+        "priority": "HIGH"
+      },
+      {
+        "component": "Composer send/mic button swap",
+        "issue": "When the input empties after send, the send button unmounts and React reuses the DOM node as the mic button, so keyboard focus can land on [data-testid=record-audio-btn]. Besides losing the cursor, a subsequent Space/Enter keypress would activate audio recording instead of typing.",
+        "selector": "[data-testid=\"record-audio-btn\"]",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/pytest/iteration_70_results.xml",
+    "/app/backend/tests/test_iteration_66.py",
+    "/app/backend/tests/test_iteration_67.py",
+    "/app/backend/tests/test_iteration_69.py"
+  ],
+  "action_items": [
+    "Make the refocus deterministic instead of a single rAF. Recommended: remove disabled={sending} from the message input (line ~1550) and rely only on the `if (sending) return` guard inside handleSendMessage — then focus is never lost on the Enter path at all.",
+    "For the send-button path, add onMouseDown={(e) => e.preventDefault()} on [data-testid=send-message-btn] so the click never moves focus off the input.",
+    "If disabled={sending} must stay, replace the single rAF with a retry that waits until the input is enabled, e.g. const refocus = (n = 0) => { const el = messageInputRef.current; if (!el) return; if (el.disabled && n < 20) return requestAnimationFrame(() => refocus(n + 1)); el.focus(); };",
+    "Also re-focus after the async loadData()/getTicket refresh settles (loadData is not awaited), so a late re-render cannot steal focus."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/src/pages/CRM/AtendimentosPage.js is 2791 lines — well above the 700-line guideline; split the composer, ticket list and ticket detail panels into separate components (the composer is where the focus logic lives and it would become testable in isolation).",
+    "Three different focus strategies coexist in the same file (setTimeout(...,0) at lines 296 and 1495, requestAnimationFrame at line 485). Extract a single focusComposer() helper that handles the disabled-input race once.",
+    "Disabling the text input while a request is in flight is the root cause of this class of bug; disabling only the submit control is the standard pattern."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (24/24 regression)", "frontend": "Enter-send focus ~87% unthrottled / 75% throttled; button-send focus ~85% unthrottled success path, 50% error path, 25% throttled" },
+  "seed_data_creation": "No seeding needed; used existing crmtest tickets #1567 (WA Test connection) and #1566 (no connection). ~20 messages prefixed 'TEST_iter70' were appended to those closed tickets during focus trials — harmless but can be purged.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "crm@test.com / crm123 at /crmtest/login (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Repro recipe: login /crmtest -> nav-atendimentos -> tab-encerrados (no open tickets exist, 106 closed) -> click conversation 'TEST_iter46 quote-ticket' (#1567) -> [data-testid=message-input]. Measure focus with document.addEventListener('focusin'/'focusout', capture) and read activeElement's data-testid. IMPORTANT: the bug is flaky at full speed — enable CDP Emulation.setCPUThrottlingRate rate=6 to expose it reliably, and test BOTH Enter and [data-testid=send-message-btn], plus a page.route 500 mock on **/api/crm/tickets/*/messages for the error path. Note the route /crmtest/atendimentos does not exist (router logs 'No routes matched'); navigate via [data-testid=nav-atendimentos].",
+  "rca_of_the_issue": "handleSendMessage sets sending=false and then calls requestAnimationFrame(() => messageInputRef.current?.focus()). The input carries disabled={sending}; React 18 flushes that state update asynchronously, so the rAF callback can execute while the input is still disabled, and focus() on a disabled element is silently ignored with no retry. Meanwhile the send button (which received focus on mouse-down) is reconciled into the mic button when messageInput empties, so the failed refocus leaves the caret on record-audio-btn/send-message-btn/BODY. Slower rendering (6x CPU throttle, long message lists, unawaited loadData re-render) makes the miss far more likely — 75% failure rate for the send-button path under throttle."
+}

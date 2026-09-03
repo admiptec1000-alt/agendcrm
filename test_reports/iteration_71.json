@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 71 — retest of the CRM AtendimentosPage focus-retention fix (frontend only). Logged in at /crmtest/login (crm@test.com/crm123, selectors are company-login-email/password/submit, NOT login-email-input), nav-atendimentos -> tab-encerrados (0 open / 106 closed) -> ticket #1567. With CDP Emulation.setCPUThrottlingRate rate=6 enabled I ran 10 consecutive Enter sends, 10 consecutive send-message-btn clicks and 4 forced-500 sends (page.route mock on **/api/crm/tickets/*/messages). document.activeElement was [data-testid=message-input] in 24/24 trials — focus retention is now DETERMINISTIC (100%), vs 75-87% in iter70. focusin/focusout instrumentation recorded ZERO focus transitions during the button path, proving onMouseDown preventDefault stops the button from ever stealing focus (the rAF refocus is now just a safety net). Additional verification with a 2.5s artificially delayed POST: the message input is never disabled in-flight (inputDisabled=false in every sample) and remains fully typable while the request is pending. Backend regression (safety check): tests/test_iteration_66 + 67 + 69 => 24/24 passed.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "CRM Atendimentos composer (in-flight state)",
+        "issues": [
+          "The requested acceptance criterion 'send button IS disabled during in-flight send (opacity-50 visible)' is NOT observable: setMessageInput('') runs before the request, so the send button unmounts immediately and [data-testid=record-audio-btn] (mic) renders in its place for the whole in-flight window. disabled={sending} + disabled:opacity-50 on send-message-btn therefore never paints. Double-click protection still holds (button gone + `if (sending) return` guard; a second Playwright click during flight times out).",
+          "Because the mic button is what is rendered during the in-flight window, an operator clicking twice quickly on the send position will hit 'Gravar audio' and start recording instead of a no-op. Consider keeping the send button mounted (disabled) while sending instead of swapping to the mic."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/pytest/iteration_71_results.xml",
+    "/app/backend/tests/test_iteration_66.py",
+    "/app/backend/tests/test_iteration_67.py",
+    "/app/backend/tests/test_iteration_69.py"
+  ],
+  "action_items": [
+    "Optional polish only: keep [data-testid=send-message-btn] mounted and disabled while sending (render it based on `messageInput.trim() || sending`) so the disabled/opacity-50 state is actually visible and the mic button cannot be clicked accidentally mid-send.",
+    "Optional cleanup: the requestAnimationFrame refocus in the finally block is now redundant for both paths (focus never leaves the input) — harmless, can stay as a safety net."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/src/pages/CRM/AtendimentosPage.js is 2807 lines — still far above the 700-line guideline; extract the composer (input + quick-response popover + send/mic buttons + handleSendMessage) into its own component.",
+    "Three focus strategies still coexist in the file (setTimeout(...,0) at ~296 and ~1495, requestAnimationFrame at ~485); consolidate into one focusComposer() helper."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (24/24 regression)", "frontend": "100% focus retention (10/10 Enter, 10/10 button, 4/4 forced-500) under 6x CPU throttle" },
+  "seed_data_creation": "No seeding. ~30 messages prefixed 'TEST_iter71' were appended to closed ticket #1567 (WA Test connection, delivery fails as expected since no active WhatsApp connection). Harmless, can be purged.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "crm@test.com / crm123 at /crmtest/login (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Repro recipe (verified iter71): goto /crmtest/login, fill [data-testid=company-login-email]/[data-testid=company-login-password], click [data-testid=company-login-submit] -> lands on /crmtest/painel -> click [data-testid=nav-atendimentos] -> [data-testid=tab-encerrados] -> first [data-testid^=conversation-] -> [data-testid=message-input]. CPU throttle: client = await page.context.new_cdp_session(page) (page.context is a PROPERTY, not callable) then Emulation.setCPUThrottlingRate rate=6. To observe in-flight composer state you must delay the POST (page.route + asyncio.sleep then route.continue_()) because the send finishes in <400ms otherwise. Focus retention fix is confirmed deterministic; only remaining nit is the send-button/mic swap during flight.",
+  "rca_of_the_issue": "Fixed. Root cause in iter70 was disabled={sending} on the input making focus() a silent no-op inside the single rAF, plus the send button grabbing focus on mousedown. Removing the input's disabled attribute (guard `if (sending) return` retains doubleclick protection) and adding onMouseDown={e => e.preventDefault()} on the send button means focus now never leaves the textarea at all, so there is no race left to lose."
+}
