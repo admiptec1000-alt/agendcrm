@@ -1459,9 +1459,28 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         # novo ticket la em baixo — resulta em 1 ticket por (empresa,
         # telefone, conexao). Fluxo do fallback_ticket (LID) continua
         # ok porque ele ja carrega o instance_id correto da resolucao.
+        #
+        # 2026-09-02 — Normalizacao dígitos-only no match. Sintoma
+        # reportado em prod (ticket #10333, WhatsApp mostra 10+
+        # mensagens, CRM mostra so 1): o ticket antigo foi criado com
+        # customer_phone="55629820...", mas o webhook do Baileys chega
+        # com phone="629820..." (sem DDI 55) OR o inverso — nao bate,
+        # sistema cria novo ticket que o operador nao ve, e o antigo
+        # fica "morto". Fix: monta $or comparando phone stored contra
+        # tanto a versao digitos-quanto a raw.
+        digits_phone = "".join(ch for ch in phone if ch.isdigit()) if phone else ""
+        phone_or = [{"customer_phone": phone}]
+        if digits_phone and digits_phone != phone:
+            phone_or.append({"customer_phone": digits_phone})
+        # Se veio com DDI 55, tambem casa a versao sem DDI
+        if digits_phone.startswith("55") and len(digits_phone) > 10:
+            phone_or.append({"customer_phone": digits_phone[2:]})
+        # Se veio sem DDI, tambem casa a versao com DDI 55
+        if digits_phone and not digits_phone.startswith("55") and len(digits_phone) >= 10:
+            phone_or.append({"customer_phone": "55" + digits_phone})
         ticket = fallback_ticket or await db.tickets.find_one({
             "company_id": company_id,
-            "customer_phone": phone,
+            "$or": phone_or,
             "connection_id": instance_id,
             "channel": {"$ne": "whatsapp_group"},
             "status": {"$nin": ["fechado"]}

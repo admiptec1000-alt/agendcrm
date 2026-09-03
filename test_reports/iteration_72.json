@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 72 — backend-only validation of the phone-normalization fix in POST /api/channels/webhook/message (prod bug #10333). Created /app/backend/tests/test_iteration_72.py with 8 tests (7 for the fix + 1 exposing the same bug class on another endpoint). All 7 fix tests PASS: ticket with DDI + webhook without DDI matches, reverse direction matches, formatted '+55 (62) 98888-7777' matches the digits ticket, msg_id dedup still returns duplicate:true/message_id_seen with no duplicated message in the ticket, unrelated phone still gets its OWN ticket (no over-matching), Ponto 5 per-connection scoping is preserved (variant phone on connection A does NOT touch the open ticket of connection B), and from_me=True (operator's linked phone) also lands in the existing ticket with sender_type='agent'. Full regression suite of iterations 66/67/69 re-run: 24/24 PASS — the $or expansion is strictly additive. One related (pre-existing, NOT the fixed path) defect confirmed by test: POST /api/crm/tickets/open-for-client still lacks DDI variants and creates a duplicate ticket on format drift. All TEST_it72_* seed data cleaned up (verified 0 residual docs in tickets/clients/webhook_dedup/message_log/channel_connections).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/crm/tickets/open-for-client", "issue": "Same bug class as #10333 at a different entry point: candidates_or in routes/crm_routes.py (~line 400) only uses raw + digits-only, no DDI-55 variants. Seeded ticket customer_phone='5562914845243' + request phone='62914845243' returned a NEW ticket ('62914845243') instead of the existing one -> operator sees a second empty conversation. Reproduced by tests/test_iteration_72.py::TestCrmOpenForClientDdiDrift (the only failing test)."},
+      {"endpoint": "POST /api/channels/webhook/history-sync (channels_routes.py ~line 993)", "issue": "History-import ticket lookup uses exact {'customer_phone': phone} with no digit/DDI normalization, so imported history can land in a second 'historico-importado' ticket when the format drifts."},
+      {"endpoint": "internal helper find_or_create_client_by_phone (clients_link.py)", "issue": "Matches strictly on digits-only equality (no DDI-55 variant) AND scans the whole clients collection in Python per inbound webhook. Result: same customer with '55...' vs local format becomes 2 client records; also O(n_clients) per message with no index."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_72.py",
+    "/app/test_reports/pytest/pytest_results_it72.xml"
+  ],
+  "action_items": [
+    "Extract the phone-variant builder (raw / digits / digits-without-55 / digits-with-55) into a shared helper (e.g. clients_link.phone_match_variants) and reuse it in channels_routes webhook, crm_routes.open-for-client (~400), history-sync lookup (~993) and find_or_create_client_by_phone — currently the logic is inlined only in the webhook.",
+    "Fix POST /api/crm/tickets/open-for-client to include DDI variants (confirmed duplicate-ticket repro).",
+    "Consider canonicalizing the ticket on a variant match: when a ticket is matched via a variant, $set customer_phone to the digits-with-DDI form so subsequent CRM outbound sends do not go out with a DDI-less JID (today the legacy format is left untouched).",
+    "Optional hardening: also match the Brazilian 9th-digit drift (5562<8digits> vs 55629<8digits>) — not covered by the current variant list and a known Baileys/legacy-data difference."
+  ],
+  "critical_code_review_comments": [
+    "channels_routes.py is very large (>1900 lines) and the webhook handler alone spans ~500 lines with 4 matching strategies (group / LID fallback / phone variants / create) — should be split into a dedicated ticket-resolution module to be testable in isolation.",
+    "The variant expansion assumes '55' prefix always means Brazilian DDI; a 13-digit non-BR number starting with 55 would also be stripped. Low risk but the len>10 guard is the only protection.",
+    "Variant match does not normalize the stored value, so the DB keeps mixed phone formats indefinitely — every downstream consumer (clients, bulk opt-out, message send) needs the same $or forever. A one-off migration + write-time normalization would remove the whole bug class."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_72.py"],
+  "success_rate": {"backend": "97% (31/32 tests: 7/7 iteration-72 fix tests + 24/24 regression 66/67/69; 1 failure is the pre-existing crm open-for-client gap)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Per-module seed under company of crm@test.com: 2 channel_connections (TEST_it72_conn_*, TEST_it72_connB_*) and ~8 manually inserted legacy tickets with mixed phone formats (customer_name TEST_it72_cliente). All deleted in module teardown; residual count verified as 0.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "crm@test.com / crm123 (slug crmtest)",
+  "context_for_next_testing_agent": "test_iteration_72.py covers the phone-variant $or in the webhook (classes A-G, all passing) plus class H (TestCrmOpenForClientDdiDrift) which intentionally FAILS until crm_routes.open-for-client gets the same variant expansion — re-run it after that fix. Helpers _seed_ticket/_ticket_ids/_new_tickets snapshot ticket ids before each webhook post because the module reuses one connection across tests (do not assert on all tickets of the connection).",
+  "rca_of_the_issue": "Original #10333: the existing-ticket lookup compared customer_phone by exact string, so once Baileys started sending the phone without the DDI 55 (or with punctuation), no ticket matched, the webhook fell into the create-branch and the historical ticket went dead. The implemented fix builds a $or with raw/digits/digits-minus-55/digits-plus-55 while keeping connection_id = instance_id, which testing confirms restores matching in both directions and with formatted input, without collapsing unrelated phones or breaking per-connection scoping. Remaining exposure: the same exact-match pattern still exists in crm_routes.open-for-client, history-sync and the client linker."
+}
