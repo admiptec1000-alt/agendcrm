@@ -1,3 +1,73 @@
+## 2026-09-02 (c) — Sync historico ausente por DDI drift ✅
+
+### Sintoma reportado em prod (ticket #10333 ROTA 04 - Dr Luiza)
+WhatsApp mobile mostrava ~10 mensagens na conversa; no CRM aparecia
+APENAS 1 msg (a ultima enviada via CRM com prefix "Veronica Teles:*").
+Todas as msgs outbound do celular + inbound do cliente estavam
+"perdidas" (na verdade, foram parar em outro ticket que o operador
+nao via).
+
+### Root cause
+Ticket antigo criado com `customer_phone="5562982041146"` (14 chars,
+com DDI 55). O webhook do Baileys agora chega com `phone="62982041146"`
+(11 chars, sem DDI). Filtro exato (`customer_phone: phone`) nao
+bate → sistema entra no branch "criar novo ticket" → o antigo fica
+morto (recebe so as msgs enviadas via CRM que sao empurradas direto
+pelo backend em `add_message_to_ticket`, sem passar pelo match). Todas
+as outras msgs (celular do operador via `messages.upsert`
+fromMe=true, e inbound do cliente) caem no ticket-fantasma.
+
+### Fix
+Ao inves de match exato, filtro monta `$or` com variantes de phone:
+- Raw (como veio)
+- Digits-only (sem pontuacao)
+- Com DDI 55 (se estiver sem)
+- Sem DDI 55 (se estiver com)
+
+Aplicado em 2 lugares:
+1. `channels_routes.py` webhook `/webhook/message` (~1462) — o critico
+2. `crm_routes.py` POST `/tickets/open-for-client` (~398) — o secundario
+   que o testing_agent iter 72 detectou como gap.
+
+### Testes
+`test_iteration_72.py` (8 testes) — **8/8 pass**:
+- Ticket DDI + webhook sem DDI → mesmo ticket
+- Ticket sem DDI + webhook DDI → mesmo ticket
+- Phone formatado "+55 (62) 98888-7777" → bate com digits stored
+- Idempotencia preservada (dedup por msg_id continua)
+- Phone verdadeiramente diferente → NAO colapsa
+- Per-connection scoping preservado (Ponto 5 nao quebra)
+- from_me=true (outbound do celular) tambem bate variante
+- POST /open-for-client reusa ticket com DDI drift (nao cria dup)
+
+Regressao: `test_iteration_69` (7) + `test_iteration_72` (8) =
+**15/15 pass**.
+
+### Deploy necessario
+- **Backend**: SIM (critico — resolve o sync ausente reportado)
+- **Frontend**: NAO
+- **WhatsApp-service**: NAO
+
+### Arquivos tocados
+- `/app/backend/routes/channels_routes.py` (webhook match com $or)
+- `/app/backend/routes/crm_routes.py` (open-for-client match com $or)
+
+### Recomendacoes do testing_agent para proximas iteracoes
+1. Extrair o "phone variant builder" em helper compartilhado (evitar
+   drift entre 3+ lugares que tem o mesmo padrao)
+2. Considerar `$set customer_phone` para a versao DDI-normalizada quando
+   bater por variante — reduz chance do drift propagar
+3. Variacao do 9-digito Brasil (celulares antigos vs novos) nao coberta
+
+### Backlog aberto ainda
+- **Ponto 3 (Msg Cliente Sumindo)**: se ainda persistir apos deploy
+  deste fix, precisa log Baileys de prod pra confirmar
+- **ON F2 Header**: remove botao do header pra zoom alto
+
+---
+
+
+
 ## 2026-09-02 — Fix foco perdido no input apos envio + polida do mic-swap ✅
 
 ### Sintoma

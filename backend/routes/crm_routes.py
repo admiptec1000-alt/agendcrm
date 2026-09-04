@@ -394,12 +394,21 @@ async def open_ticket_for_client(
     # 2026-08-31 (Ponto 5) — Se o payload trouxer connection_id, escopa a
     # busca pra mesma conexao. Mesmo cliente em conexao diferente vira
     # ticket novo (comportamento coerente com POST /tickets e webhook).
+    # 2026-09-02 — Mesmo tratamento de DDI drift do webhook (iter 72):
+    # aceita a versao com E sem DDI 55 pra achar tickets legados salvos
+    # em formato diferente. Sem isso, POST /open-for-client cria ticket
+    # duplicado quando o phone vem sem DDI mas o ticket ta com DDI (ou
+    # vice-versa).
     conn_id_payload = (payload.get("connection_id") or "").strip() or None
     candidates_or = []
     if client_id:
         candidates_or.append({"client_id": client_id})
     if digits_only:
         candidates_or.append({"customer_phone": digits_only})
+        if digits_only.startswith("55") and len(digits_only) > 10:
+            candidates_or.append({"customer_phone": digits_only[2:]})
+        elif len(digits_only) >= 10:
+            candidates_or.append({"customer_phone": "55" + digits_only})
     if phone and phone != digits_only:
         candidates_or.append({"customer_phone": phone})
     ticket = None
