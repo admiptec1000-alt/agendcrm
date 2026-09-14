@@ -358,7 +358,41 @@ async def get_ticket_counts(
             {"closed_at": {"$exists": False}, "updated_at": {"$regex": f"^{today_prefix}"}},
         ],
     })
-    return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "encerrados": encerrados, "total": total, "fechados_hoje": fechados_hoje}
+    # Nao lidas na aba Atendendo: msgs do cliente apos a ultima leitura
+    # (read_state[uid]) do operador atual. Alimenta o badge da aba e do
+    # menu lateral. Best-effort — falha nao derruba os contadores.
+    unread_msgs, unread_tickets = 0, 0
+    try:
+        uid = user["id"]
+        atendendo_q = {**base, "status": {"$nin": ["fechado", "cancelado"]}, "assigned_to": {"$nin": [None, ""]}}
+        if not channel:
+            atendendo_q["channel"] = {"$ne": "whatsapp_group"}
+        pipeline = [
+            {"$match": atendendo_q},
+            {"$project": {"unread": {"$size": {"$filter": {
+                "input": {"$ifNull": ["$messages", []]},
+                "as": "m",
+                "cond": {"$and": [
+                    {"$not": [{"$in": [{"$ifNull": ["$$m.sender_type", "user"]}, ["agent", "system", "bot"]]}]},
+                    {"$ne": ["$$m.from_me", True]},
+                    {"$gt": [
+                        {"$ifNull": ["$$m.created_at", {"$ifNull": ["$$m.timestamp", ""]}]},
+                        {"$ifNull": [f"$read_state.{uid}", ""]},
+                    ]},
+                ]},
+            }}}}},
+            {"$group": {"_id": None, "msgs": {"$sum": "$unread"},
+                        "tickets": {"$sum": {"$cond": [{"$gt": ["$unread", 0]}, 1, 0]}}}},
+        ]
+        agg = await db.tickets.aggregate(pipeline).to_list(1)
+        if agg:
+            unread_msgs = int(agg[0].get("msgs") or 0)
+            unread_tickets = int(agg[0].get("tickets") or 0)
+    except Exception as _ue:
+        import logging as _lg
+        _lg.getLogger(__name__).warning(f"[counts] unread aggregation failed: {_ue}")
+    return {"atendendo": atendendo, "aguardando": aguardando, "grupos": grupos, "encerrados": encerrados, "total": total, "fechados_hoje": fechados_hoje,
+            "unread_atendendo": unread_msgs, "unread_tickets": unread_tickets}
 
 
 @router.post("/tickets/open-for-client")
@@ -422,6 +456,10 @@ async def open_ticket_for_client(
         if conn_id_payload:
             _find_query["connection_id"] = conn_id_payload
         ticket = await db.tickets.find_one(_find_query, {"_id": 0})
+        if ticket:
+            for m in (ticket.get("messages") or []):
+                m.pop("attachment_data_b64", None)
+            ticket["reused"] = True
 
     if not ticket:
         # Pick first connected WhatsApp connection (or first one if none
@@ -551,8 +589,12 @@ async def create_ticket(
     # independentes com atendentes/bots/historicos separados. Antes so
     # cortavamos por (tenant, telefone) e o segundo setor recebia 409.
     digits_phone = re.sub(r"\D", "", data.customer_phone or "")
-    if digits_phone and not data.force_create:
+    if digits_phone:
         candidates_or = [{"customer_phone": digits_phone}]
+        if digits_phone.startswith("55") and len(digits_phone) > 10:
+            candidates_or.append({"customer_phone": digits_phone[2:]})
+        elif len(digits_phone) >= 10:
+            candidates_or.append({"customer_phone": "55" + digits_phone})
         if data.customer_phone and data.customer_phone != digits_phone:
             candidates_or.append({"customer_phone": data.customer_phone})
         dup_query = {
@@ -566,23 +608,14 @@ async def create_ticket(
         # em qualquer conexao) — protege tickets manuais sem canal.
         if data.connection_id:
             dup_query["connection_id"] = data.connection_id
-        existing = await db.tickets.find_one(
-            dup_query,
-            {"_id": 0, "id": 1, "ticket_number": 1, "customer_name": 1,
-             "customer_phone": 1, "status": 1, "assigned_to": 1,
-             "connection_id": 1, "updated_at": 1},
-        )
+        # Regra: NUNCA abre segundo ticket enquanto houver um aberto na
+        # mesma conexao — a conversa continua no ticket existente.
+        existing = await db.tickets.find_one(dup_query, {"_id": 0})
         if existing:
-            # 409 Conflict — frontend reads `detail.existing_ticket` to offer
-            # "open existing" vs. "create anyway".
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "duplicate_open_ticket",
-                    "message": f"Já existe um atendimento aberto (#{existing.get('ticket_number')}) para o telefone {data.customer_phone} nesta conexão.",
-                    "existing_ticket": existing,
-                },
-            )
+            for m in (existing.get("messages") or []):
+                m.pop("attachment_data_b64", None)
+            existing["reused"] = True
+            return existing
 
     # Validate the connection the operator picked: it must belong to the
     # company, be `connected`, AND be one of the user's allowed_connections
@@ -951,6 +984,220 @@ async def reopen_ticket(
     return await db.tickets.find_one({"id": ticket_id}, {"_id": 0})
 
 
+class TransferRequest(BaseModel):
+    target_type: str  # "user" | "queue"
+    target_id: str
+
+
+@router.post("/tickets/{ticket_id}/transfer")
+async def transfer_ticket(
+    ticket_id: str,
+    body: TransferRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Transferencia = fecha o ticket atual e abre um NOVO ticket para o
+    destino (usuario ou fila). O historico fica no ticket antigo (nao e
+    copiado); o novo recebe apenas uma mensagem de sistema apontando de
+    onde veio. Bot nasce pausado no novo ticket."""
+    company_id = user["company_id"]
+    ticket = await db.tickets.find_one({"id": ticket_id, "company_id": company_id}, {"_id": 0})
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+    if (ticket.get("status") or "") in ("fechado", "cancelado"):
+        raise HTTPException(400, "Ticket ja esta encerrado")
+    if body.target_type not in ("user", "queue"):
+        raise HTTPException(400, "target_type deve ser 'user' ou 'queue'")
+
+    if body.target_type == "user":
+        target = await db.company_users.find_one({"id": body.target_id, "company_id": company_id}, {"_id": 0, "id": 1, "name": 1})
+        if not target:
+            raise HTTPException(404, "Usuario de destino nao encontrado")
+        if body.target_id == ticket.get("assigned_to"):
+            raise HTTPException(400, "O ticket ja esta com esse usuario")
+    else:
+        target = await db.queues.find_one({"id": body.target_id, "company_id": company_id}, {"_id": 0, "id": 1, "name": 1})
+        if not target:
+            raise HTTPException(404, "Fila de destino nao encontrada")
+    target_name = target.get("name") or body.target_id
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    new_id = str(uuid.uuid4())
+    new_number = await next_ticket_number(db, company_id)
+    from_user_name = user.get("name") or "Operador"
+    system_msg = {
+        "id": str(uuid.uuid4()),
+        "content": (
+            f"Veio por transferência do ticket #{ticket.get('ticket_number')} — "
+            f"de {from_user_name} para {'usuário' if body.target_type == 'user' else 'fila'} {target_name}"
+        ),
+        "sender_type": "system",
+        "sender_id": user["id"],
+        "sender_name": "Sistema",
+        "created_at": now_iso,
+        "system": True,
+        "source": "transfer",
+    }
+    new_ticket = {
+        "id": new_id,
+        "ticket_number": new_number,
+        "company_id": company_id,
+        "connection_id": ticket.get("connection_id"),
+        "client_id": ticket.get("client_id"),
+        "customer_name": ticket.get("customer_name"),
+        "customer_phone": ticket.get("customer_phone"),
+        "customer_email": ticket.get("customer_email"),
+        "lid_jid": ticket.get("lid_jid"),
+        "pending_lid_resolution": ticket.get("pending_lid_resolution"),
+        "status": "aberto",
+        "priority": ticket.get("priority") or "medium",
+        "channel": ticket.get("channel") or "whatsapp",
+        "is_group": ticket.get("is_group") or False,
+        "description": ticket.get("description"),
+        "assigned_to": body.target_id if body.target_type == "user" else None,
+        "queue_id": body.target_id if body.target_type == "queue" else ticket.get("queue_id"),
+        "kanban_column_id": ticket.get("kanban_column_id"),
+        "messages": [system_msg],
+        "tags": ticket.get("tags") or [],
+        "value": ticket.get("value") or 0.0,
+        "origin": "transfer",
+        "previous_ticket_id": ticket_id,
+        "transferred_from_ticket_number": ticket.get("ticket_number"),
+        "transferred_from_user_id": user["id"],
+        "transferred_from_user_name": from_user_name,
+        "transferred_at": now_iso,
+        "bot_paused": True,
+        "bot_paused_at": now_iso,
+        "bot_paused_reason": "transfer",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+    closed = await db.tickets.update_one(
+        {"id": ticket_id, "company_id": company_id, "status": {"$nin": ["fechado", "cancelado"]}},
+        {"$set": {
+            "status": "fechado", "closed_at": now_iso, "closed_reason": "transferido",
+            "transferred_to_ticket_id": new_id, "transferred_to_ticket_number": new_number,
+            "transferred_by": user["id"], "updated_at": now_iso,
+            "bot_paused": False, "bot_paused_at": None, "bot_paused_reason": None,
+            "active_flow_id": None, "active_flow_node_id": None,
+        }},
+    )
+    if closed.modified_count == 0:
+        raise HTTPException(409, "Ticket foi alterado por outro usuario. Recarregue e tente de novo.")
+    try:
+        await db.tickets.insert_one(new_ticket)
+    except Exception as e:
+        await db.tickets.update_one(
+            {"id": ticket_id},
+            {"$set": {"status": ticket.get("status"), "updated_at": now_iso},
+             "$unset": {"closed_at": "", "closed_reason": "", "transferred_to_ticket_id": "", "transferred_to_ticket_number": "", "transferred_by": ""}},
+        )
+        raise HTTPException(500, f"Falha ao criar o novo ticket: {str(e)[:120]}")
+    new_ticket.pop("_id", None)
+    await db.quotes.update_many({"ticket_id": ticket_id, "company_id": company_id}, {"$set": {"ticket_id": new_id}})
+    return {
+        "transferred": True,
+        "closed_ticket_id": ticket_id,
+        "new_ticket": new_ticket,
+        "target_type": body.target_type,
+        "target_name": target_name,
+    }
+
+
+@router.get("/tickets/{ticket_id}/previous")
+async def get_previous_ticket(
+    ticket_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    """Ticket anterior da mesma conversa (mesmo telefone + mesma conexao).
+    Resolve por `previous_ticket_id` (transferencia) ou pelo ultimo ticket
+    encerrado antes deste. As mensagens so vem quando o usuario tem
+    permissao de ver aquele ticket (`can_view`)."""
+    company_id = user["company_id"]
+    ticket = await db.tickets.find_one(
+        {"id": ticket_id, "company_id": company_id},
+        {"_id": 0, "id": 1, "previous_ticket_id": 1, "customer_phone": 1, "connection_id": 1, "created_at": 1, "channel": 1},
+    )
+    if not ticket:
+        raise HTTPException(404, "Ticket nao encontrado")
+
+    meta_proj = {"_id": 0, "id": 1, "ticket_number": 1, "status": 1, "closed_at": 1, "closed_reason": 1,
+                 "created_at": 1, "assigned_to": 1, "previous_ticket_id": 1, "customer_phone": 1, "connection_id": 1,
+                 "transferred_from_user_name": 1}
+    prev = None
+    if ticket.get("previous_ticket_id"):
+        prev = await db.tickets.find_one({"id": ticket["previous_ticket_id"], "company_id": company_id}, meta_proj)
+    if not prev:
+        phone = ticket.get("customer_phone") or ""
+        digits = re.sub(r"\D", "", phone)
+        phone_or = [{"customer_phone": phone}]
+        if digits and digits != phone:
+            phone_or.append({"customer_phone": digits})
+        if digits.startswith("55") and len(digits) > 10:
+            phone_or.append({"customer_phone": digits[2:]})
+        elif len(digits) >= 10:
+            phone_or.append({"customer_phone": "55" + digits})
+        q = {
+            "company_id": company_id,
+            "id": {"$ne": ticket_id},
+            "$or": phone_or,
+            "created_at": {"$lt": ticket.get("created_at") or ""},
+            "channel": ticket.get("channel") or "whatsapp",
+        }
+        if ticket.get("connection_id"):
+            q["connection_id"] = ticket["connection_id"]
+        prev = await db.tickets.find_one(q, meta_proj, sort=[("created_at", -1)])
+    if not prev:
+        return {"previous": None}
+
+    vis = _ticket_visibility_filter(user)
+    can_view = True
+    if vis:
+        can_view = bool(await db.tickets.find_one({"id": prev["id"], "company_id": company_id, **vis}, {"_id": 0, "id": 1}))
+
+    agent_name = None
+    if prev.get("assigned_to"):
+        u = await db.company_users.find_one({"id": prev["assigned_to"]}, {"_id": 0, "name": 1})
+        agent_name = (u or {}).get("name")
+
+    # O anterior deste anterior existe? (pra UI saber se mostra a setinha de novo)
+    has_older = False
+    if prev.get("previous_ticket_id"):
+        has_older = True
+    else:
+        older_q = {
+            "company_id": company_id, "id": {"$nin": [ticket_id, prev["id"]]},
+            "customer_phone": prev.get("customer_phone"), "created_at": {"$lt": prev.get("created_at") or ""},
+        }
+        if prev.get("connection_id"):
+            older_q["connection_id"] = prev["connection_id"]
+        has_older = bool(await db.tickets.find_one(older_q, {"_id": 0, "id": 1}))
+
+    out = {
+        "id": prev["id"],
+        "ticket_number": prev.get("ticket_number"),
+        "status": prev.get("status"),
+        "closed_at": prev.get("closed_at"),
+        "closed_reason": prev.get("closed_reason"),
+        "created_at": prev.get("created_at"),
+        "assigned_to_name": agent_name,
+        "can_view": can_view,
+        "has_older": has_older,
+        "messages": [],
+    }
+    if can_view:
+        full = await db.tickets.find_one({"id": prev["id"]}, {"_id": 0, "messages": 1})
+        msgs = (full or {}).get("messages") or []
+        for m in msgs:
+            if m.get("attachment_kind") and m.get("attachment_data_b64") and not m.get("media_url"):
+                m["media_url"] = f"/api/crm/tickets/{prev['id']}/messages/{m.get('id')}/attachment"
+                m["media_kind"] = m.get("attachment_kind")
+                m["media_mimetype"] = m.get("attachment_mimetype")
+            m.pop("attachment_data_b64", None)
+        out["messages"] = msgs
+    return {"previous": out}
 
 
 @router.post("/tickets/{ticket_id}/resolve-lid")

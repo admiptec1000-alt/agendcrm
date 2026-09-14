@@ -1,3 +1,39 @@
+## 2026-09-14 — Regras de transferência, ticket anterior, contador, cronologia, guarda do bot ✅ (iter 73)
+
+### Regras de produto (definidas pelo usuário)
+- Transferir (usuário OU fila) = FECHA o ticket atual (`closed_reason=transferido`) e ABRE ticket novo
+  (mesmo telefone + mesma conexão). Histórico NÃO é copiado; novo ticket recebe só nota de sistema
+  "Veio por transferência do ticket #X — de Y para usuário/fila Z". Novo ticket nasce com `bot_paused=true (transfer)`.
+- 1 ticket aberto por conexão: POST /tickets e /open-for-client devolvem o existente (`reused: true`), sem `force_create`.
+- Setinha "Ticket anterior #N" no topo da conversa: lazy, 1 nível por clique; mensagens só se `can_view`
+  (respeita `_ticket_visibility_filter`). Sem permissão → barra cinza "(sem acesso)".
+- Contador de não lidas (aba Atendendo): `/tickets/counts` → `unread_atendendo`, `unread_tickets`;
+  badge vermelho na aba e no menu lateral "Atendimentos" (poll 10s) + `(N)` no título do navegador.
+- Ordem cronológica: webhook grava `created_at` = timestamp do WhatsApp (`received_at` = hora do servidor);
+  chat renderiza ordenado por data (`sortMessagesByDate`).
+- Bot: só dispara com mensagem RECEBIDA (não from_me, com texto/mídia, ticket não pausado);
+  anti-duplicidade `_bot_already_sent_without_reply` (mesmo texto já enviado sem resposta do cliente,
+  ou `pre_send` em andamento nos últimos 60s) → `flow_send_log.phase=skipped_duplicate`.
+
+### Endpoints novos
+- `POST /crm/tickets/{id}/transfer` `{target_type: user|queue, target_id}` → `{transferred, closed_ticket_id, new_ticket, target_name}`
+- `GET /crm/tickets/{id}/previous` → `{previous: {id, ticket_number, closed_at, closed_reason, assigned_to_name, can_view, has_older, messages[]} | null}`
+
+### Arquivos
+- backend: `routes/crm_routes.py` (transfer, previous, counts unread, dup→reuse), `routes/channels_routes.py`
+  (created_at WA ts, trigger só inbound), `flow_engine.py` (guarda anti-dup)
+- frontend: `components/PreviousTicketHistory.js` (novo), `pages/CRM/AtendimentosPage.js`
+  (TransferTicketModal → /transfer, handleCreateTicket reuse, system-note, sort, TabButton unread),
+  `pages/Company/Dashboard.js` (badge sidebar + título), `services/api.js`
+- Testes: `tests/test_iteration_73.py` (14/14), `test_iteration_67.py` ajustado à regra nova; testing_agent iter 73 frontend 100%.
+
+### Pendências
+- "ON F2" header: NÃO localizado no código (nenhuma ocorrência de "F2" no Dashboard). Pedir screenshot ao usuário.
+- Script opcional de reordenação de mensagens antigas (`fix_message_order.py`) não criado — ordenação é feita no render.
+
+---
+
+
 ## 2026-09-02 (c) — Sync historico ausente por DDI drift ✅
 
 ### Sintoma reportado em prod (ticket #10333 ROTA 04 - Dr Luiza)

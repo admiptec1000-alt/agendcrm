@@ -345,27 +345,29 @@ class TestCrmCreateTicketDuplicateGuard:
         assert t1["connection_id"] == conns["A"]
         assert "_id" not in t1
 
+        # 2026-09 (it73) — regra nova: NUNCA abre segundo ticket na mesma
+        # conexao; devolve o existente com reused=true (sem force_create).
         r2 = s.post(f"{BASE_URL}/api/crm/tickets", json={**base, "connection_id": conns["A"]}, timeout=30)
-        assert r2.status_code == 409, f"2nd identical create should 409, got {r2.status_code} {r2.text[:300]}"
-        det = r2.json()["detail"]
-        assert det["code"] == "duplicate_open_ticket", det
-        assert det["existing_ticket"]["id"] == t1["id"]
+        assert r2.status_code == 200, f"2nd identical create should reuse, got {r2.status_code} {r2.text[:300]}"
+        assert r2.json().get("reused") is True
+        assert r2.json()["id"] == t1["id"]
 
         r3 = s.post(f"{BASE_URL}/api/crm/tickets", json={**base, "connection_id": conns["B"]}, timeout=30)
         assert r3.status_code in (200, 201), f"create on other connection should pass, got {r3.status_code} {r3.text[:300]}"
         t3 = r3.json()
         assert t3["connection_id"] == conns["B"]
         assert t3["id"] != t1["id"]
+        assert not t3.get("reused")
 
-        # legacy payload (no connection_id) -> still blocks across connections
+        # legacy payload (no connection_id) -> still reuses across connections
         r4 = s.post(f"{BASE_URL}/api/crm/tickets", json=base, timeout=30)
-        assert r4.status_code == 409, f"legacy create should 409, got {r4.status_code} {r4.text[:300]}"
-        assert r4.json()["detail"]["code"] == "duplicate_open_ticket"
+        assert r4.status_code == 200, f"legacy create should reuse, got {r4.status_code} {r4.text[:300]}"
+        assert r4.json().get("reused") is True
 
-        # force_create bypasses the guard
+        # force_create NAO bypassa mais a regra
         r5 = s.post(f"{BASE_URL}/api/crm/tickets",
                     json={**base, "connection_id": conns["A"], "force_create": True}, timeout=30)
-        assert r5.status_code in (200, 201), r5.text[:300]
+        assert r5.status_code == 200 and r5.json()["id"] == t1["id"], r5.text[:300]
 
     def test_unknown_connection_404(self, session_user):
         s, _ = session_user

@@ -1486,6 +1486,16 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             "status": {"$nin": ["fechado"]}
         })
 
+    # Ordem cronologica: `created_at` = timestamp REAL do WhatsApp (msg_ts,
+    # epoch s). Antes usava a hora que o servidor recebeu -> mensagem que
+    # chegou atrasada (offline/reconexao) entrava fora de ordem no chat.
+    _now_iso = datetime.now(timezone.utc).isoformat()
+    _wa_iso = None
+    if msg_ts:
+        try:
+            _wa_iso = datetime.fromtimestamp(msg_ts if msg_ts < 10**12 else msg_ts / 1000, tz=timezone.utc).isoformat()
+        except Exception:
+            _wa_iso = None
     new_message = {
         "id": str(uuid.uuid4()),
         "content": text,
@@ -1496,7 +1506,8 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
         "sender_type": "agent" if from_me else "user",
         "sender_id": None,
         "sender_name": (conn.get("connected_name") or "Agente") if from_me else name,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": _wa_iso or _now_iso,
+        "received_at": _now_iso,
         "wa_message_id": msg_id,
     }
     if from_me:
@@ -1648,11 +1659,18 @@ async def webhook_message(request: Request, db: AsyncIOMotorDatabase = Depends(g
             except Exception as e:
                 logger.warning(f"[webhook/message][group] race-resolve check failed: {e}")
         # Auto-trigger Flowbuilder flow if connection has one configured.
-        # Fire-and-forget — flow execution should never block the webhook.
+        # Regra: bot SO dispara com mensagem RECEBIDA do cliente (nunca em
+        # eco from_me, grupo sem texto, ou ticket sem interacao inbound).
         try:
-            if conn.get("default_flow_id"):
+            _has_inbound = (not from_me) and bool((text or "").strip() or media_b64)
+            if conn.get("default_flow_id") and _has_inbound and not ticket.get("bot_paused"):
                 from routes.crm_routes import _trigger_flow_for_ticket
                 await _trigger_flow_for_ticket(db, conn["company_id"], conn["default_flow_id"], ticket)
+            elif conn.get("default_flow_id"):
+                logger.info(
+                    f"[webhook/message] flow NOT triggered ticket={ticket['id']} "
+                    f"from_me={from_me} has_text={bool((text or '').strip())} bot_paused={ticket.get('bot_paused')}"
+                )
         except Exception as e:
             logger.error(f"[webhook/message] flow trigger CRASHED: {e}", exc_info=True)
             # 2026-02-17 — Also record this in flow_send_log so operator

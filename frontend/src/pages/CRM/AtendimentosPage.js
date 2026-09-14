@@ -14,6 +14,7 @@ import { quotesAPI } from '../../services/api';
 import QuoteAttachModal from './QuoteAttachModal';
 import { QuoteEditor } from './OrcamentosPage';
 import { BotPausedBadge, BotPausedDot, BotToggleButton } from '../../components/BotPausedBadge';
+import { PreviousTicketHistory } from '../../components/PreviousTicketHistory';
 
 const STATUS_COLORS = {
   aberto: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Aberto' },
@@ -34,6 +35,22 @@ const formatTime = (isoDate) => {
 };
 
 const formatBRL = (v) => `R$ ${(Number(v) || 0).toFixed(2).replace('.', ',')}`;
+
+// Ordem cronologica estavel por data/hora (created_at || timestamp). Sem
+// isso o chat segue a ordem do array e uma mensagem que chegou atrasada
+// (offline/reconexao/sync) aparece no fim mesmo sendo mais antiga.
+const msgEpoch = (m) => {
+  const v = m.created_at || m.timestamp;
+  if (!v) return 0;
+  if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? 0 : t;
+};
+const sortMessagesByDate = (msgs) => {
+  const arr = (msgs || []).map((m, i) => ({ m, i, t: msgEpoch(m) }));
+  arr.sort((a, b) => (a.t - b.t) || (a.i - b.i));
+  return arr.map(x => x.m);
+};
 
 // Small inline dropdown to change kanban column from the ticket list item.
 // Uses native <select> for reliability (works on mobile, no popper dependency).
@@ -488,52 +505,19 @@ const AtendimentosPage = () => {
     }
   };
 
-  const handleCreateTicket = async (form, { forceCreate = false } = {}) => {
+  const handleCreateTicket = async (form) => {
     try {
-      const res = await crmAPI.createTicket({ ...form, force_create: forceCreate });
-      toast.success('Ticket criado!');
+      const res = await crmAPI.createTicket(form);
       setShowNewTicket(false);
+      if (res.data?.reused) {
+        toast.info(`Já existia o atendimento #${res.data.ticket_number || ''} aberto nesta conexão — continuando nele`);
+      } else {
+        toast.success('Ticket criado!');
+      }
+      tabCacheRef.current = {};
       await loadData();
       setSelectedTicket(res.data);
     } catch (e) {
-      // Backend returns 409 + { detail: { code: 'duplicate_open_ticket', existing_ticket: {...} } }
-      // when a ticket already exists for this phone. Offer the operator to
-      // open the existing one or force-create a second one.
-      const detail = e?.response?.data?.detail;
-      const isDup = e?.response?.status === 409 && detail?.code === 'duplicate_open_ticket';
-      if (isDup && detail?.existing_ticket?.id) {
-        const ex = detail.existing_ticket;
-        const num = ex.ticket_number ? `#${ex.ticket_number}` : '';
-        const choice = window.confirm(
-          `Já existe um atendimento aberto ${num} para o telefone ${form.customer_phone}.\n\n` +
-          `Clique em OK para ABRIR o atendimento existente.\n` +
-          `Clique em CANCELAR e use o botão "Criar mesmo assim" se realmente quiser duplicar.`
-        );
-        if (choice) {
-          // Open existing
-          setShowNewTicket(false);
-          try {
-            const r = await crmAPI.getTicket(ex.id);
-            setSelectedTicket(r.data);
-            setTickets(prev => {
-              const has = prev.some(t => t.id === ex.id);
-              return has ? prev : [r.data, ...prev];
-            });
-            await loadData();
-          } catch (_) { toast.error('Não foi possível abrir o atendimento existente'); }
-        } else {
-          // Surface a second confirm so the operator must really insist
-          // on duplicating. We DO NOT close the modal silently.
-          const force = window.confirm(
-            `Tem certeza que deseja criar um SEGUNDO atendimento para ${form.customer_phone}?\n\n` +
-            `Recomendamos abrir o existente para evitar histórico duplicado.`
-          );
-          if (force) {
-            return handleCreateTicket(form, { forceCreate: true });
-          }
-        }
-        return;
-      }
       const fallback = e?.response?.data?.detail;
       toast.error(typeof fallback === 'string' ? fallback : 'Erro ao criar ticket');
       setShowNewTicket(false);
@@ -716,7 +700,7 @@ const AtendimentosPage = () => {
         {/* Tabs (segmented). 2026-06-24 — modernizado para 4 tabs com
             icon + label + count em 2 linhas, melhor para counts altos. */}
         <div className="flex gap-1 px-2 pt-2 pb-1 bg-slate-50 border-b border-slate-200">
-          <TabButton active={activeTab === 'atendendo'} onClick={() => setActiveTab('atendendo')} label="Atendendo" count={counts.atendendo} testId="tab-atendendo" tint="indigo" />
+          <TabButton active={activeTab === 'atendendo'} onClick={() => setActiveTab('atendendo')} label="Atendendo" count={counts.atendendo} unread={counts.unread_atendendo} testId="tab-atendendo" tint="indigo" />
           <TabButton active={activeTab === 'aguardando'} onClick={() => setActiveTab('aguardando')} label="Aguardando" count={counts.aguardando} testId="tab-aguardando" tint="amber" />
           <TabButton active={activeTab === 'grupos'} onClick={() => setActiveTab('grupos')} label="Grupos" count={counts.grupos} testId="tab-grupos" tint="teal" />
           <TabButton active={activeTab === 'encerrados'} onClick={() => setActiveTab('encerrados')} label="Encerrados" count={counts.encerrados} testId="tab-encerrados" tint="slate" />
@@ -1203,11 +1187,12 @@ const AtendimentosPage = () => {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-4 py-4">
+            <PreviousTicketHistory ticketId={selectedTicket.id} />
             <div className="flex items-center justify-center mb-4">
               <span className="text-[10px] bg-white/90 text-slate-500 px-3 py-1 rounded-lg shadow-sm">CONVERSA</span>
             </div>
 
-            {selectedTicket.messages?.map((rawMsg, msgIdx) => {
+            {sortMessagesByDate(selectedTicket.messages).map((rawMsg, msgIdx) => {
               // 2026-08-14 — Compat com schema legado das mensagens de
               // sistema (auto_close, manual_close, transfer_message do bot)
               // que antes vinham como {from, text, timestamp, system, reason}.
@@ -1235,6 +1220,16 @@ const AtendimentosPage = () => {
               if (!_hasContent && !_hasMedia) return null;
               const isDeleted = !!msg.deleted_for_customer;
               const isEdited = !!msg.edited_at;
+              if (msg.sender_type === 'system') {
+                return (
+                  <div key={msg.id || `msg-${msgIdx}`} className="flex justify-center mb-3" data-testid={`system-note-${msg.source || 'system'}`}>
+                    <span className="text-[11px] bg-indigo-100 text-indigo-800 px-3 py-1.5 rounded-lg shadow-sm text-center max-w-[85%]">
+                      {msg.content}
+                      <span className="block text-[9px] text-indigo-500 mt-0.5">{formatTime(msg.created_at)}</span>
+                    </span>
+                  </div>
+                );
+              }
               const isMine = msg.sender_type === 'agent';
               const showActions = isMine && msg.wa_message_id && !isDeleted && !msg.system;
               return (
@@ -1733,7 +1728,14 @@ const AtendimentosPage = () => {
           users={users}
           queues={queues}
           onClose={() => setShowTransferModal(false)}
-          onTransferred={() => { setShowTransferModal(false); loadData(); setSelectedTicket(null); toast.success('Atendimento transferido'); }}
+          onTransferred={(res) => {
+            setShowTransferModal(false);
+            const nt = res?.new_ticket;
+            toast.success(`Transferido → novo ticket #${nt?.ticket_number || ''} (${res?.target_name || ''})`);
+            setSelectedTicket(null);
+            tabCacheRef.current = {};
+            loadData();
+          }}
         />
       )}
       {showQuote && selectedTicket && (
@@ -1779,7 +1781,7 @@ const AtendimentosPage = () => {
 //   • Active state: tinted background + accent border on top + bold text
 //   • Compact mode k-format for counts >999 (3666 → 3.7k)
 //   • Icons removed in favor of color-coding (each tab has its own hue)
-const TabButton = ({ active, onClick, label, count, testId, tint = 'indigo' }) => {
+const TabButton = ({ active, onClick, label, count, unread = 0, testId, tint = 'indigo' }) => {
   const tints = {
     indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', accent: 'border-indigo-500', activeCount: 'text-indigo-700' },
     amber:  { bg: 'bg-amber-50',  text: 'text-amber-700',  accent: 'border-amber-500',  activeCount: 'text-amber-700' },
@@ -1792,12 +1794,19 @@ const TabButton = ({ active, onClick, label, count, testId, tint = 'indigo' }) =
     <button
       onClick={onClick}
       data-testid={testId}
-      className={`flex-1 min-w-0 px-1 py-2 flex flex-col items-center justify-center rounded-md transition-all border-t-2 ${
+      className={`relative flex-1 min-w-0 px-1 py-2 flex flex-col items-center justify-center rounded-md transition-all border-t-2 ${
         active
           ? `${t.bg} ${t.accent} shadow-[inset_0_-1px_0_rgba(0,0,0,0.04)]`
           : 'border-transparent hover:bg-slate-50'
       }`}
     >
+      {unread > 0 && (
+        <span
+          className="absolute top-1 right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center shadow animate-pulse"
+          title={`${unread} mensagem(ns) não lida(s)`}
+          data-testid={`${testId}-unread-badge`}
+        >{unread > 99 ? '99+' : unread}</span>
+      )}
       <span className={`text-lg font-bold tabular-nums leading-none ${active ? t.activeCount : 'text-slate-600'}`}>{fmt(count)}</span>
       <span className={`text-[9px] font-bold uppercase tracking-wider mt-1 leading-tight truncate w-full text-center ${active ? t.text : 'text-slate-400'}`}>
         {label}
@@ -2130,11 +2139,8 @@ const TransferTicketModal = ({ ticket, users, queues, onClose, onTransferred }) 
     if (!target) return toast.error('Selecione um destino');
     setBusy(true);
     try {
-      const patch = mode === 'user'
-        ? { assigned_to: target, status: 'atendendo' }
-        : { queue_id: target, assigned_to: null, status: 'aguardando' };
-      await crmAPI.updateTicket(ticket.id, patch);
-      onTransferred();
+      const r = await crmAPI.transferTicket(ticket.id, { target_type: mode, target_id: target });
+      onTransferred(r.data);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Falha ao transferir');
     } finally { setBusy(false); }

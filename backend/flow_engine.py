@@ -24,7 +24,7 @@ Edges:
     { id, source, target, sourceHandle? }
     sourceHandle is "option-0"/"option-1"/... for menu branches.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 import os
 import re
@@ -486,6 +486,33 @@ async def _reset_send_failure(db, connection_id: str):
         pass
 
 
+async def _bot_already_sent_without_reply(db, ticket_id: str, text: str) -> bool:
+    """Anti-duplicidade do bot: True quando o MESMO texto ja foi enviado pelo
+    bot neste ticket e o cliente NAO mandou nada depois disso. Tambem cobre
+    race entre webhooks concorrentes via flow_send_log (mesmo texto com
+    envio OK/pendente nos ultimos 60s)."""
+    if not ticket_id or not (text or "").strip():
+        return False
+    t = await db.tickets.find_one({"id": ticket_id}, {"_id": 0, "messages": {"$slice": -30}})
+    for m in reversed((t or {}).get("messages") or []):
+        st = m.get("sender_type")
+        is_inbound = st not in ("agent", "system", "bot") and not m.get("from_me")
+        if is_inbound:
+            break
+        if st == "agent" and m.get("auto_flow_id") and (m.get("content") or "").strip() == text.strip():
+            return True
+    # Envio em andamento (pre_send ainda nao virou complete) do mesmo texto
+    # nos ultimos 60s = outro webhook concorrente ja esta mandando.
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    race = await db.flow_send_log.find_one({
+        "ticket_id": ticket_id,
+        "text_preview": (text or "")[:120],
+        "phase": "pre_send",
+        "created_at": {"$gte": cutoff},
+    }, {"_id": 0, "id": 1})
+    return bool(race)
+
+
 async def _persist_outgoing(db, ticket_id: str, text: str, flow_id: str,
                             wa_message_id: Optional[str] = None):
     msg = {
@@ -920,6 +947,26 @@ async def advance_flow(
 
     async def _emit_and_persist(text: str):
         """Send text outbound and persist as agent message. Honours dry_run."""
+        if not dry_run and await _bot_already_sent_without_reply(db, ticket.get("id"), text):
+            logger.info(
+                f"[flow_engine] skip duplicate bot message ticket={ticket.get('id')} "
+                f"text={(text or '')[:60]!r} — same text already sent and no customer reply since"
+            )
+            try:
+                await db.flow_send_log.insert_one({
+                    "id": str(__import__('uuid').uuid4()),
+                    "company_id": ticket.get("company_id"),
+                    "ticket_id": ticket.get("id"),
+                    "flow_id": flow_id,
+                    "customer_phone": ticket.get("customer_phone"),
+                    "text_preview": (text or "")[:120],
+                    "send_ok": False,
+                    "phase": "skipped_duplicate",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+            return
         _emit_state["count"] += 1
         idx = _emit_state["count"]
         # PRE-SEND LOG (always, regardless of subsequent failures)

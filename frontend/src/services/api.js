@@ -106,6 +106,8 @@ export const crmAPI = {
   getTicketCounts: (params) => api.get('/crm/tickets/counts', { params }),
   createTicket: (data) => api.post('/crm/tickets', data),
   updateTicket: (id, data) => api.put(`/crm/tickets/${id}`, data),
+  transferTicket: (id, data) => api.post(`/crm/tickets/${id}/transfer`, data),
+  getPreviousTicket: (id) => api.get(`/crm/tickets/${id}/previous`),
   getTicketClient: (id) => api.get(`/crm/tickets/${id}/client`),
   updateTicketClient: (id, data) => api.put(`/crm/tickets/${id}/client`, data),
   getClientTimeline: (clientId, limit = 50) => api.get(`/crm/clients/${clientId}/timeline`, { params: { limit } }),

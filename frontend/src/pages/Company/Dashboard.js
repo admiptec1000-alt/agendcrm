@@ -123,6 +123,28 @@ const CompanyDashboard = () => {
   });
 
   const isImpersonatedTab = !!user?.is_impersonating;
+
+  // Badge de nao lidas (aba Atendendo) no menu lateral — visivel em
+  // qualquer tela. Poll leve a cada 10s; zera quando o operador abre o
+  // ticket (read_state no backend).
+  const [unreadAtend, setUnreadAtend] = useState(0);
+  useEffect(() => {
+    if (!user?.company_id) return undefined;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await crmAPI.getTicketCounts();
+        if (alive) setUnreadAtend(Number(r.data?.unread_atendendo) || 0);
+      } catch {}
+    };
+    tick();
+    const iv = setInterval(tick, 10000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [user?.company_id]);
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\+?\)\s*/, '');
+    document.title = unreadAtend > 0 ? `(${unreadAtend > 99 ? '99+' : unreadAtend}) ${base}` : base;
+  }, [unreadAtend]);
   const showAllModulesToggle = user?.role === 'super_admin' || isImpersonatedTab;
   const [allModulesMode, setAllModulesMode] = useState(() => {
     try { return localStorage.getItem('super_all_modules') === '1' || sessionStorage.getItem('super_all_modules') === '1'; } catch { return false; }
@@ -260,7 +282,7 @@ const CompanyDashboard = () => {
                     onClick={() => { setActivePage(item.key); setMobileSidebarOpen(false); }}
                     data-testid={`nav-${item.key}`}
                     title={sidebarCollapsed ? item.label : undefined}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all ${
+                    className={`relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all ${
                       activePage === item.key
                         ? 'bg-[var(--primary-color)]/10 text-[var(--primary-color)] font-medium'
                         : 'text-slate-600 hover:bg-slate-50'
@@ -268,6 +290,13 @@ const CompanyDashboard = () => {
                   >
                     <Icon className="w-[18px] h-[18px] flex-shrink-0" />
                     {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+                    {item.key === 'atendimentos' && unreadAtend > 0 && (
+                      <span
+                        className={`${sidebarCollapsed ? 'absolute -top-0.5 -right-0.5' : 'ml-auto'} min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center shadow`}
+                        data-testid="nav-atendimentos-unread-badge"
+                        title={`${unreadAtend} mensagem(ns) não lida(s) em Atendendo`}
+                      >{unreadAtend > 99 ? '99+' : unreadAtend}</span>
+                    )}
                   </button>
                 );
               })}
@@ -1294,6 +1323,7 @@ const ClientsPage = ({ setActivePage }) => {
       // as soon as it mounts (works whether or not the user was already
       // in that page).
       sessionStorage.setItem('focus_ticket_id', data.id);
+      if (data.reused) toast.info(`Já existe o atendimento #${data.ticket_number || ''} aberto — continuando nele`);
       setActivePage && setActivePage('atendimentos');
     } catch (e) {
       toast.error('Erro ao abrir atendimento');

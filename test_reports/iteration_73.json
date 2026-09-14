@@ -1,0 +1,46 @@
+{
+  "summary": "Frontend E2E validation for iteration 73 (CRM Atendimentos). Login as crm@test.com, created a fresh ticket via API+claim, opened in UI, transferred to user 'Agent', transferred again to queue 'Vendas'. All new features work: system-note-transfer, previous-ticket-toggle-0/1 (lazy grand-parent expand), collapse, Reativar bot, tab-encerrados listing with reopen-ticket-btn, 1-ticket-per-connection rule (duplicate returns existing, no new ticket, no window.confirm), unread badges hidden when 0, chronological message rendering. No console errors from PreviousTicketHistory/AtendimentosPage.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_73.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Note: the problem statement referenced input placeholder 'Digite uma mensagem' — actual placeholder is 'Digite uma mensagem (use / para respostas rapidas)'. Selectors using exact match will fail; use starts-with. Not a bug.",
+    "Toast selector varies; couldn't capture the transfer toast text via generic [role=status] queries — the transfers themselves are confirmed working via API (ticket_1 -> status=fechado, ticket_2 created with system_note, previous linkage intact)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100%"},
+  "test_credentials": "crm@test.com / crm123 (/crmtest/login)",
+  "seed_data_creation": "Created a chain of 3 tickets for phone 55629887XXXXXX (TEST T*) for validation. Not cleaned up.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 73 features fully verified: transfer=close+open new ticket, previous ticket bar lazy expand (grandparent shows on demand), system-note in purple/indigo, chronological ordering, duplicate-per-connection returns existing (toast 'Já existia o atendimento #N aberto nesta conexão — continuando nele'), unread badges hidden at 0. Backend previous endpoint returns nested {previous:{...}} object. Available users to transfer to: 'Agent' (5aed1596-5855-4ea1-b43a-24124338ce59). Queue 'Vendas' (2d71e816-2fe3-46ab-a3a0-c442b22b9469). Only WhatsApp connection 'WA Test' is in 'connecting' status; message sends produce 'Nenhuma conexão WhatsApp ativa' toast — expected in preview.",
+  "detailed_validation": {
+    "counts_endpoint_ok": true,
+    "badges_hidden_when_unread_zero": true,
+    "ticket_created_via_api_ok": true,
+    "duplicate_create_returns_same": true,
+    "message_send_places_in_chat_chronologically": true,
+    "transfer_to_user_closes_old_opens_new": true,
+    "ticket_1_status_after_transfer": "fechado",
+    "system_note_visible": true,
+    "system_note_text_sample": "Veio por transferência do ticket #1822 — de CRM Admin para usuário Agent",
+    "previous_ticket_toggle_0_visible": true,
+    "previous_ticket_expand_and_collapse_ok": true,
+    "reativar_bot_visible_after_transfer": true,
+    "encerrados_list_shows_old_ticket": true,
+    "reopen_ticket_btn_visible": true,
+    "transfer_to_queue_ok": true,
+    "system_note_ticket_3_mentions_fila": true,
+    "previous_ticket_toggle_1_appears_on_expand_0": true,
+    "grandparent_previous_toggle_points_to_grandparent": true,
+    "grandparent_expand_shows_messages": true,
+    "duplicate_ui_create_no_new_ticket": true,
+    "no_window_confirm_on_duplicate": true,
+    "no_console_errors_from_PreviousTicketHistory_or_AtendimentosPage": true
+  }
+}
