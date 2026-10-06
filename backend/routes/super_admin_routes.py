@@ -679,6 +679,14 @@ async def resend_transaction_reminder(
     )
     phone = (company or {}).get("phone") or ""
     nome = (company or {}).get("representante") or (company or {}).get("name") or ""
+    # 2026-09 — Lancamento de cliente externo (8IP): telefone/nome vem do
+    # external_billing_clients.
+    if not company and txn.get("external_client_id"):
+        _ext = await db.external_billing_clients.find_one(
+            {"id": txn["external_client_id"]}, {"_id": 0, "name": 1, "phone": 1, "owner_name": 1, "discount": 1}) or {}
+        phone = _ext.get("phone") or ""
+        nome = _ext.get("owner_name") or _ext.get("name") or ""
+        company = {"name": _ext.get("name") or txn.get("external_client_name") or "", "discount": _ext.get("discount") or 0}
     # 2026-05-26 — Manual resend tambem precisa expandir as variaveis novas
     # (`licencas_conexao`, `licencas_usuario`, `valor_venda_total`,
     # `valor_desconto`, `valor_devido`). Antes ficavam literais no envio.

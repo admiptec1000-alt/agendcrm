@@ -662,7 +662,30 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
     )
     sa_conn = await _get_sa_system_connection(db)
     sa_conn_id = sa_conn.get("id") if sa_conn else None
-    async for c in cursor:
+    billables = await cursor.to_list(5000)
+    # 2026-09 — Clientes externos sincronizados do 8IP Admin entram no
+    # mesmo loop (mensalidade aberta, vencimento pelo billing_day).
+    try:
+        ext_rows = await db.external_billing_clients.find(
+            {"source": "8ip", "is_active": True, "monthly_price": {"$gt": 0}, "first_due_date": {"$ne": None}},
+            {"_id": 0},
+        ).to_list(2000)
+    except Exception as _ee:
+        logger.warning(f"[scheduler] 8ip externals skipped: {_ee}")
+        ext_rows = []
+    for e in ext_rows:
+        billables.append({
+            "id": e["id"], "_external": True, "external_id": e.get("external_id"),
+            "name": e.get("name"), "phone": e.get("phone"), "representante": e.get("owner_name"),
+            "monthly_price": float(e.get("monthly_price") or 0), "total_sale_price": 0,
+            "billing_cycle": "monthly", "installments": 240, "first_due_date": e.get("first_due_date"),
+            "discount": float(e.get("discount") or 0), "observation": None,
+            "max_connections": 0, "max_users": 0,
+        })
+    for c in billables:
+        is_ext = bool(c.get("_external"))
+        owner_q = {"external_client_id": c["id"]} if is_ext else {"company_id": c["id"]}
+        gate_cid = SA_SYSTEM_COMPANY_ID if is_ext else c["id"]
         try:
             first_due = c.get("first_due_date") or ""
             if not first_due:
@@ -677,11 +700,15 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
             if price <= 0 or installments <= 0:
                 continue
             # Map of recurrence_index -> existing txn doc (id + due_date).
+            # Externos (8IP): chave = periodo YYYY-MM (mensalidade aberta).
             existing_rows = await db.super_admin_transactions.find(
-                {"company_id": c["id"], "auto_company_billing": True},
-                {"_id": 0, "id": 1, "recurrence_index": 1, "due_date": 1, "status": 1},
+                {**owner_q, "auto_company_billing": True},
+                {"_id": 0, "id": 1, "recurrence_index": 1, "due_date": 1, "status": 1, "billing_period": 1, "auto_notify": 1, "late_fee": 1},
             ).to_list(installments + 5)
-            by_index = {int(x.get("recurrence_index") or 0): x for x in existing_rows}
+            if is_ext:
+                by_index = {(x.get("billing_period") or (x.get("due_date") or "")[:7]): x for x in existing_rows}
+            else:
+                by_index = {int(x.get("recurrence_index") or 0): x for x in existing_rows}
 
             # Walk parcelas. We may create the txn AND/OR send reminders for
             # already-existing pending txns when a later offset comes due.
@@ -695,7 +722,7 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                 if due > cutoff:
                     break
 
-                txn = by_index.get(i)
+                txn = by_index.get(due.strftime("%Y-%m") if is_ext else i)
                 if not txn:
                     # Create the Lancamento only when within `gen_days` window
                     # (2026-02-16 N). Reminders may still walk further out.
@@ -703,7 +730,10 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                         # Too early to materialize the row, but maybe a
                         # reminder offset is past-due. Skip creation.
                         continue
-                    desc_suffix = f" - parcela {i + 1}/{installments}" if installments > 1 else ""
+                    if is_ext:
+                        desc_suffix = f" - {due.strftime('%m/%Y')}"
+                    else:
+                        desc_suffix = f" - parcela {i + 1}/{installments}" if installments > 1 else ""
                     txn = {
                         "id": str(__import__('uuid').uuid4()),
                         "direction": "entrada",
@@ -715,13 +745,19 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                         "date": due.isoformat(),
                         "due_date": due.isoformat(),
                         "kind": "licenca",
-                        "company_id": c["id"],
                         "auto_company_billing": True,
                         "recurrence_index": i,
-                        "recurrence_total": installments,
+                        "recurrence_total": None if is_ext else installments,
                         "recurrence_interval": cycle,
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
+                    if is_ext:
+                        txn["external_client_id"] = c["id"]
+                        txn["external_client_name"] = c.get("name") or ""
+                        txn["source"] = "8ip"
+                        txn["billing_period"] = due.strftime("%Y-%m")
+                    else:
+                        txn["company_id"] = c["id"]
                     # 2026-02-16 (O) — Inject default late_fee if enabled.
                     if default_lf_enabled and (default_lf_multa > 0 or default_lf_juros > 0):
                         txn["late_fee"] = {
@@ -840,7 +876,7 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                     "empresa": c.get("name") or "",
                     "valor": f"{price:.2f}".replace(".", ","),
                     "vencimento": due.strftime("%d/%m/%Y"),
-                    "parcela": f"{i + 1}/{installments}",
+                    "parcela": due.strftime("%m/%Y") if is_ext else f"{i + 1}/{installments}",
                     "licencas_conexao": str(c.get("max_connections") or 0),
                     "licencas_usuario": str(c.get("max_users") or 0),
                     "valor_venda_total": f"{_venda_total:.2f}".replace(".", ","),
@@ -861,7 +897,7 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                     # bloquear, pula esta parcela nesta rodada — o proximo
                     # tick (60s depois) tenta de novo.
                     from services.send_gate import acquire_send_slot, record_send
-                    can_send, why = await acquire_send_slot(db, c["id"], "whatsapp")
+                    can_send, why = await acquire_send_slot(db, gate_cid, "whatsapp")
                     if not can_send:
                         logger.info(
                             f"[scheduler] billing-reminder gated company={c['id']} "
@@ -871,7 +907,7 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                     try:
                         sent_ok, error = await _send_billing_reminder(sa_conn_id, phone, text)
                         if sent_ok:
-                            await record_send(db, c["id"], "whatsapp")
+                            await record_send(db, gate_cid, "whatsapp")
                             await _record_billing_reminder_in_ticket(
                                 db,
                                 phone=phone,
@@ -894,7 +930,8 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                         error = "no_text"
                 await db.billing_reminder_history.insert_one({
                     "id": str(__import__('uuid').uuid4()),
-                    "company_id": c["id"],
+                    "company_id": None if is_ext else c["id"],
+                    "external_client_id": c["id"] if is_ext else None,
                     "transaction_id": txn["id"],
                     "phone": phone,
                     "text": text,
@@ -931,7 +968,8 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                             logger.info(f"[scheduler] pix-followup sent txn={txn['id']} ok={pix_ok} err={pix_err}")
                             await db.billing_reminder_history.insert_one({
                                 "id": str(__import__('uuid').uuid4()),
-                                "company_id": c["id"],
+                                "company_id": None if is_ext else c["id"],
+                                "external_client_id": c["id"] if is_ext else None,
                                 "transaction_id": txn["id"],
                                 "phone": phone,
                                 "text": pix_key,
@@ -987,6 +1025,8 @@ async def tick():
     await _run_step("scheduled_campaigns",lambda: _process_scheduled_campaigns(db))
     await _run_step("ticket_auto_close",  lambda: _process_ticket_auto_close(db))
     await _run_step("billing_reminders",  lambda: _process_billing_reminders(db))
+    from services.integration_8ip import scheduler_step as _8ip_step
+    await _run_step("integration_8ip",    lambda: _8ip_step(db), timeout_s=90.0)
     from routes.bulk_routes import process_bulk_tick
     await _run_step("bulk_dispatcher",    lambda: process_bulk_tick(db), timeout_s=90.0)
 

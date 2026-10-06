@@ -622,7 +622,7 @@ const MobilePaymentBadge = ({ t }) => {
 // RowActions — botoes de Send/History (apenas Licenca pendente) + Edit + Delete.
 const RowActions = ({ t, resending, onResend, onHistory, onEdit, onDelete }) => (
   <div className="inline-flex items-center gap-1">
-    {t.kind === 'licenca' && t.status !== 'pago' && t.company_id && (
+    {t.kind === 'licenca' && t.status !== 'pago' && (t.company_id || t.external_client_id) && (
       <>
         <button
           onClick={() => onResend(t.id)}

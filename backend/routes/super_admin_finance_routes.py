@@ -422,6 +422,109 @@ class AdmTxnUpdate(BaseModel):
     scope: Optional[str] = None
 
 
+# ── Integracao 8IP Admin (app.8ip.com.br) ───────────────────────────────
+class Integration8ipSettingsIn(BaseModel):
+    enabled: Optional[bool] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    sync_interval_hours: Optional[int] = None
+    auto_block_enabled: Optional[bool] = None
+    auto_block_days: Optional[int] = None
+
+
+def _mask_8ip(settings: dict) -> dict:
+    out = dict(settings)
+    key = out.get("api_key") or ""
+    out["api_key_masked"] = (key[:4] + "•" * 8 + key[-4:]) if len(key) > 8 else ("•" * len(key))
+    out["has_api_key"] = bool(key)
+    out.pop("api_key", None)
+    return out
+
+
+@router.get("/integrations/8ip/settings")
+async def get_8ip_settings(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    from services.integration_8ip import get_settings
+    return _mask_8ip(await get_settings(db))
+
+
+@router.put("/integrations/8ip/settings")
+async def put_8ip_settings(
+    data: Integration8ipSettingsIn,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    from services.integration_8ip import get_settings, SETTINGS_KEY
+    payload = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "base_url" in payload:
+        payload["base_url"] = payload["base_url"].strip().rstrip("/")
+    if "api_key" in payload and not payload["api_key"].strip():
+        payload.pop("api_key")  # chave vazia = manter a atual
+    if "sync_interval_hours" in payload:
+        payload["sync_interval_hours"] = max(1, min(168, int(payload["sync_interval_hours"])))
+    if "auto_block_days" in payload:
+        payload["auto_block_days"] = max(0, min(90, int(payload["auto_block_days"])))
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.system_settings.update_one({"key": SETTINGS_KEY}, {"$set": payload}, upsert=True)
+    return _mask_8ip(await get_settings(db))
+
+
+@router.post("/integrations/8ip/test")
+async def test_8ip_connection(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    from services.integration_8ip import get_settings, fetch_tenants, map_tenant
+    try:
+        tenants = await fetch_tenants(await get_settings(db))
+    except Exception as e:
+        raise HTTPException(400, str(e)[:300])
+    sample = [map_tenant(t) for t in tenants[:5]]
+    return {"ok": True, "total": len(tenants), "sample": sample}
+
+
+@router.post("/integrations/8ip/sync")
+async def sync_8ip_now(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    sa: dict = Depends(require_super_admin),
+):
+    from services.integration_8ip import sync_tenants
+    res = await sync_tenants(db, triggered_by=f"manual:{sa.get('email') or sa.get('id')}")
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "Falha na sincronizacao")
+    return res
+
+
+@router.post("/integrations/8ip/clients/{cid}/{action}")
+async def block_8ip_client(
+    cid: str,
+    action: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    sa: dict = Depends(require_super_admin),
+):
+    if action not in ("block", "unblock"):
+        raise HTTPException(400, "action deve ser block ou unblock")
+    from services.integration_8ip import apply_block
+    client = await db.external_billing_clients.find_one({"id": cid, "source": "8ip"}, {"_id": 0})
+    if not client:
+        raise HTTPException(404, "Cliente 8IP nao encontrado")
+    ok, err = await apply_block(db, client, action == "block", f"Manual ({sa.get('email') or 'super admin'})", by="manual")
+    if not ok:
+        raise HTTPException(400, f"8IP Admin recusou: {err}")
+    return await db.external_billing_clients.find_one({"id": cid}, {"_id": 0})
+
+
+@router.get("/integrations/8ip/block-log")
+async def list_8ip_block_log(
+    limit: int = 50,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _: dict = Depends(require_super_admin),
+):
+    return await db.integration_8ip_block_log.find({}, {"_id": 0}).sort("created_at", -1).to_list(max(1, min(500, limit)))
+
+
 @router.get("/finance/transactions")
 async def adm_list_transactions(
     start_date: Optional[str] = None,

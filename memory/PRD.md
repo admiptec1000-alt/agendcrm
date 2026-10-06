@@ -1,3 +1,25 @@
+## 2026-09-14 (b) — Integração 8IP Admin → Financeiro Admin ✅ (iter 74)
+
+Spec para o outro ambiente: `/app/memory/SPEC_8IP_INTEGRATION.md`.
+
+- `services/integration_8ip.py`: pull `GET {base_url}/api/integrations/billing/tenants` (header `X-Integration-Key`),
+  upsert em `external_billing_clients` (`source="8ip"`, `external_id`, `monthly_price`, `billing_day`, `first_due_date`,
+  `is_active`, `blocked_by_billing`, `missing_in_source`). Mudança de preço/nome → atualiza parcelas pendentes.
+  Tenant sumiu da lista → `is_active=false`. Autoblock: parcela vencida ≥ N dias → `POST .../tenants/{id}/block`;
+  quitou → `/unblock` (log em `integration_8ip_block_log`). `scheduler_step` roda no tick (sync a cada N h, autoblock 1x/h).
+- `scheduler._process_billing_reminders`: agora itera companies + externos 8IP (mensalidade aberta, chave `billing_period`
+  YYYY-MM, descrição "Mensalidade X - MM/AAAA", `external_client_id/_name`, `source=8ip`, send gate pelo SA system company).
+- Rotas (`super_admin_finance_routes.py`): `GET/PUT /super-admin/integrations/8ip/settings` (key mascarada),
+  `POST .../test`, `POST .../sync`, `POST .../clients/{id}/block|unblock`, `GET .../block-log`.
+  `resend-reminder` suporta lançamentos de cliente externo.
+- Frontend: `pages/SuperAdmin/Integration8ipCard.js` (config + testar + sincronizar + status última sync) dentro da
+  aba Clientes Externos; tabela com badge 8IP, mensalidade/dia, status Ativa/Inativa/Bloqueada, botão bloquear.
+- Testes: `tests/test_iteration_74.py` (14/14, mock HTTP do 8IP em thread). Pré-existentes falhando (NÃO relacionados):
+  `test_billing_send_messages_flag` (FakeDB sem `campaign_settings` do send gate) e `test_iteration_55` (gen_days=60 no DB).
+
+---
+
+
 ## 2026-09-14 — Regras de transferência, ticket anterior, contador, cronologia, guarda do bot ✅ (iter 73)
 
 ### Regras de produto (definidas pelo usuário)

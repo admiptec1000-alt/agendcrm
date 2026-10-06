@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { superAdminAPI } from '../../services/api';
 import api from '../../services/api';
+import { Integration8ipCard } from './Integration8ipCard';
 import { toast } from 'sonner';
 import {
   LogOut, Building, Users, TrendingUp, DollarSign, Settings,
@@ -13,7 +14,7 @@ import {
   Columns3, Calendar, CalendarCheck, CalendarDays, Tag, Zap,
   Megaphone, UserCog, Shield, FileText, LifeBuoy, Puzzle,
   PlugZap, FolderOpen, CreditCard, Clock, PieChart, LayoutDashboard,
-  MessageSquare, UserCheck, Bell, Save
+  MessageSquare, UserCheck, Bell, Save, ShieldBan
 } from 'lucide-react';
 import SgpRepairTab from './SgpRepairTab';
 import { AdmLancamentosPanel } from './AdmLancamentosPanel';
@@ -1740,8 +1741,19 @@ const ExternalClientsPanel = () => {
     } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao remover'); }
   };
 
+  const toggleBlock = async (cli) => {
+    const action = cli.blocked_by_billing ? 'unblock' : 'block';
+    if (!window.confirm(`${action === 'block' ? 'Bloquear' : 'Desbloquear'} "${cli.name}" no 8IP Admin?`)) return;
+    try {
+      await api.post(`/super-admin/integrations/8ip/clients/${cli.id}/${action}`);
+      toast.success(action === 'block' ? 'Empresa bloqueada no 8IP' : 'Empresa desbloqueada no 8IP');
+      await load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Falha ao comunicar com o 8IP'); }
+  };
+
   return (
     <div className="space-y-4" data-testid="external-clients-panel">
+      <Integration8ipCard onSynced={load} />
       <div className="flex items-center justify-between">
         <p className="text-sm text-slate-600">
           Clientes que <strong>não usam o sistema</strong> mas você cobra mensalmente (consultorias, contratos avulsos, etc).
@@ -1768,6 +1780,8 @@ const ExternalClientsPanel = () => {
                 <th className="text-left px-4 py-2.5">CNPJ</th>
                 <th className="text-left px-4 py-2.5">E-mail</th>
                 <th className="text-left px-4 py-2.5">Telefone</th>
+                <th className="text-right px-4 py-2.5">Mensalidade</th>
+                <th className="text-left px-4 py-2.5">Status</th>
                 <th className="text-left px-4 py-2.5">Notas</th>
                 <th className="px-4 py-2.5"></th>
               </tr>
@@ -1775,24 +1789,54 @@ const ExternalClientsPanel = () => {
             <tbody>
               {items.map(c => (
                 <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50" data-testid={`external-row-${c.id}`}>
-                  <td className="px-4 py-2.5 font-medium text-slate-900">{c.name}</td>
+                  <td className="px-4 py-2.5 font-medium text-slate-900">
+                    <div className="flex items-center gap-2">
+                      {c.source === '8ip' && <span className="text-[10px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded" data-testid={`external-8ip-badge-${c.id}`}>8IP</span>}
+                      <span>{c.name}</span>
+                    </div>
+                    {c.source === '8ip' && <p className="text-[10px] text-slate-400 font-normal">{c.plan_name || 'sem plano'}{c.slug ? ` · /${c.slug}` : ''}</p>}
+                  </td>
                   <td className="px-4 py-2.5 text-slate-600">{c.cnpj || '—'}</td>
                   <td className="px-4 py-2.5 text-slate-600">{c.email || '—'}</td>
                   <td className="px-4 py-2.5 text-slate-600">{c.phone || '—'}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-800 whitespace-nowrap" data-testid={`external-price-${c.id}`}>
+                    {c.source === '8ip' ? <>R$ {Number(c.monthly_price || 0).toFixed(2).replace('.', ',')}<span className="block text-[10px] text-slate-400">vence dia {c.billing_day}</span></> : '—'}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {c.source === '8ip' ? (
+                      c.blocked_by_billing
+                        ? <span className="text-[10px] font-semibold bg-red-100 text-red-700 px-2 py-0.5 rounded-full" data-testid={`external-status-${c.id}`}>Bloqueada</span>
+                        : c.is_active
+                          ? <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full" data-testid={`external-status-${c.id}`}>Ativa</span>
+                          : <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full" data-testid={`external-status-${c.id}`}>{c.missing_in_source ? 'Removida no 8IP' : 'Inativa'}</span>
+                    ) : <span className="text-[10px] text-slate-400">manual</span>}
+                  </td>
                   <td className="px-4 py-2.5 text-slate-600 truncate max-w-[200px]">{c.notes || '—'}</td>
                   <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                    <button
-                      data-testid={`edit-external-${c.id}`}
-                      onClick={() => { setEditing(c); setShowModal(true); }}
-                      className="p-1.5 rounded hover:bg-slate-100 text-slate-600 mr-1">
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      data-testid={`delete-external-${c.id}`}
-                      onClick={() => remove(c)}
-                      className="p-1.5 rounded hover:bg-red-50 text-red-500">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {c.source === '8ip' ? (
+                      <button
+                        data-testid={`block-external-${c.id}`}
+                        onClick={() => toggleBlock(c)}
+                        title={c.blocked_by_billing ? 'Desbloquear no 8IP' : 'Bloquear no 8IP'}
+                        className={`p-1.5 rounded mr-1 ${c.blocked_by_billing ? 'hover:bg-emerald-50 text-emerald-600' : 'hover:bg-red-50 text-red-500'}`}>
+                        <ShieldBan className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          data-testid={`edit-external-${c.id}`}
+                          onClick={() => { setEditing(c); setShowModal(true); }}
+                          className="p-1.5 rounded hover:bg-slate-100 text-slate-600 mr-1">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          data-testid={`delete-external-${c.id}`}
+                          onClick={() => remove(c)}
+                          className="p-1.5 rounded hover:bg-red-50 text-red-500">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
