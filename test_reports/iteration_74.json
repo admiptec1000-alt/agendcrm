@@ -1,0 +1,22 @@
+{
+  "summary": "Frontend-only testing of SuperAdmin → Financeiro Admin → Lançamentos (AgentCRM). Validated: 3-option origin filter (Todas/Interna/Externa) and that selecting each filters rows correctly (badges Externa/Interna). Validated search box filters by TEST_UI text. Sortable headers (name/due_date/amount) clickable and toggle asc/desc. Novo Lançamento modal: switching to 'Externo (texto livre)' hides adm-form-license-{conn,usr,cost,sale}; switching back to 'Empresa cadastrada' re-shows them. Created a TEST_UI external launch with amount=100, extra_amount=25.5, extra_note='setup': row rendered '+ R$ 125.50' in adm-row-liquido and 'inclui adicional R$ 25.50' in adm-row-extra, with Externa badge (no 8IP suffix as expected, source != '8ip'). Edit modal reopened in external mode with no license fields and extra_amount pre-filled with 25.5. Row deleted at end. Integration8ipCard: card visible with URL/key/test/save/sync testids; clicking 'Testar conexão' with empty URL/key triggers friendly toast 'Configure a URL do 8IP Admin e a chave de integracao' (expected 400 from backend captured as toast only — no UI crash). No AdmLancamentosPanel / Integration8ipCard console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "AdmLancamentosPanel.js is 1300+ lines — consider splitting (modal, PaidSummary, PayTxnModal, ReminderHistoryModal) into separate files for maintainability.",
+    "In Integration8ipCard.test(): calling save() implicitly before the test if URL/key changed may surprise operators who intend to only 'test' without persisting; consider separating test-only probe endpoint."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "test_credentials": "admin@agentcrm.com / admin123 at /admin-login",
+  "seed_data_creation": "Created & deleted one TEST_UI external launch during the run — clean state restored.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All UI flows for iteration 74 (origin filter, sortable headers, external vs internal license-field toggle, extra_amount + extra_note rendering, 8IP integration card error toast) passed on first run against public URL. No code changes needed."
+}

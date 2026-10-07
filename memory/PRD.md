@@ -1,3 +1,10 @@
+## 2026-10-07 — Lançamentos: busca, origem interna/externa, ordenação, valor adicional ✅ (iter 74b)
+- `GET /super-admin/finance/transactions?origin=internal|external`; cada txn devolve `origin`, `gross_amount = amount + extra_amount`.
+- Novo campo `extra_amount` (+ `extra_note`) em AdmTxnIn/Update — soma ao valor devido (lista, pay, resumo, scheduler ctx, resend). NÃO replicado por `scope=all` (é do mês).
+- UI AdmLancamentosPanel: input busca (client-side), select Origem, cabeçalhos ordenáveis (`SortTh`), badge Interna/Externa(·8IP) na coluna Tipo, "inclui adicional R$ X" na coluna Valor. Modal: campos Qtd conexões/usuários/Custo/Venda SÓ para cliente interno; campos Valor adicional + Motivo.
+- Testes: `test_iteration_74.py` 15/15; testing_agent iter 74 frontend 100%.
+
+
 ## 2026-09-14 (b) — Integração 8IP Admin → Financeiro Admin ✅ (iter 74)
 
 Spec para o outro ambiente: `/app/memory/SPEC_8IP_INTEGRATION.md`.
