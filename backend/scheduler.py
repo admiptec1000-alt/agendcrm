@@ -862,19 +862,20 @@ async def _process_billing_reminders(db, *, send_messages: bool = True, suppress
                 _venda_total = float(c.get("total_sale_price") or 0)
                 _total_liquido = max(0.0, _venda_total - _disc)
                 _lf = (txn or {}).get("late_fee") or {}
+                _price_total = float(price) + float((txn or {}).get("extra_amount") or 0)
                 _lf_calc = compute_late_fee_amount(
-                    float(price), txn.get("due_date") or due.isoformat(),
+                    _price_total, txn.get("due_date") or due.isoformat(),
                     float(_lf.get("multa_pct") or 0) if _lf.get("enabled") else 0.0,
                     float(_lf.get("juros_dia_pct") or 0) if _lf.get("enabled") else 0.0,
                     discount=_disc,
                 )
-                _valor_liquido = max(0.0, float(price) - _disc)
+                _valor_liquido = max(0.0, _price_total - _disc)
                 _valor_devido = float(_lf_calc.get("valor_devido") or _valor_liquido)
                 _valor_acrescimo = float(_lf_calc.get("total") or 0.0)
                 ctx = {
                     "nome": nome,
                     "empresa": c.get("name") or "",
-                    "valor": f"{price:.2f}".replace(".", ","),
+                    "valor": f"{_price_total:.2f}".replace(".", ","),
                     "vencimento": due.strftime("%d/%m/%Y"),
                     "parcela": due.strftime("%m/%Y") if is_ext else f"{i + 1}/{installments}",
                     "licencas_conexao": str(c.get("max_connections") or 0),

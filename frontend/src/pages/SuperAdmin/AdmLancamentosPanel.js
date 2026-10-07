@@ -4,8 +4,12 @@ import api from '../../services/api';
 import {
   Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
   CheckCircle2, Clock, AlertTriangle, X, Repeat, Percent, Building, Pencil,
-  Send, History, ChevronDown, ChevronUp, Calendar as CalendarIcon, Check,
+  Send, History, ChevronDown, ChevronUp, Calendar as CalendarIcon, Check, Search, ArrowUpDown, ArrowUp, ArrowDown, Globe,
 } from 'lucide-react';
+
+// Origem do lancamento: empresa interna (cadastro do AgentCRM) x externa (8IP / cliente externo).
+const txnOrigin = (t) => (t.external_client_id || t.external_client_name) ? 'external' : (t.company_id ? 'internal' : 'none');
+const txnGross = (t) => Number(t.amount || 0) + Number(t.extra_amount || 0);
 
 // Returns YYYY-MM for today (used as default month filter). 2026-02-16 (M).
 const _currentMonth = () => {
@@ -101,9 +105,14 @@ export const AdmLancamentosPanel = () => {
     direction: 'entrada',
     status: 'pendente',
     kind: '',
+    origin: '',
     period: 'this_month',
     month: _currentMonth(),
   });
+  // 2026-10 — busca por texto + ordenacao por coluna (client-side).
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState({ key: 'due_date', dir: 'desc' });
+  const toggleSort = (key) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
   const [showForm, setShowForm] = useState(false);
   const [editingTxn, setEditingTxn] = useState(null);
   // 2026-02-16 (L) — historico de lembretes por txn (modal).
@@ -135,6 +144,20 @@ export const AdmLancamentosPanel = () => {
     return '—';
   }, [companyMap]);
 
+  const visibleItems = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let arr = items;
+    if (q) arr = arr.filter(t => `${empresaName(t)} ${t.description || ''} ${t.external_client_name || ''}`.toLowerCase().includes(q));
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    const val = (t) => {
+      if (sort.key === 'name') return empresaName(t).toLowerCase();
+      if (sort.key === 'amount') return txnGross(t);
+      if (sort.key === 'origin') return txnOrigin(t);
+      return t.due_date || t.date || '';
+    };
+    return [...arr].sort((a, b) => { const va = val(a), vb = val(b); return va < vb ? -dir : va > vb ? dir : 0; });
+  }, [items, search, sort, empresaName]);
+
   const resendReminder = async (txnId) => {
     setResending(txnId);
     try {
@@ -156,6 +179,7 @@ export const AdmLancamentosPanel = () => {
         direction: filters.direction || undefined,
         status: filters.status || undefined,
         kind: filters.kind || undefined,
+        origin: filters.origin || undefined,
         start_date: startDate || undefined,
         end_date: endDate || undefined,
       };
@@ -303,6 +327,26 @@ export const AdmLancamentosPanel = () => {
           <option value="licenca">Licenca</option>
           <option value="diversos">Diversos</option>
         </select>
+        <select
+          value={filters.origin}
+          onChange={(e) => setFilters({ ...filters, origin: e.target.value })}
+          className="px-3 py-2 border border-slate-300 rounded text-sm flex-1 min-w-[140px] sm:flex-none"
+          data-testid="adm-filter-origin"
+        >
+          <option value="">Todas origens</option>
+          <option value="internal">Empresa interna</option>
+          <option value="external">Empresa externa</option>
+        </select>
+        <div className="relative flex-1 min-w-[180px]">
+          <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar empresa / descrição…"
+            className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded text-sm"
+            data-testid="adm-filter-search"
+          />
+        </div>
         <button onClick={load} className="px-3 py-2 text-sm rounded border border-slate-300 hover:bg-slate-50 flex items-center justify-center gap-1" data-testid="adm-refresh-btn">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> <span className="hidden sm:inline">Atualizar</span>
         </button>
@@ -327,27 +371,28 @@ export const AdmLancamentosPanel = () => {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider">
               <tr>
-                <th className="px-3 py-2 text-left">Cliente / Empresa</th>
-                <th className="px-3 py-2 text-left">Data</th>
-                <th className="px-3 py-2 text-left">Tipo</th>
+                <SortTh label="Cliente / Empresa" k="name" sort={sort} onSort={toggleSort} />
+                <SortTh label="Data" k="due_date" sort={sort} onSort={toggleSort} />
+                <SortTh label="Tipo" k="origin" sort={sort} onSort={toggleSort} />
                 <th className="px-3 py-2 text-left">Descricao</th>
-                <th className="px-3 py-2 text-right">Valor</th>
+                <SortTh label="Valor" k="amount" sort={sort} onSort={toggleSort} align="right" />
                 <th className="px-3 py-2 text-center">Pagamento</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {items.length === 0 && (
+              {visibleItems.length === 0 && (
                 <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400">Nenhum lancamento encontrado.</td></tr>
               )}
-              {items.map(t => {
+              {visibleItems.map(t => {
                 const isOut = t.direction === 'saida';
+                const origin = txnOrigin(t);
                 const overdue = t.late_fee_computed && t.late_fee_computed.days_overdue > 0;
                 return (
                   <tr key={t.id} data-testid={`adm-txn-row-${t.id}`} className="hover:bg-slate-50">
                     <td className="px-3 py-2">
                       <div className="font-semibold text-slate-900">{empresaName(t)}</div>
-                      {t.license_connections !== undefined && t.license_connections !== null && (
+                      {origin === 'internal' && t.license_connections !== undefined && t.license_connections !== null && (
                         <div className="text-[11px] text-slate-500 mt-0.5">
                           {t.license_connections}c · {t.license_users || 0}u
                         </div>
@@ -356,9 +401,18 @@ export const AdmLancamentosPanel = () => {
                     <td className="px-3 py-2 text-slate-700 font-mono text-xs whitespace-nowrap">{fmtBrDate(t.due_date || t.date || '')}</td>
                     <td className="px-3 py-2">
                       {t.kind === 'licenca' ? (
-                        <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded font-medium">
-                          <Building className="w-3 h-3" /> Licenca
-                        </span>
+                        <div className="flex flex-col gap-0.5 items-start">
+                          <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded font-medium">
+                            <Building className="w-3 h-3" /> Licenca
+                          </span>
+                          {origin === 'external' ? (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-fuchsia-50 text-fuchsia-700 rounded font-medium" data-testid={`adm-origin-${t.id}`}>
+                              <Globe className="w-3 h-3" /> Externa{t.source === '8ip' ? ' · 8IP' : ''}
+                            </span>
+                          ) : origin === 'internal' ? (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-sky-50 text-sky-700 rounded font-medium" data-testid={`adm-origin-${t.id}`}>Interna</span>
+                          ) : null}
+                        </div>
                       ) : (
                         <span className="inline-block text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-medium">Diversos</span>
                       )}
@@ -392,7 +446,8 @@ export const AdmLancamentosPanel = () => {
                           Para SAIDAS (despesas) ou lancamentos sem desconto/
                           juros, mostramos apenas o amount. */}
                       {(() => {
-                        const amount = Number(t.amount || 0);
+                        const extra = Number(t.extra_amount || 0);
+                        const amount = txnGross(t);
                         const disc = Number(t.discount || 0);
                         const liquido = Math.max(0, amount - disc);
                         const hasJuros = overdue && Number(t.late_fee_computed?.total || 0) > 0;
@@ -404,6 +459,11 @@ export const AdmLancamentosPanel = () => {
                             <div data-testid={`adm-row-liquido-${t.id}`}>
                               {isOut ? '−' : '+'} {fmt(principalValue)}
                             </div>
+                            {extra > 0 && (
+                              <div className="text-[10px] text-indigo-600 font-medium mt-0.5" data-testid={`adm-row-extra-${t.id}`} title={t.extra_note || 'Valor adicional do mês'}>
+                                inclui adicional {fmt(extra)}
+                              </div>
+                            )}
                             {hasJuros && (
                               <div className="text-[10px] text-rose-700 font-semibold mt-0.5" data-testid={`adm-row-atualizado-${t.id}`}>
                                 Valor atualizado: {fmt(devido)}
@@ -682,6 +742,19 @@ const MetricCard = ({ label, value, icon: Icon, color }) => {
   );
 };
 
+const SortTh = ({ label, k, sort, onSort, align = 'left' }) => {
+  const active = sort.key === k;
+  const Icon = !active ? ArrowUpDown : sort.dir === 'asc' ? ArrowUp : ArrowDown;
+  return (
+    <th className={`px-3 py-2 text-${align} select-none`}>
+      <button type="button" onClick={() => onSort(k)} data-testid={`adm-sort-${k}`}
+        className={`inline-flex items-center gap-1 uppercase tracking-wider hover:text-slate-900 ${active ? 'text-slate-900 font-semibold' : ''}`}>
+        {label} <Icon className="w-3 h-3" />
+      </button>
+    </th>
+  );
+};
+
 const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
   const isEdit = !!initial?.id;
   // 2026-02-18 — Quando o lancamento ja foi pago, abrimos em modo READ-ONLY
@@ -702,8 +775,10 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
     status: initial?.status || 'pendente',
     notes: initial?.notes || '',
     discount: initial?.discount ?? 0,  // 2026-02-18
+    extra_amount: initial?.extra_amount ?? '',
+    extra_note: initial?.extra_note ?? '',
     kind: initial?.kind || 'licenca',
-    client_kind: initial?.external_client_name ? 'external' : 'native',
+    client_kind: (initial?.external_client_name || initial?.external_client_id) ? 'external' : 'native',
     company_id: initial?.company_id || '',
     external_client_name: initial?.external_client_name || '',
     license_connections: initial?.license_connections ?? '',
@@ -764,6 +839,8 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
         due_date: form.date,
         // 2026-02-18 — Desconto fixo (R$). Default 0.
         discount: parseFloat(form.discount || 0) || 0,
+        extra_amount: parseFloat(form.extra_amount || 0) || 0,
+        extra_note: form.extra_note || null,
       };
       // New fields (2026-02-15). Only send the relevant ones — backend
       // accepts them via Optional[...] so omitting is fine.
@@ -901,7 +978,9 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
                     className="input" placeholder="Nome do cliente externo" data-testid="adm-form-external-name" />
                 )}
               </Field>
-              {/* License snapshot — editable. Filled automatically when picking an Empresa. */}
+              {/* License snapshot — SO para empresa interna. Lancamento de
+                  empresa externa (8IP / cliente externo) vai enxuto. */}
+              {form.client_kind === 'native' && (<>
               <Field label="Qtd conexoes">
                 <input type="number" min="0" value={form.license_connections}
                   onChange={(e) => setForm({ ...form, license_connections: e.target.value })}
@@ -922,6 +1001,7 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
                   onChange={(e) => setForm({ ...form, license_sale_price: e.target.value })}
                   className="input" data-testid="adm-form-license-sale" />
               </Field>
+              </>)}
             </>
           )}
           {/* Pagamento unificado: 'aberto' (= status pendente, sem metodo
@@ -958,6 +1038,12 @@ const AdmTxnFormModal = ({ initial, onClose, onSaved }) => {
             <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="input" data-testid="adm-form-date" disabled={isReadOnly} />
           </Field>
           {/* 2026-02-18 — Desconto fixo (R$). Subtrai do valor devido. */}
+          <Field label="Valor adicional (R$)">
+            <input type="number" step="0.01" min="0" value={form.extra_amount} onChange={(e) => setForm({ ...form, extra_amount: e.target.value })} className="input" placeholder="0.00" data-testid="adm-form-extra-amount" disabled={isReadOnly} />
+          </Field>
+          <Field label="Motivo do adicional">
+            <input type="text" value={form.extra_note} onChange={(e) => setForm({ ...form, extra_note: e.target.value })} className="input" placeholder="Ex: setup, horas extras…" data-testid="adm-form-extra-note" disabled={isReadOnly} />
+          </Field>
           <Field label="Desconto (R$)">
             <input type="number" step="0.01" min="0" value={form.discount} onChange={(e) => setForm({ ...form, discount: e.target.value })} className="input" placeholder="0.00" data-testid="adm-form-discount" disabled={isReadOnly} />
           </Field>
@@ -1092,7 +1178,7 @@ const PaidSummary = ({ txn, onReversed }) => {
       setSavingObs(false);
     }
   };
-  const orig = Number(txn?.amount || 0);
+  const orig = txnGross(txn || {});
   const desc = Number(txn?.discount || 0);
   const lf = txn?.late_fee_computed || {};
   const lateTotal = Number(lf.total || 0);
@@ -1208,7 +1294,7 @@ export default AdmLancamentosPanel;
 // porque calculava `totalDevido - amount` com numeros incoerentes.
 const PayTxnModal = ({ txn, method: initialMethod, onClose, onConfirm }) => {
   const lfc = txn?.late_fee_computed || {};
-  const baseAmount = Number(txn?.amount || 0);
+  const baseAmount = txnGross(txn || {});
   const discount = Number(lfc.discount || txn?.discount || 0);
   const lateTotal = Number(lfc.total || 0);  // multa + juros
   const valorDevido = Number(lfc.valor_devido ?? (baseAmount - discount + lateTotal));

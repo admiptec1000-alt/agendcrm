@@ -270,6 +270,27 @@ class TestAutoblock:
 
 
 class TestHelpers:
+    def test_extra_amount_and_origin_filter(self, env):
+        h = env["h"]
+        r = requests.post(f"{BASE_URL}/api/super-admin/finance/transactions", headers=h, timeout=30, json={
+            "direction": "entrada", "description": f"{TAG} extra", "amount": 100, "date": "2026-10-20", "due_date": "2026-10-20",
+            "status": "pendente", "kind": "licenca", "external_client_name": f"{TAG} Cliente Ext", "extra_amount": 25.5, "extra_note": "setup"})
+        assert r.status_code == 200, r.text
+        tid = r.json()["id"]
+        try:
+            ext = requests.get(f"{BASE_URL}/api/super-admin/finance/transactions", headers=h, timeout=30, params={"origin": "external", "status": "pendente"}).json()
+            me = next(t for t in ext if t["id"] == tid)
+            assert me["origin"] == "external" and me["gross_amount"] == 125.5
+            assert me["late_fee_computed"]["valor_devido"] == 125.5
+            assert all(t["origin"] == "external" for t in ext)
+            internal = requests.get(f"{BASE_URL}/api/super-admin/finance/transactions", headers=h, timeout=30, params={"origin": "internal"}).json()
+            assert all(t["origin"] != "external" for t in internal) and not any(t["id"] == tid for t in internal)
+            # scope=all nao replica o adicional (eh so daquele mes)
+            r2 = requests.put(f"{BASE_URL}/api/super-admin/finance/transactions/{tid}", headers=h, timeout=30, json={"extra_amount": 10, "scope": "all"})
+            assert r2.status_code == 200 and r2.json()["extra_amount"] == 10
+        finally:
+            requests.delete(f"{BASE_URL}/api/super-admin/finance/transactions/{tid}", headers=h, timeout=30)
+
     def test_first_due_from(self):
         from services.integration_8ip import _first_due_from
         today = date.today()

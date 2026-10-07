@@ -379,6 +379,9 @@ class AdmTxnIn(BaseModel):
     # ao calcular `valor_devido`. Quando vem da licenca da empresa, eh
     # propagado em todos os lancamentos recorrentes daquela licenca.
     discount: Optional[float] = 0.0
+    # 2026-10 — Valor adicional cobrado SO neste mes (soma ao total).
+    extra_amount: Optional[float] = 0.0
+    extra_note: Optional[str] = None
     # Tipo do lancamento — 2026-02-15. 'licenca' associa o lancamento a uma
     # Empresa cadastrada (ou cliente externo); 'diversos' eh o lancamento
     # manual generico (modelo antigo). Existentes ficam sem kind = tratados
@@ -407,6 +410,8 @@ class AdmTxnUpdate(BaseModel):
     late_fee: Optional[_LateFeeIn] = None
     valor_recebido: Optional[float] = None  # 2026-02-16 (O)
     discount: Optional[float] = None  # 2026-02-18
+    extra_amount: Optional[float] = None  # 2026-10
+    extra_note: Optional[str] = None
     kind: Optional[str] = None
     company_id: Optional[str] = None
     external_client_name: Optional[str] = None
@@ -534,10 +539,16 @@ async def adm_list_transactions(
     status: Optional[str] = None,
     kind: Optional[str] = None,
     company_id: Optional[str] = None,
+    origin: Optional[str] = None,  # 2026-10 — 'internal' | 'external'
     db: AsyncIOMotorDatabase = Depends(get_database),
     _: dict = Depends(require_super_admin),
 ):
     q: dict = {}
+    if origin == "external":
+        q["$or"] = [{"external_client_id": {"$exists": True, "$ne": None}}, {"external_client_name": {"$nin": [None, ""]}}]
+    elif origin == "internal":
+        q["external_client_id"] = {"$in": [None]}
+        q["external_client_name"] = {"$in": [None, ""]}
     if start_date:
         q["date"] = {"$gte": start_date}
     if end_date:
@@ -555,9 +566,10 @@ async def adm_list_transactions(
     rows = await db.super_admin_transactions.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
     from finance_helpers import compute_late_fee_amount
     for t in rows:
-        gross = float(t.get("amount") or 0)
+        gross = float(t.get("amount") or 0) + float(t.get("extra_amount") or 0)
         t.setdefault("direction", "entrada")
         t.setdefault("status", "pago")
+        t["origin"] = "external" if (t.get("external_client_id") or t.get("external_client_name")) else ("internal" if t.get("company_id") else "none")
         t["gross_amount"] = round(gross, 2)
         t["net_amount"] = round(gross, 2)
         lf = t.get("late_fee") or {}
@@ -632,6 +644,10 @@ async def adm_create_transaction(
         # herdam o desconto pai).
         if data.discount is not None:
             txn["discount"] = float(data.discount or 0)
+        if data.extra_amount:
+            txn["extra_amount"] = float(data.extra_amount or 0)
+            if data.extra_note:
+                txn["extra_note"] = data.extra_note.strip()
         # Lancamento Licenca metadata — 2026-02-15. Stored on EVERY recurrence
         # row so each invoice in a yearly cycle carries the same Empresa link
         # and license snapshot.
@@ -683,7 +699,7 @@ async def adm_update_transaction(
     if scope == "all":
         bulk_payload = {
             k: v for k, v in update.items()
-            if k not in ("date", "due_date", "status", "paid_at", "valor_recebido")
+            if k not in ("date", "due_date", "status", "paid_at", "valor_recebido", "extra_amount", "extra_note")
         }
         if bulk_payload:
             current = await db.super_admin_transactions.find_one({"id": txn_id}, {"_id": 0})
@@ -816,16 +832,18 @@ async def adm_finance_summary(
     rows = await db.super_admin_transactions.find(q, {"_id": 0}).to_list(5000)
     entradas = [t for t in rows if t.get("direction") == "entrada"]
     saidas = [t for t in rows if t.get("direction") == "saida"]
-    bruto_entradas = sum(float(t.get("amount") or 0) for t in entradas if t.get("status") == "pago")
-    bruto_saidas = sum(float(t.get("amount") or 0) for t in saidas if t.get("status") == "pago")
-    pendentes_entrada = sum(float(t.get("amount") or 0) for t in entradas if t.get("status") == "pendente")
-    pendentes_saida = sum(float(t.get("amount") or 0) for t in saidas if t.get("status") == "pendente")
+    def _g(t):
+        return float(t.get("amount") or 0) + float(t.get("extra_amount") or 0)
+    bruto_entradas = sum(_g(t) for t in entradas if t.get("status") == "pago")
+    bruto_saidas = sum(_g(t) for t in saidas if t.get("status") == "pago")
+    pendentes_entrada = sum(_g(t) for t in entradas if t.get("status") == "pendente")
+    pendentes_saida = sum(_g(t) for t in saidas if t.get("status") == "pendente")
     by_method: dict = {}
     for t in entradas:
         if t.get("status") != "pago":
             continue
         pm = t.get("payment_method") or "outros"
-        by_method[pm] = round(by_method.get(pm, 0.0) + float(t.get("amount") or 0), 2)
+        by_method[pm] = round(by_method.get(pm, 0.0) + _g(t), 2)
     return {
         "bruto": round(bruto_entradas, 2),
         "saidas": round(bruto_saidas, 2),

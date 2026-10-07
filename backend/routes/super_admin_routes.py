@@ -690,7 +690,7 @@ async def resend_transaction_reminder(
     # 2026-05-26 — Manual resend tambem precisa expandir as variaveis novas
     # (`licencas_conexao`, `licencas_usuario`, `valor_venda_total`,
     # `valor_desconto`, `valor_devido`). Antes ficavam literais no envio.
-    _amount = float(txn.get("amount") or 0)
+    _amount = float(txn.get("amount") or 0) + float(txn.get("extra_amount") or 0)
     _disc = float(
         txn.get("discount") if txn.get("discount") is not None
         else ((company or {}).get("discount") or 0)
